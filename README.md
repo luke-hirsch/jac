@@ -1,0 +1,142 @@
+# JAC — Job Application Creator
+
+> A portfolio site and AI-powered job application engine. Feed it a job posting, get a tailored CV, cover letter, and follow-up plan — all grounded in your actual career history.
+
+---
+
+## What it does
+
+Job hunting is repetitive. You copy-paste your CV, tweak bullet points, forget to follow up. JAC automates the mechanical parts so you can focus on the parts that matter.
+
+**Career database** — a structured store of every job, project, skill, certification, education, and language you've had. Not a flat document — a queryable DB you own.
+
+**CV pipeline** — given a job posting, JAC:
+1. Runs a deterministic keyword filter (fast, no API calls)
+2. Scores every entry with an LLM for relevance
+3. Ranks and tailors the shortlist using a deeper job analysis pass
+
+**Personalized portfolio links** — send `/for/acme-corp` on a business card, `/t/<token>` in a DM. Each link shows a curated view of your work, tuned for the recipient. *(in progress)*
+
+**Application automation** — cover letter drafting, follow-up reminders via Celery. *(planned)*
+
+---
+
+## Stack
+
+| Layer | Tech |
+|-------|------|
+| Backend | Django 6, Django REST Framework |
+| Frontend | React 19 + Vite + TypeScript |
+| Database | SQLite → PostgreSQL |
+| LLM | Multi-provider connector (Anthropic, OpenAI, Ollama) |
+| Task queue | Celery + Redis *(planned)* |
+
+---
+
+## Project layout
+
+```
+backend/
+  jac/              # career DB models + CV pipeline
+  llm_connector/    # reusable multi-provider LLM adapter
+  lukehirsch/       # Django config (settings, urls, wsgi)
+  spa/              # portfolio / personalized links (in progress)
+frontend/           # React app
+config/             # nginx
+```
+
+---
+
+## CV pipeline
+
+```python
+from jac.cv import CV
+
+cv = CV(user_pk=1, domains=["Python"], min_skill_proficiency="advanced")
+
+# Deterministic pass — no LLM, instant
+cv.deterministic_filter(job_posting_text)
+
+# LLM scoring — drops below threshold
+cv.ai_filter_entries(job_posting_text, threshold=0.4)
+
+# Full agentic pass — analyze job → score with context → filter + sort
+analysis = cv.agentic_tailor(job_posting_text)
+```
+
+Scored entries get `relevance_score` and `relevance_reason` attached as in-memory attributes.
+
+---
+
+## LLM connector
+
+A standalone Django app that wraps multiple LLM providers behind a single interface. Configure aliases in `settings.LLM`, call via:
+
+```python
+from llm_connector import complete, stream, get_client
+
+complete("Summarize this job posting", alias="fast")
+```
+
+Supports: Anthropic, OpenAI (including o-series reasoning models), Google, Ollama (custom).
+
+---
+
+## Setup
+
+```bash
+# Python env
+pyenv virtualenv 3.12 jac
+pyenv local jac
+pip install -r requirements.txt
+
+# Config
+cp .env.example .env   # fill in SECRET_KEY, API keys
+
+# DB
+cd backend
+python manage.py migrate
+python manage.py createsuperuser
+
+# Run
+python manage.py runserver
+```
+
+```bash
+# Frontend
+cd frontend
+npm install
+npm run dev
+```
+
+### Smoke-test the CV pipeline
+
+```bash
+python manage.py cv_test --user 1 --job-file path/to/posting.txt
+```
+
+Runs all four passes (unfiltered → deterministic → AI filter → agentic) and prints the results.
+
+### Check LLM config
+
+```bash
+python manage.py llm_check          # all aliases
+python manage.py llm_check default  # specific alias
+```
+
+---
+
+## Tests
+
+```bash
+cd backend
+python manage.py test
+```
+
+46 tests covering models, the CV pipeline (mocked LLMs), and LLM wrapper JSON parsing.
+
+---
+
+## License
+
+[CC BY-NC 4.0](LICENSE) — free to use and modify, not for commercial purposes.

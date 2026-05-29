@@ -1,0 +1,14 @@
+
+# Django
+celery 
+channels
+daphne
+Django
+django-cors-headers
+djangorestframework
+redis
+
+# LLM provider SDKs — install only what you use
+anthropic           # provider: anthropic
+openai              # provider: openai  or  provider: custom (Ollama etc.)
+google-generativeai  # provider: google
