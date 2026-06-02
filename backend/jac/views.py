@@ -18,7 +18,10 @@ The `user` FK on writes is injected by the serializers via
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from jac.cv import CV
 from jac.models import (
     Certification,
     Domain,
@@ -105,3 +108,23 @@ class LanguageViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Language.objects.filter(user=self.request.user)
+
+
+class CVEntryListView(APIView):
+    """A read-only view of all CV entries for the requesting user, across all types."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cv = CV(request.user.pk)
+        context = {"request": request}
+        return Response(
+            {
+                "skills": SkillSerializer(cv.entries["skills"], many=True, context=context).data,
+                "jobs": JobSerializer(cv.entries["jobs"], many=True, context=context).data,
+                "educations": EducationSerializer(cv.entries["educations"], many=True, context=context).data,
+                "certifications": CertificationSerializer(cv.entries["certifications"], many=True, context=context).data,
+                "projects": ProjectSerializer(cv.entries["projects"], many=True, context=context).data,
+                "languages": LanguageSerializer(cv.entries["languages"], many=True, context=context).data,
+            }
+        )

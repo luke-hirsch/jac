@@ -7,9 +7,11 @@ a class-level `queryset`, so the router can't infer it.
 Mounted by the project at the prefix defined in `lukehirsch/urls.py`.
 """
 
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from jac.views import (
+    CVEntryListView,
     CertificationViewSet,
     DomainViewSet,
     EducationViewSet,
@@ -30,4 +32,6 @@ router.register("jobs", JobViewSet, basename="job")
 router.register("projects", ProjectViewSet, basename="project")
 router.register("languages", LanguageViewSet, basename="language")
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),
+]
