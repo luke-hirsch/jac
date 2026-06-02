@@ -24,7 +24,10 @@ from jac.models import (
 
 class DomainModelTests(TestCase):
     def test_str_returns_name(self):
-        self.assertEqual(str(Domain.objects.create(name="Fintech")), "Fintech")
+        user = User.objects.create(username="lukas")
+        self.assertEqual(
+            str(Domain.objects.create(user=user, name="Fintech")), "Fintech"
+        )
 
 
 class SkillYearsOfExperienceTests(TestCase):
@@ -59,10 +62,10 @@ class SkillYearsOfExperienceTests(TestCase):
             user=self.user, name="Side", started=date(2018, 1, 1)
         )
         project.skills.add(skill)
+        # Refetch so SkillManager attaches the earliest-job/project annotations.
+        skill = Skill.objects.get(pk=skill.pk)
         # Earliest is the 2012 job.
-        self.assertIsNotNone(skill.years_of_experience)
-        if skill.years_of_experience is not None:
-            self.assertGreaterEqual(int(skill.years_of_experience), 13)
+        self.assertGreaterEqual(int(skill.years_of_experience), 13)
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +79,11 @@ class CVQueryTests(TestCase):
         cls.user = User.objects.create(username="lukas")
         cls.other = User.objects.create(username="someone_else")
 
-        cls.dom_python = Domain.objects.create(name="Python")
-        cls.dom_data = Domain.objects.create(name="Data")
-        cls.dom_unused = Domain.objects.create(name="Robotics")
+        cls.dom_python = Domain.objects.create(user=cls.user, name="Python")
+        cls.dom_data = Domain.objects.create(user=cls.user, name="Data")
+        cls.dom_unused = Domain.objects.create(user=cls.user, name="Robotics")
 
-        cls.location = Location.objects.create(city="Berlin")
+        cls.location = Location.objects.create(user=cls.user, city="Berlin")
 
         # Skills — for self.user
         cls.skill_py = Skill.objects.create(
@@ -232,7 +235,7 @@ class CVDeterministicFilterTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create(username="lukas")
-        cls.dom = Domain.objects.create(name="Healthcare")
+        cls.dom = Domain.objects.create(user=cls.user, name="Healthcare")
 
         cls.skill = Skill.objects.create(user=cls.user, name="Python")
         cls.skill.domains.add(cls.dom)

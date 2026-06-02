@@ -1,14 +1,84 @@
+from typing import TYPE_CHECKING
+
+from django.conf import settings
 from django.db import models
-from django.db.models import Min
+from django.db.models import OuterRef, Q, Subquery, UniqueConstraint
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
-class Domain(models.Model):
-    """Tagging taxonomy shared across all CvEntry types."""
+def _earliest_started_subquery(related_model):
+    """Subquery returning the smallest non-null `started` date among rows of
+    `related_model` (Job or Project) whose `skills` M2M includes the outer
+    Skill row. Used by `SkillManager` below.
+    """
+    return Subquery(
+        related_model.objects.filter(skills=OuterRef("pk"), started__isnull=False)
+        .order_by("started")
+        .values("started")[:1]
+    )
 
-    name = models.CharField(max_length=100, unique=True)
+
+def _min_ignoring_none(*values):
+    """min() of the args, skipping None. Returns None if every arg is None."""
+    valid = [v for v in values if v is not None]
+    return min(valid) if valid else None
+
+
+class SkillManager(models.Manager):
+    """Default Skill manager. Annotates every queryset with the earliest
+    related Job/Project start date so `Skill.years_of_experience` resolves
+    without per-row aggregate queries — important for list endpoints, where
+    serializing N skills would otherwise issue 2N extra queries.
+    """
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .annotate(
+                _earliest_job_started=_earliest_started_subquery(Job),
+                _earliest_project_started=_earliest_started_subquery(Project),
+            )
+        )
+
+
+class DomainManager(models.Manager):
+    """Domain manager. `for_user(user)` returns the user's own domains plus
+    the system defaults in a single query, so viewsets and the CV pipeline
+    don't have to repeat the union.
+    """
+
+    def for_user(self, user):
+        return self.filter(
+            Q(user=user) | Q(user__username=settings.SYSTEM_USER_USERNAME)
+        )
+
+    def defaults(self):
+        return self.filter(user__username=settings.SYSTEM_USER_USERNAME)
+
+
+class Domain(models.Model):
+    """Tagging taxonomy shared across all CvEntry types. Rows owned by the
+    `SYSTEM_USER_USERNAME` user are read-only defaults visible to everyone;
+    all other rows are user-owned and only visible to their owner.
+    """
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="domains"
+    )
+    name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
+
+    if TYPE_CHECKING:
+        objects: DomainManager
+    else:
+        objects = DomainManager()
+
+    class Meta:
+        verbose_name = "Domain / Industry"
+        verbose_name_plural = "Domains / Industries"
+        constraints = [UniqueConstraint("user", "name", name="unique_domain_per_user")]
 
     def __str__(self):
         return self.name
@@ -17,6 +87,9 @@ class Domain(models.Model):
 class Location(models.Model):
     """Reusable geo-reference attached to jobs, projects, and education entries."""
 
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="locations"
+    )
     city = models.CharField(max_length=100)
     country = models.CharField(max_length=100, null=True, blank=True)
     street = models.CharField(max_length=100, null=True, blank=True)
@@ -107,24 +180,31 @@ class Skill(CvEntry):
         Certification, on_delete=models.SET_NULL, null=True, blank=True
     )
 
+    objects = SkillManager()
+
     @property
     def years_of_experience(self) -> int | None:
-        """Earliest evidence of use across first_used, linked jobs, and linked projects.
+        """Whole years since the earliest evidence this skill has been used.
 
-        Returns None when no dated evidence exists; otherwise full years elapsed
-        since that earliest date.
+        Considers three sources, takes the smallest:
+          - `first_used` on the Skill itself
+          - the earliest `started` among Jobs that include this skill
+          - the earliest `started` among Projects that include this skill
+
+        The two related-model dates are precomputed by `SkillManager`, so
+        reading this property issues zero extra queries — *provided* the
+        instance came from `Skill.objects.…`. A freshly-created Skill (one
+        you just `.create()`'d in the same scope) won't carry the annotations
+        yet; refetch via `Skill.objects.get(pk=skill.pk)` if you need them.
         """
-        candidates = [self.first_used]
-        candidates.append(
-            Job.objects.filter(skills=self).aggregate(m=Min("started"))["m"]
+        earliest = _min_ignoring_none(
+            self.first_used,
+            getattr(self, "_earliest_job_started", None),
+            getattr(self, "_earliest_project_started", None),
         )
-        candidates.append(
-            Project.objects.filter(skills=self).aggregate(m=Min("started"))["m"]
-        )
-        valid = [d for d in candidates if d is not None]
-        if not valid:
+        if earliest is None:
             return None
-        return (timezone.localdate() - min(valid)).days // 365
+        return (timezone.localdate() - earliest).days // 365
 
 
 class Job(CvEntry):

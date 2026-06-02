@@ -5,9 +5,7 @@ from .conf import get_alias_config, logging_enabled
 from .registry import get_adapter_class
 
 
-def _normalise_messages(
-    prompt: str | None, messages: list[dict] | None
-) -> list[dict]:
+def _normalise_messages(prompt: str | None, messages: list[dict] | None) -> list[dict]:
     """Coerce the two accepted input forms into a messages list.
 
     Raises ValueError when neither prompt nor messages is provided.
@@ -28,9 +26,9 @@ class LLMClient:
 
     def __init__(self, alias: str = "default", user=None):
         """Args:
-            alias: LLM alias name to look up (e.g. "default", "reasoning").
-            user: Django user instance or PK. When provided, per-user LLMConfig
-                takes precedence over settings.LLM.
+        alias: LLM alias name to look up (e.g. "default", "reasoning").
+        user: Django user instance or PK. When provided, per-user LLMConfig
+            takes precedence over settings.LLM.
         """
         self.alias = alias
         self.user = user
@@ -62,8 +60,12 @@ class LLMClient:
             latency_ms = int((time.monotonic() - start) * 1000)
             if logging_enabled():
                 self._write_log(
-                    msgs, response_text, error_text,
-                    prompt_tokens, completion_tokens, latency_ms,
+                    msgs,
+                    response_text,
+                    error_text,
+                    prompt_tokens,
+                    completion_tokens,
+                    latency_ms,
                 )
 
     def stream(
@@ -90,8 +92,12 @@ class LLMClient:
             latency_ms = int((time.monotonic() - start) * 1000)
             if logging_enabled():
                 self._write_log(
-                    msgs, "".join(collected), error_text,
-                    None, None, latency_ms,
+                    msgs,
+                    "".join(collected),
+                    error_text,
+                    None,
+                    None,
+                    latency_ms,
                 )
 
     def _write_log(
@@ -106,6 +112,7 @@ class LLMClient:
         """Persist an LLMRequestLog row. Silently swallowed on any failure."""
         try:
             from .models import LLMRequestLog
+
             LLMRequestLog.objects.create(
                 user=self.user,
                 alias=self.alias,
@@ -119,4 +126,4 @@ class LLMClient:
                 error=error,
             )
         except Exception:
-            pass  # never let logging kill the caller
+            pass

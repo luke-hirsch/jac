@@ -11,6 +11,13 @@ DEBUG = os.getenv("DEBUG", True)
 
 ALLOWED_HOSTS = [os.getenv("ALLOWED_HOST", "localhost")]
 
+SITE_ID = 1
+
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
 
 INSTALLED_APPS = [
     # asgi server for WebSockets
@@ -22,6 +29,13 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # sites framework (required by allauth)
+    "django.contrib.sites",
+    # allauth
+    "allauth",
+    "allauth.account",
+    "allauth.mfa",
+    "allauth.headless",
     # third-party apps
     "rest_framework",
     "corsheaders",
@@ -34,12 +48,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = "lukehirsch.urls"
@@ -136,6 +152,8 @@ USE_TZ = True
 
 
 STATIC_URL = "static/"
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 
 LLM = {
@@ -154,3 +172,48 @@ LLM_ENCRYPTION_KEY = os.getenv(
     "LLM_ENCRYPTION_KEY",
     "ZGphbmdvLWluc2VjdXJlLWxsbS1kZXYta2V5LW9ubHk=",
 )
+
+# Sentinel user that owns read-only system defaults (e.g. `jac.Domain` rows
+# shared across all users). Looked up by username so it survives pk drift.
+SYSTEM_USER_USERNAME = "system"
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# CORS — allow the React dev server to send credentialed requests
+CORS_ALLOWED_ORIGINS = [FRONTEND_URL]
+CORS_ALLOW_CREDENTIALS = True
+
+# CSRF — trust the frontend origin so the CSRF middleware accepts its requests
+CSRF_TRUSTED_ORIGINS = [FRONTEND_URL]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    # Default is AllowAny so the public spa (portfolio link) endpoints can be
+    # reached without auth. Every other viewset must set permission_classes
+    # explicitly — see e.g. jac.views.
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",
+    ],
+}
+
+# allauth account settings
+ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
+ACCOUNT_LOGIN_METHODS = {"email"}
+ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+ACCOUNT_EMAIL_VERIFICATION_BY_CODE_ENABLED = True
+
+# allauth headless — JSON API only, no template views
+HEADLESS_ONLY = True
+HEADLESS_FRONTEND_URLS = {
+    # password-reset email link points at React; React calls POST /_allauth/browser/v1/auth/password/reset
+    "account_reset_password_from_key": FRONTEND_URL + "/auth/reset-password/{key}",
+}
+
+# MFA: TOTP (authenticator app) + WebAuthn passkeys
+MFA_SUPPORTED_TYPES = ["recovery_codes", "totp", "webauthn"]
+MFA_PASSKEY_LOGIN_ENABLED = True
+MFA_PASSKEY_SIGNUP_ENABLED = True
+# fido2 ≤1.1.3 does not treat localhost as a secure origin; set True for local dev only
+MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = DEBUG

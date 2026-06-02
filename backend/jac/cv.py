@@ -8,6 +8,7 @@ import logging
 import re
 import time
 from datetime import date
+from typing import Any
 
 from django.db.models import Q
 
@@ -414,7 +415,9 @@ class CV:
 
     def ai_extract_keywords(self, job_text: str, llm: str = "default") -> list[str]:
         """Free-form keyword extraction via LLM. Complements extract_keywords()."""
-        logger.debug("ai_extract_keywords: calling llm=%s (%d chars)", llm, len(job_text))
+        logger.debug(
+            "ai_extract_keywords: calling llm=%s (%d chars)", llm, len(job_text)
+        )
         t = time.monotonic()
         result = jac_llm.extract_job_keywords(job_text, llm=llm, user=self.user)
         logger.debug(
@@ -569,7 +572,7 @@ class CV:
             "project": "projects",
             "language": "languages",
         }
-        by_id: dict[str, tuple[str, object]] = {}
+        by_id: dict[str, tuple[str, Any]] = {}
         for type_name, key in type_key.items():
             for obj in self.entries[key]:
                 by_id[f"{type_name}:{obj.pk}"] = (key, obj)
@@ -582,6 +585,7 @@ class CV:
                 continue
             key, obj = entry
             obj.relevance_reason = pick.get("reason", "")
+            obj.relevance_score = 1.0
             new_entries[key].append(obj)
         self.entries = new_entries
         return selection
