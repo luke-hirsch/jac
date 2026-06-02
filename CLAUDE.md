@@ -4,38 +4,39 @@ Portfolio website + Job Application Creator (JAC). Django backend, React fronten
 
 ## Project Layout
 
-| Path | Purpose |
-|------|---------|
-| `backend/` | Django project root |
-| `backend/lukehirsch/` | Django config package (settings, urls, wsgi, asgi) + shared DRF utilities (`permissions.py`, `mixin.py`) |
-| `backend/jac/` | JAC Django app — career DB + CV filtering/tailoring pipeline. Serializers landed; views/urls still TBD. |
-| `backend/spa/` | Portfolio + per-user profile app. `UserProfile` shipped; `PortfolioLink` / `VisitorResponse` still planned. |
-| `backend/llm_connector/` | Reusable multi-provider LLM connector with per-user encrypted configs |
-| `backend/manage.py` | Django management entrypoint |
-| `frontend/` | React 19 + Vite + TypeScript — still the default Vite starter (no router, no auth UI yet) |
-| `config/` | nginx config |
-| `requirements.txt` | Python dependencies |
+| Path                     | Purpose                                                                                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/`               | Django project root                                                                                                                                                        |
+| `backend/lukehirsch/`    | Django config package (settings, urls, wsgi, asgi) + shared DRF utilities (`permissions.py`, `mixin.py`)                                                                   |
+| `backend/jac/`           | JAC Django app — career DB + CV filtering/tailoring pipeline + full DRF CRUD at `/api/jac/`. `JobPosting`/`Application`/`CoverLetter`/`FollowUp` models pending (Phase 6). |
+| `backend/spa/`           | Portfolio + per-user profile app. `UserProfile` shipped; `PortfolioLink` / `VisitorResponse` still planned.                                                                |
+| `backend/llm_connector/` | Reusable multi-provider LLM connector with per-user encrypted configs                                                                                                      |
+| `backend/manage.py`      | Django management entrypoint                                                                                                                                               |
+| `frontend/`              | React 19 + Vite + TypeScript — still the default Vite starter (no router, no auth UI yet)                                                                                  |
+| `config/`                | nginx config                                                                                                                                                               |
+| `requirements.txt`       | Python dependencies                                                                                                                                                        |
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Backend framework | Django 6.x |
-| API layer | Django REST Framework — jac CRUD + llm_connector wired at `/api/jac/` + `/api/llm/`; spa viewset + tailor action pending |
-| Auth | `django-allauth[mfa]` in **headless mode** (TOTP + WebAuthn passkeys + recovery codes). Mandatory email verification. |
-| ASGI / streaming | Daphne + Channels (Redis layer) — wired in settings, no consumers / routing yet |
-| Frontend | React 19 + Vite + TypeScript (default starter; router + TanStack Query planned) |
-| Database | SQLite (dev) → PostgreSQL (prod, env-configurable) — `settings.DATABASES` branches on `DEBUG` |
-| Task queue | Celery + Redis — full settings block in place; no `celery.py` / tasks yet |
-| Cache | Redis (`django.core.cache.backends.redis.RedisCache`) |
-| LLM | `llm_connector` app — Anthropic, OpenAI, Google, custom (Ollama). Per-user configs with Fernet-encrypted API keys. |
-| Email | Console backend; real SMTP deferred to deployment phase |
-| Python env | pyenv (`jac` virtualenv) |
-| Deployment | Docker Compose + GitHub Actions (planned — see roadmap Phase H) |
+| Layer             | Technology                                                                                                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend framework | Django 6.x                                                                                                                                                                  |
+| API layer         | Django REST Framework — jac CRUD + llm_connector wired at `/api/jac/` + `/api/llm/`; spa viewset + tailor action pending                                                    |
+| Auth              | `django-allauth[mfa]` in **headless mode** (TOTP + WebAuthn passkeys + recovery codes). Mandatory email verification.                                                       |
+| ASGI / streaming  | Daphne + Channels (Redis layer) — wired in settings, no consumers / routing yet                                                                                             |
+| Frontend          | React 19 + Vite + TypeScript. Stack locked 2026-06-02: TanStack Router + Query + Form + Table, Tailwind v4, shadcn/ui. Still at the default starter — Phase 2 scaffolds it. |
+| Database          | SQLite (dev) → PostgreSQL (prod, env-configurable) — `settings.DATABASES` branches on `DEBUG`                                                                               |
+| Task queue        | Celery + Redis — full settings block in place; no `celery.py` / tasks yet                                                                                                   |
+| Cache             | Redis (`django.core.cache.backends.redis.RedisCache`)                                                                                                                       |
+| LLM               | `llm_connector` app — Anthropic, OpenAI, Google, custom (Ollama). Per-user configs with Fernet-encrypted API keys.                                                          |
+| Email             | Console backend; real SMTP deferred to deployment phase                                                                                                                     |
+| Python env        | pyenv (`jac` virtualenv)                                                                                                                                                    |
+| Deployment        | Docker Compose + GitHub Actions (planned — see roadmap Phase 5)                                                                                                             |
 
 ## Common Commands
 
 ### Backend (run from `backend/`)
+
 ```bash
 python manage.py runserver
 python manage.py makemigrations
@@ -51,6 +52,7 @@ python manage.py cv_import --user 1 ...          # bulk-import career entries
 ```
 
 ### Frontend (run from `frontend/`)
+
 ```bash
 npm run dev
 npm run build
@@ -59,7 +61,7 @@ npm run lint
 
 ## JAC App
 
-Django app at `backend/jac/`. Today: career DB + CV filtering/tailoring pipeline + Markdown rendering + DRF serializers. CRUD viewsets/urls, Application/CoverLetter/FollowUp models, and CV import wizard not yet built.
+Django app at `backend/jac/`. Today: career DB + CV filtering/tailoring pipeline + Markdown rendering + full DRF CRUD at `/api/jac/`. `JobPosting`/`Application`/`CoverLetter`/`FollowUp` models, cover-letter generation, PDF/DOCX export, and the CV import wizard are not yet built (Phases 6 + 10).
 
 Key files:
 | File | Purpose |
@@ -77,30 +79,30 @@ Key files:
 
 ## SPA App (in progress)
 
-Django app at `backend/spa/`. Holds the per-user profile today; will gain the portfolio link system in roadmap Phase F.
+Django app at `backend/spa/`. Holds the per-user profile today; will gain the portfolio link system in roadmap Phase 3.
 
-| File | Purpose |
-|------|---------|
+| File                                           | Purpose                                                                                                                                                                                                                                                     |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [backend/spa/models.py](backend/spa/models.py) | `UserProfile` (one-to-one with `auth.User`, auto-created via signal): identity (display_name, avatar, bio), professional contact (phone, website, linkedin_url, github_url), locale (timezone), UI prefs (theme, contrast), notifications (email_reminders) |
-| [backend/spa/admin.py](backend/spa/admin.py) | `UserProfile` admin |
+| [backend/spa/admin.py](backend/spa/admin.py)   | `UserProfile` admin                                                                                                                                                                                                                                         |
 
-`PortfolioLink`, `VisitorResponse`, and public/personalized views are **not** built — see roadmap Phase F.
+`PortfolioLink`, `VisitorResponse`, and public/personalized views are **not** built — see roadmap Phase 3.
 
 ## LLM Connector
 
 Django app at `backend/llm_connector/`. Multi-provider gateway with per-user config and encrypted API keys.
 
-| File | Purpose |
-|------|---------|
-| [backend/llm_connector/models.py](backend/llm_connector/models.py) | `LLMConfig(user, alias, provider, model, ...)` with Fernet-encrypted `api_key`; `LLMRequestLog` (nullable `user` FK) for spend audit |
-| [backend/llm_connector/conf.py](backend/llm_connector/conf.py) | `get_alias_config(alias, user=None)` — with user: per-user `LLMConfig` → fall back to `settings.LLM["default"]`; without user: `settings.LLM[alias]` |
-| [backend/llm_connector/crypto.py](backend/llm_connector/crypto.py) | Fernet helpers reading `settings.LLM_ENCRYPTION_KEY` |
-| [backend/llm_connector/client.py](backend/llm_connector/client.py) | `LLMClient(alias, user=None)`; `complete()` / `stream()` accept `user=`; persists `LLMRequestLog` in `finally` |
-| [backend/llm_connector/serializers.py](backend/llm_connector/serializers.py) | `LLMConfigSerializer` (write-only `api_key`, `has_api_key` computed field); `LLMRequestLogSerializer` (all fields read-only) |
-| [backend/llm_connector/views.py](backend/llm_connector/views.py) | `LLMConfigViewSet` (full CRUD, user-scoped); `LLMRequestLogViewSet` (read-only spend audit) |
-| [backend/llm_connector/urls.py](backend/llm_connector/urls.py) | `DefaultRouter` — `/api/llm/configs/` + `/api/llm/request-logs/` |
-| [backend/llm_connector/admin.py](backend/llm_connector/admin.py) | `LLMConfigAdmin` with `PasswordInput` for `api_key`; never exposed in list view |
-| [backend/llm_connector/providers/](backend/llm_connector/providers/) | One file per provider: anthropic, openai, google, custom (Ollama / OpenAI-compatible HTTP) |
+| File                                                                         | Purpose                                                                                                                                              |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [backend/llm_connector/models.py](backend/llm_connector/models.py)           | `LLMConfig(user, alias, provider, model, ...)` with Fernet-encrypted `api_key`; `LLMRequestLog` (nullable `user` FK) for spend audit                 |
+| [backend/llm_connector/conf.py](backend/llm_connector/conf.py)               | `get_alias_config(alias, user=None)` — with user: per-user `LLMConfig` → fall back to `settings.LLM["default"]`; without user: `settings.LLM[alias]` |
+| [backend/llm_connector/crypto.py](backend/llm_connector/crypto.py)           | Fernet helpers reading `settings.LLM_ENCRYPTION_KEY`                                                                                                 |
+| [backend/llm_connector/client.py](backend/llm_connector/client.py)           | `LLMClient(alias, user=None)`; `complete()` / `stream()` accept `user=`; persists `LLMRequestLog` in `finally`                                       |
+| [backend/llm_connector/serializers.py](backend/llm_connector/serializers.py) | `LLMConfigSerializer` (write-only `api_key`, `has_api_key` computed field); `LLMRequestLogSerializer` (all fields read-only)                         |
+| [backend/llm_connector/views.py](backend/llm_connector/views.py)             | `LLMConfigViewSet` (full CRUD, user-scoped); `LLMRequestLogViewSet` (read-only spend audit)                                                          |
+| [backend/llm_connector/urls.py](backend/llm_connector/urls.py)               | `DefaultRouter` — `/api/llm/configs/` + `/api/llm/request-logs/`                                                                                     |
+| [backend/llm_connector/admin.py](backend/llm_connector/admin.py)             | `LLMConfigAdmin` with `PasswordInput` for `api_key`; never exposed in list view                                                                      |
+| [backend/llm_connector/providers/](backend/llm_connector/providers/)         | One file per provider: anthropic, openai, google, custom (Ollama / OpenAI-compatible HTTP)                                                           |
 
 `settings.LLM` only contains the global `default` (free Ollama). Paid providers live exclusively in per-user `LLMConfig` rows — encrypted, managed via Django admin and the `/api/llm/configs/` DRF endpoint.
 
@@ -120,9 +122,10 @@ Scored entries get `relevance_score` / `relevance_reason` attached as in-memory 
 
 ## Roadmap
 
-Full plan in [.claude/plans/roadmap-2026-06-01.md](.claude/plans/roadmap-2026-06-01.md) (updated 2026-06-02). The earlier [roadmap-2026-05-29.md](.claude/plans/roadmap-2026-05-29.md) is superseded.
+Full plan in [.claude/plans/roadmap-2026-06-02.md](.claude/plans/roadmap-2026-06-02.md) (frontend-first revision). Earlier roadmaps ([2026-06-01](.claude/plans/roadmap-2026-06-01.md), [2026-05-29](.claude/plans/roadmap-2026-05-29.md)) are superseded.
 
 **Shipped:**
+
 - **Per-user LLM configs (2026-05-29).** `settings.LLM` shrank to the free Ollama fallback. CV pipeline threads `user=` end-to-end.
 - **Backend docstring cleanup (2026-05-29).** Every `backend/` module leads with a "why" docstring; frontend pass deferred.
 - **Auth + MFA backend (since 2026-05-29).** `django-allauth[mfa]` headless with email signup/login/verification/password-reset + TOTP + WebAuthn passkeys + recovery codes. `_allauth/` mounted. **Admin MFA gate + frontend auth pages + auth tests still pending.**
@@ -133,19 +136,22 @@ Full plan in [.claude/plans/roadmap-2026-06-01.md](.claude/plans/roadmap-2026-06
 - **CV pipeline extensions (since 2026-05-29).** 5-rung tiered fallback (`ai_tailor_with_fallback`), multi-language stopwords, `ai_conversational_tailor`, `ai_keyword_filter`, min-per-section floor, `cv_import` command.
 
 **Next, in order** (full detail in the roadmap):
-- **Phase A — DRF wire-up (remaining)** — spa `UserProfileViewSet`, `/api/jac/cv/tailor/` action, pagination + django-filter + drf-spectacular, scoping tests.
-- **Phase B — Frontend foundation + auth** — react-router + TanStack Query, Vite proxy, CSRF-aware fetch, auth + account pages.
-- **Phase C — Admin MFA gate + auth tests** — `AdminRequireMfaMiddleware`, allauth signal handler, `test_auth.py`.
-- **Phase D — JAC application flow** — `JobPosting` + `Application` + `CoverLetter` + `FollowUp` models; cover-letter generation; application wizard.
-- **Phase E — Async + streaming + email + follow-ups** — `celery.py`, streaming tailor endpoint, real SMTP, follow-up scheduler, per-user spend caps.
-- **Phase F — Portfolio link system** — `PortfolioLink` + `VisitorResponse`, public landing, personalized views, JAC→link auto-creation.
-- **Phase G — CV import / onboarding wizard** — PDF/DOCX → LLM-parsed entries → confirm/edit/save.
-- **Phase H — Deployment + observability** — Dockerfiles, docker-compose, GitHub Actions, Sentry, DB backups.
-- **Phase I — Production hardening** — GDPR export/delete, public-endpoint throttles, frontend docstring pass.
+
+- **Phase 1 — BE prep for frontend** — spa `UserProfileViewSet`, pagination + django-filter + drf-spectacular, scoping tests; admin MFA gate + `test_auth.py`.
+- **Phase 2 — Frontend foundation + full CRUD** — TanStack Router/Query/Form/Table + Tailwind + shadcn scaffold; full auth + account pages; JAC CRUD for all career models; LLM connector CRUD.
+- **Phase 3 — BE refactors + Celery + first SPA backend** — gaps surfaced by FE; `celery.py` + trivial task; `PortfolioLink` + `VisitorResponse` models + endpoints.
+- **Phase 4 — Frontend: first SPA views** — PublicLanding, PersonalizedView (`/for/:slug`, `/t/:token`), portfolio-link admin.
+- **Phase 5 — First deployment** — Dockerfiles, docker-compose, GitHub Actions, Sentry, DB backups, GDPR endpoints.
+- **Phase 6 — BE: CV generation** — `JobPosting` + `Application` + `CoverLetter` + `FollowUp` models; `/api/jac/cv/tailor/` action; cover-letter generation; PDF/DOCX export.
+- **Phase 7 — Frontend: CV styling + export + application wizard** — preview component, theme selector, export menu, application wizard.
+- **Phase 8 — BE: streaming + email + follow-ups + spend caps + more SPA** — streaming tailor endpoint, real SMTP, follow-up scheduler, per-user spend caps, JAC→link auto-creation.
+- **Phase 9 — Frontend: long tail** — streaming progress UI, application list/board, spend-cap UI, accessibility audit, frontend docstring pass.
+- **Phase 10 — CV import / onboarding** — PDF/DOCX → LLM-parsed entries → confirm/edit/save.
 
 ## Portfolio / personalized link system (planned — Phase F)
 
 To live in `backend/spa/`. Two surfaces:
+
 1. **Public landing** (`/`) — choose-your-path conversation cards; anonymised answers recorded (`VisitorResponse`).
 2. **Personalized views** — curated subset per recipient:
    - `/for/<slug>` — stable, human-readable (business cards, LinkedIn)
@@ -154,6 +160,7 @@ To live in `backend/spa/`. Two surfaces:
 `PortfolioLink` will store both identifiers; `sections_json` controls which content sections appear and optional message/filter overrides. JAC will create these automatically when an `Application` is sent.
 
 ### Planned React routing
+
 ```
 /           → PublicLanding     (choose-your-path)
 /for/:slug  → PersonalizedView  (human-readable link)
@@ -165,7 +172,7 @@ To live in `backend/spa/`. Two surfaces:
 - **`backend/llm_connector/`** is the LLM gateway — `settings.LLM["default"]` is the free fallback; paid configs live in per-user `LLMConfig` rows. Call via `from llm_connector import complete, stream, get_client` and **always pass `user=`** for user-driven flows so personal configs apply.
 - **`backend/jac/llm.py`** holds JAC-specific prompt wrappers — imports from `llm_connector`, never from `anthropic` / `openai` SDKs directly. Every wrapper accepts `user=` and forwards it.
 - All career models inherit from `CvEntry` (abstract): every entry is scoped to a `User` and carries `description`, `created_at`, `updated_at`, `updated_by`.
-- LLM prompt wrappers return parsed JSON (`_parse_json` strips ```` ```json ```` fences and raises with the raw response on failure).
+- LLM prompt wrappers return parsed JSON (`_parse_json` strips ` ```json ` fences and raises with the raw response on failure).
 - All settings secrets use `os.getenv()` — never hardcoded values. Variables: `SECRET_KEY`, `LLM_ENCRYPTION_KEY` (Fernet key for `LLMConfig.api_key` encryption), `OLLAMA_URL`, `ALLOWED_HOST`, `FRONTEND_URL`, `POSTGRES_*`, `REDIS_URL`, `DEFAULT_FROM_EMAIL`. Paid-provider API keys are stored per-user in `LLMConfig`, not in env.
 - Use Django ORM exclusively — no raw SQL.
 - Register every model in the app's `admin.py` so Django Admin is always usable.
