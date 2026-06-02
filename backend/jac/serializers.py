@@ -1,7 +1,5 @@
-from typing import TYPE_CHECKING
-
+from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
-from rest_framework.relations import RelatedField
 from rest_framework.validators import UniqueTogetherValidator
 
 from jac.models import (
@@ -15,24 +13,16 @@ from jac.models import (
     Skill,
 )
 
-_SerializerBase = serializers.Serializer if TYPE_CHECKING else object
 
+class ScopeDomainsToUserMixin(ScopeRelatedToUserMixin):
+    """Adds `domain_scoped_fields` on top of the user-scoped base mixin.
 
-class ScopeRelatedToUserMixin(_SerializerBase):
-    """Restrict the named related-field querysets to rows owned by the request
-    user. Without this, a `PrimaryKeyRelatedField(queryset=Skill.objects.all())`
-    on a user-owned serializer lets user A reference user B's PKs on POST/PATCH.
-
-    Subclasses set `user_scoped_fields` to a tuple of field names to scope
-    strictly to the request user, and `domain_scoped_fields` to fields whose
-    related model is `Domain` (which should accept the user's own rows plus
-    the system defaults — see `DomainManager.for_user`).
-
-    Works for both single (`PrimaryKeyRelatedField`) and many=True (wrapped in
-    `ManyRelatedField`, where the queryset lives on `child_relation`).
+    `Domain` is the one related model whose queryset must include the
+    sentinel user's system defaults alongside the request user's rows
+    (see `DomainManager.for_user`), so it can't reuse the plain
+    `filter(user=...)` rewrite from the base.
     """
 
-    user_scoped_fields: tuple[str, ...] = ()
     domain_scoped_fields: tuple[str, ...] = ()
 
     def __init__(self, *args, **kwargs):
@@ -40,13 +30,6 @@ class ScopeRelatedToUserMixin(_SerializerBase):
         request = self.context.get("request")
         if request is None or not request.user.is_authenticated:
             return
-        for name in self.user_scoped_fields:
-            field = self.fields.get(name)
-            if field is None:
-                continue
-            related: RelatedField = getattr(field, "child_relation", field)
-            if hasattr(related, "queryset") and related.queryset is not None:
-                related.queryset = related.queryset.filter(user=request.user)
         for name in self.domain_scoped_fields:
             field = self.fields.get(name)
             if field is None:
@@ -134,7 +117,7 @@ class CertificationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class SkillSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
     user_scoped_fields = ("certification",)
     domain_scoped_fields = ("domains",)
 
@@ -182,7 +165,7 @@ class SkillSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
         return obj.years_of_experience
 
 
-class JobSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+class JobSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
     user_scoped_fields = ("location", "skills")
     domain_scoped_fields = ("domains",)
 
@@ -223,7 +206,7 @@ class JobSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class ProjectSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+class ProjectSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
     user_scoped_fields = ("location", "skills")
     domain_scoped_fields = ("domains",)
 

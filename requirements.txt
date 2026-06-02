@@ -1,11 +1,13 @@
 
 # Django
-celery 
+celery
 channels
 daphne
 Django
+"django-allauth[mfa]"
 django-cors-headers
 djangorestframework
+Pillow
 redis
 
 # LLM provider SDKs — install only what you use

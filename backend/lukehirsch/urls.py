@@ -7,6 +7,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("_allauth/", include("allauth.headless.urls")),
     path("jac/", include("jac.urls")),
+    path("llm/", include("llm_connector.urls")),
 ]
 
 if settings.DEBUG:

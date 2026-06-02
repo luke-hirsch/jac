@@ -15,6 +15,7 @@ The `user` FK on writes is injected by the serializers via
 `HiddenField(default=CurrentUserDefault())`, so we don't need to set it here.
 """
 
+from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
@@ -28,7 +29,6 @@ from jac.models import (
     Project,
     Skill,
 )
-from jac.permissions import IsOwner, IsOwnerOrReadOnly
 from jac.serializers import (
     CertificationSerializer,
     DomainSerializer,
