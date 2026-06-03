@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "channels",
+    "django_filters",
+    "drf_spectacular",
     # local apps
     "llm_connector",
     "jac",
@@ -56,6 +58,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    "lukehirsch.middleware.AdminRequireMfaMiddleware",
 ]
 
 ROOT_URLCONF = "lukehirsch.urls"
@@ -196,6 +199,21 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",
     ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "lukehirsch API",
+    "DESCRIPTION": "JAC career DB + LLM connector + portfolio API",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 # allauth account settings

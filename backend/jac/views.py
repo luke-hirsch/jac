@@ -47,67 +47,80 @@ from jac.serializers import (
 class DomainViewSet(viewsets.ModelViewSet):
     serializer_class = DomainSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+    search_fields = ["name"]
 
     def get_queryset(self):
         if self.action in ("list", "retrieve"):
-            return Domain.objects.for_user(self.request.user)
-        return Domain.objects.filter(user=self.request.user)
+            return Domain.objects.for_user(self.request.user).order_by("name")
+        return Domain.objects.filter(user=self.request.user).order_by("name")
 
 
 class LocationViewSet(viewsets.ModelViewSet):
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["city"]
+    filterset_fields = ["country"]
 
     def get_queryset(self):
-        return Location.objects.filter(user=self.request.user)
+        return Location.objects.filter(user=self.request.user).order_by("city")
 
 
 class EducationViewSet(viewsets.ModelViewSet):
     serializer_class = EducationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["institution", "degree", "field_of_study"]
 
     def get_queryset(self):
-        return Education.objects.filter(user=self.request.user)
+        return Education.objects.filter(user=self.request.user).order_by("-started")
 
 
 class CertificationViewSet(viewsets.ModelViewSet):
     serializer_class = CertificationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["name", "issuer"]
 
     def get_queryset(self):
-        return Certification.objects.filter(user=self.request.user)
+        return Certification.objects.filter(user=self.request.user).order_by("-issued_on")
 
 
 class SkillViewSet(viewsets.ModelViewSet):
     serializer_class = SkillSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["name"]
+    filterset_fields = ["category", "proficiency", "domains"]
 
     def get_queryset(self):
-        return Skill.objects.filter(user=self.request.user)
+        return Skill.objects.filter(user=self.request.user).order_by("name")
 
 
 class JobViewSet(viewsets.ModelViewSet):
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["title", "company"]
+    filterset_fields = ["domains", "job_type"]
 
     def get_queryset(self):
-        return Job.objects.filter(user=self.request.user)
+        return Job.objects.filter(user=self.request.user).order_by("-started")
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["name"]
+    filterset_fields = ["domains"]
 
     def get_queryset(self):
-        return Project.objects.filter(user=self.request.user)
+        return Project.objects.filter(user=self.request.user).order_by("-started", "name")
 
 
 class LanguageViewSet(viewsets.ModelViewSet):
     serializer_class = LanguageSerializer
     permission_classes = [IsAuthenticated, IsOwner]
+    search_fields = ["name"]
+    filterset_fields = ["fluency"]
 
     def get_queryset(self):
-        return Language.objects.filter(user=self.request.user)
+        return Language.objects.filter(user=self.request.user).order_by("name")
 
 
 class CVEntryListView(APIView):

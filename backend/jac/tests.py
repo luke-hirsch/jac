@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from rest_framework.test import APITestCase
 
 from jac import llm as jac_llm
 from jac.cv import CV
@@ -849,3 +850,59 @@ class LLMWrappersTests(TestCase):
         entries = [{"id": "a"}, {"id": "b"}]
         jac_llm.tailor_cv_conversationally("posting", entries, user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
+
+
+# ---------------------------------------------------------------------------
+# Viewset user-scoping tests
+# ---------------------------------------------------------------------------
+
+
+class JobViewSetScopingTests(APITestCase):
+    """JobViewSet never leaks user A's rows to user B — not in list,
+    retrieve, update, or delete. Tests the pattern used by every scoped jac
+    viewset (all delegate scoping to get_queryset, so one representative
+    viewset is sufficient).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice_jac", password="pass")
+        cls.bob = User.objects.create_user(username="bob_jac", password="pass")
+        cls.alice_job = Job.objects.create(
+            user=cls.alice,
+            title="Alice Engineer",
+            company="AliceCo",
+            started=date(2022, 1, 1),
+        )
+
+    def test_list_returns_only_own_jobs(self):
+        self.client.force_login(self.alice)
+        r = self.client.get("/api/jac/jobs/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(self.alice_job.pk, [row["id"] for row in r.data["results"]])
+
+        self.client.force_login(self.bob)
+        r = self.client.get("/api/jac/jobs/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.data["results"]), 0)
+
+    def test_retrieve_other_users_job_is_404(self):
+        self.client.force_login(self.bob)
+        r = self.client.get(f"/api/jac/jobs/{self.alice_job.pk}/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_patch_other_users_job_is_404(self):
+        self.client.force_login(self.bob)
+        r = self.client.patch(
+            f"/api/jac/jobs/{self.alice_job.pk}/", {"title": "Hacked"}, format="json"
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_delete_other_users_job_is_404(self):
+        self.client.force_login(self.bob)
+        r = self.client.delete(f"/api/jac/jobs/{self.alice_job.pk}/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_unauthenticated_list_is_403(self):
+        r = self.client.get("/api/jac/jobs/")
+        self.assertIn(r.status_code, (401, 403))

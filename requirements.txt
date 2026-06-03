@@ -6,7 +6,9 @@ daphne
 Django
 "django-allauth[mfa]"
 django-cors-headers
+django-filter
 djangorestframework
+drf-spectacular
 Pillow
 redis
 
