@@ -7,9 +7,9 @@ Portfolio website + Job Application Creator (JAC). Django backend, React fronten
 | Path                     | Purpose                                                                                                                                                                    |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend/`               | Django project root                                                                                                                                                        |
-| `backend/lukehirsch/`    | Django config package (settings, urls, wsgi, asgi) + shared DRF utilities (`permissions.py`, `mixin.py`)                                                                   |
+| `backend/lukehirsch/`    | Django config package (settings, urls, wsgi, asgi) + shared DRF utilities (`permissions.py`, `mixin.py`, `AdminRequireMfaMiddleware`)                                      |
 | `backend/jac/`           | JAC Django app — career DB + CV filtering/tailoring pipeline + full DRF CRUD at `/api/jac/`. `JobPosting`/`Application`/`CoverLetter`/`FollowUp` models pending (Phase 6). |
-| `backend/spa/`           | Portfolio + per-user profile app. `UserProfile` shipped; `PortfolioLink` / `VisitorResponse` still planned.                                                                |
+| `backend/spa/`           | Portfolio + per-user profile app. `UserProfile` + `/api/spa/profile/` shipped; `PortfolioLink` / `VisitorResponse` still planned.                                          |
 | `backend/llm_connector/` | Reusable multi-provider LLM connector with per-user encrypted configs                                                                                                      |
 | `backend/manage.py`      | Django management entrypoint                                                                                                                                               |
 | `frontend/`              | React 19 + Vite + TypeScript — still the default Vite starter (no router, no auth UI yet)                                                                                  |
@@ -21,8 +21,8 @@ Portfolio website + Job Application Creator (JAC). Django backend, React fronten
 | Layer             | Technology                                                                                                                                                                  |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend framework | Django 6.x                                                                                                                                                                  |
-| API layer         | Django REST Framework — jac CRUD + llm_connector wired at `/api/jac/` + `/api/llm/`; spa viewset + tailor action pending                                                    |
-| Auth              | `django-allauth[mfa]` in **headless mode** (TOTP + WebAuthn passkeys + recovery codes). Mandatory email verification.                                                       |
+| API layer         | Django REST Framework — jac CRUD + llm_connector + spa profile wired at `/api/jac/` + `/api/llm/` + `/api/spa/profile/`. Pagination + django-filter + drf-spectacular (OpenAPI at `/api/schema/`, Swagger at `/api/docs/`). Tailor action pending. |
+| Auth              | `django-allauth[mfa]` in **headless mode** (TOTP + WebAuthn passkeys + recovery codes). Mandatory email verification. Admin MFA gate enforced by `lukehirsch.middleware.AdminRequireMfaMiddleware`. |
 | ASGI / streaming  | Daphne + Channels (Redis layer) — wired in settings, no consumers / routing yet                                                                                             |
 | Frontend          | React 19 + Vite + TypeScript. Stack locked 2026-06-02: TanStack Router + Query + Form + Table, Tailwind v4, shadcn/ui. Still at the default starter — Phase 2 scaffolds it. |
 | Database          | SQLite (dev) → PostgreSQL (prod, env-configurable) — `settings.DATABASES` branches on `DEBUG`                                                                               |
@@ -79,12 +79,18 @@ Key files:
 
 ## SPA App (in progress)
 
-Django app at `backend/spa/`. Holds the per-user profile today; will gain the portfolio link system in roadmap Phase 3.
+Django app at `backend/spa/`. Holds the per-user profile + auth-related signals today; will gain the portfolio link system in roadmap Phase 3.
 
-| File                                           | Purpose                                                                                                                                                                                                                                                     |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [backend/spa/models.py](backend/spa/models.py) | `UserProfile` (one-to-one with `auth.User`, auto-created via signal): identity (display_name, avatar, bio), professional contact (phone, website, linkedin_url, github_url), locale (timezone), UI prefs (theme, contrast), notifications (email_reminders) |
-| [backend/spa/admin.py](backend/spa/admin.py)   | `UserProfile` admin                                                                                                                                                                                                                                         |
+| File                                                   | Purpose                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [backend/spa/models.py](backend/spa/models.py)         | `UserProfile` (one-to-one with `auth.User`, auto-created via signal): identity (display_name, avatar, bio), professional contact (phone, website, linkedin_url, github_url), locale (timezone), UI prefs (theme, contrast), notifications (email_reminders) |
+| [backend/spa/serializers.py](backend/spa/serializers.py) | `UserProfileSerializer` — exposes every profile field; `user` is hidden + defaulted to the request user                                                                                                                                                  |
+| [backend/spa/views.py](backend/spa/views.py)           | `UserProfileView` (`RetrieveUpdateAPIView`) — GET/PUT/PATCH `request.user.profile`                                                                                                                                                                          |
+| [backend/spa/urls.py](backend/spa/urls.py)             | `/api/spa/profile/` → `UserProfileView`                                                                                                                                                                                                                     |
+| [backend/spa/signals.py](backend/spa/signals.py)       | `on_mfa_authenticator_used` — sets `session["mfa_authenticated"]=True` after any successful allauth authenticator use, so `AdminRequireMfaMiddleware` lets the staff user through to `/admin/`                                                              |
+| [backend/spa/apps.py](backend/spa/apps.py)             | `SpaConfig.ready()` wires `allauth.mfa.signals.authenticator_used` → `on_mfa_authenticator_used`                                                                                                                                                            |
+| [backend/spa/admin.py](backend/spa/admin.py)           | `UserProfile` admin                                                                                                                                                                                                                                         |
+| [backend/spa/tests.py](backend/spa/tests.py)           | Full allauth headless auth-flow tests (signup → verify → login, password reset/change, TOTP enroll w/ reauth, MFA login challenge, recovery codes, rate limit) + `AdminRequireMfaMiddleware` gate tests + `UserProfileView` scoping tests                  |
 
 `PortfolioLink`, `VisitorResponse`, and public/personalized views are **not** built — see roadmap Phase 3.
 
@@ -128,16 +134,16 @@ Full plan in [.claude/plans/roadmap-2026-06-02.md](.claude/plans/roadmap-2026-06
 
 - **Per-user LLM configs (2026-05-29).** `settings.LLM` shrank to the free Ollama fallback. CV pipeline threads `user=` end-to-end.
 - **Backend docstring cleanup (2026-05-29).** Every `backend/` module leads with a "why" docstring; frontend pass deferred.
-- **Auth + MFA backend (since 2026-05-29).** `django-allauth[mfa]` headless with email signup/login/verification/password-reset + TOTP + WebAuthn passkeys + recovery codes. `_allauth/` mounted. **Admin MFA gate + frontend auth pages + auth tests still pending.**
+- **Auth + MFA backend (since 2026-05-29).** `django-allauth[mfa]` headless with email signup/login/verification/password-reset + TOTP + WebAuthn passkeys + recovery codes. `_allauth/` mounted. Frontend auth pages still pending (Phase 2).
 - **DRF foundation + jac CRUD (2026-06-02).** `rest_framework`, `corsheaders`, `REST_FRAMEWORK` settings block; full jac serializers, `ModelViewSet`s, and `DefaultRouter` wiring at `/api/jac/`. Domain + Location gained user FKs + scoping migrations. `IsOwner`/`IsOwnerOrReadOnly` in `lukehirsch/permissions.py`.
 - **llm_connector DRF wire-up (2026-06-02).** `LLMConfigViewSet` (write-only `api_key`) + read-only `LLMRequestLogViewSet` mounted at `/api/llm/`. `ScopeRelatedToUserMixin` extracted to `lukehirsch/mixin.py` for cross-app reuse.
 - **Async infrastructure (since 2026-05-29).** `daphne`, `channels`, Redis `CHANNEL_LAYERS` + `CACHES`, full Celery config — wired in settings, **no `celery.py` / tasks / ASGI routing yet**.
 - **`spa` UserProfile (2026-06-02).** Identity + contact + locale + UI prefs + notification opt-ins, auto-created via `post_save` signal. Migration committed.
 - **CV pipeline extensions (since 2026-05-29).** 5-rung tiered fallback (`ai_tailor_with_fallback`), multi-language stopwords, `ai_conversational_tailor`, `ai_keyword_filter`, min-per-section floor, `cv_import` command.
+- **Phase 1 — BE prep for frontend (2026-06-03).** Slim `UserProfileView` (`RetrieveUpdateAPIView`) at `/api/spa/profile/`. DRF pagination (`PageNumberPagination`, page size 50), `django-filter` + search/order backends on every list view, `drf-spectacular` schema at `/api/schema/` + Swagger at `/api/docs/`. URL paths reorganised under `/api/*`. `AdminRequireMfaMiddleware` redirects staff users with TOTP/WebAuthn enrolled to `FRONTEND_URL/auth/mfa-challenge` until `session["mfa_authenticated"]` is set by `spa.signals.on_mfa_authenticator_used`. Full allauth headless auth-flow tests + admin MFA gate tests + user-scoping tests for jac/llm_connector/spa viewsets — 163 tests green.
 
 **Next, in order** (full detail in the roadmap):
 
-- **Phase 1 — BE prep for frontend** — spa `UserProfileViewSet`, pagination + django-filter + drf-spectacular, scoping tests; admin MFA gate + `test_auth.py`.
 - **Phase 2 — Frontend foundation + full CRUD** — TanStack Router/Query/Form/Table + Tailwind + shadcn scaffold; full auth + account pages; JAC CRUD for all career models; LLM connector CRUD.
 - **Phase 3 — BE refactors + Celery + first SPA backend** — gaps surfaced by FE; `celery.py` + trivial task; `PortfolioLink` + `VisitorResponse` models + endpoints.
 - **Phase 4 — Frontend: first SPA views** — PublicLanding, PersonalizedView (`/for/:slug`, `/t/:token`), portfolio-link admin.
@@ -176,6 +182,6 @@ To live in `backend/spa/`. Two surfaces:
 - All settings secrets use `os.getenv()` — never hardcoded values. Variables: `SECRET_KEY`, `LLM_ENCRYPTION_KEY` (Fernet key for `LLMConfig.api_key` encryption), `OLLAMA_URL`, `ALLOWED_HOST`, `FRONTEND_URL`, `POSTGRES_*`, `REDIS_URL`, `DEFAULT_FROM_EMAIL`. Paid-provider API keys are stored per-user in `LLMConfig`, not in env.
 - Use Django ORM exclusively — no raw SQL.
 - Register every model in the app's `admin.py` so Django Admin is always usable.
-- API endpoints: JAC live at `/api/jac/`, LLM configs live at `/api/llm/`; portfolio + profile under `/api/spa/` (not yet wired).
+- API endpoints: JAC at `/api/jac/`, LLM configs at `/api/llm/`, user profile at `/api/spa/profile/`. Public portfolio + personalized-link endpoints under `/api/spa/` are still planned (Phase 3).
 - Secrets in `.env` at repo root — never commit them.
 - Auth: `_allauth/browser/v1/...` is the headless endpoint surface; the SPA drives it via fetch + cookies + CSRF (same-origin via Vite proxy in dev, same nginx host in prod).
