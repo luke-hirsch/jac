@@ -9,11 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthVerifyEmailRouteImport } from './routes/auth/verify-email'
+import { Route as AuthSignupRouteImport } from './routes/auth/signup'
+import { Route as AuthRequestResetRouteImport } from './routes/auth/request-reset'
+import { Route as AuthMfaChallengeRouteImport } from './routes/auth/mfa-challenge'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
+import { Route as AuthResetPasswordKeyRouteImport } from './routes/auth/reset-password.$key'
+import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
+import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
+import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
+import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
 
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
@@ -23,55 +38,177 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthVerifyEmailRoute = AuthVerifyEmailRouteImport.update({
+  id: '/verify-email',
+  path: '/verify-email',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthSignupRoute = AuthSignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthRequestResetRoute = AuthRequestResetRouteImport.update({
+  id: '/request-reset',
+  path: '/request-reset',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthMfaChallengeRoute = AuthMfaChallengeRouteImport.update({
+  id: '/mfa-challenge',
+  path: '/mfa-challenge',
+  getParentRoute: () => AuthRoute,
+} as any)
 const AuthLoginRoute = AuthLoginRouteImport.update({
-  id: '/auth/login',
-  path: '/auth/login',
-  getParentRoute: () => rootRouteImport,
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AuthRoute,
 } as any)
 const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   id: '/account',
   path: '/account',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthResetPasswordKeyRoute = AuthResetPasswordKeyRouteImport.update({
+  id: '/reset-password/$key',
+  path: '/reset-password/$key',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthenticatedAccountSecurityRoute =
+  AuthenticatedAccountSecurityRouteImport.update({
+    id: '/security',
+    path: '/security',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
+const AuthenticatedAccountProfileRoute =
+  AuthenticatedAccountProfileRouteImport.update({
+    id: '/profile',
+    path: '/profile',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
+const AuthenticatedAccountEmailRoute =
+  AuthenticatedAccountEmailRouteImport.update({
+    id: '/email',
+    path: '/email',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
+const AuthenticatedAccountDangerRoute =
+  AuthenticatedAccountDangerRouteImport.update({
+    id: '/danger',
+    path: '/danger',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/account': typeof AuthenticatedAccountRoute
+  '/auth': typeof AuthRouteWithChildren
+  '/account': typeof AuthenticatedAccountRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
+  '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
+  '/auth/request-reset': typeof AuthRequestResetRoute
+  '/auth/signup': typeof AuthSignupRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/account/danger': typeof AuthenticatedAccountDangerRoute
+  '/account/email': typeof AuthenticatedAccountEmailRoute
+  '/account/profile': typeof AuthenticatedAccountProfileRoute
+  '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/account': typeof AuthenticatedAccountRoute
+  '/auth': typeof AuthRouteWithChildren
+  '/account': typeof AuthenticatedAccountRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
+  '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
+  '/auth/request-reset': typeof AuthRequestResetRoute
+  '/auth/signup': typeof AuthSignupRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/account/danger': typeof AuthenticatedAccountDangerRoute
+  '/account/email': typeof AuthenticatedAccountEmailRoute
+  '/account/profile': typeof AuthenticatedAccountProfileRoute
+  '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
-  '/_authenticated/account': typeof AuthenticatedAccountRoute
+  '/auth': typeof AuthRouteWithChildren
+  '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
+  '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
+  '/auth/request-reset': typeof AuthRequestResetRoute
+  '/auth/signup': typeof AuthSignupRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
+  '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
+  '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
+  '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/account' | '/auth/login'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/account'
+    | '/auth/login'
+    | '/auth/mfa-challenge'
+    | '/auth/request-reset'
+    | '/auth/signup'
+    | '/auth/verify-email'
+    | '/account/danger'
+    | '/account/email'
+    | '/account/profile'
+    | '/account/security'
+    | '/auth/reset-password/$key'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/account' | '/auth/login'
+  to:
+    | '/'
+    | '/auth'
+    | '/account'
+    | '/auth/login'
+    | '/auth/mfa-challenge'
+    | '/auth/request-reset'
+    | '/auth/signup'
+    | '/auth/verify-email'
+    | '/account/danger'
+    | '/account/email'
+    | '/account/profile'
+    | '/account/security'
+    | '/auth/reset-password/$key'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
+    | '/auth'
     | '/_authenticated/account'
     | '/auth/login'
+    | '/auth/mfa-challenge'
+    | '/auth/request-reset'
+    | '/auth/signup'
+    | '/auth/verify-email'
+    | '/_authenticated/account/danger'
+    | '/_authenticated/account/email'
+    | '/_authenticated/account/profile'
+    | '/_authenticated/account/security'
+    | '/auth/reset-password/$key'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
-  AuthLoginRoute: typeof AuthLoginRoute
+  AuthRoute: typeof AuthRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated': {
       id: '/_authenticated'
       path: ''
@@ -86,12 +223,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/verify-email': {
+      id: '/auth/verify-email'
+      path: '/verify-email'
+      fullPath: '/auth/verify-email'
+      preLoaderRoute: typeof AuthVerifyEmailRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/signup': {
+      id: '/auth/signup'
+      path: '/signup'
+      fullPath: '/auth/signup'
+      preLoaderRoute: typeof AuthSignupRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/request-reset': {
+      id: '/auth/request-reset'
+      path: '/request-reset'
+      fullPath: '/auth/request-reset'
+      preLoaderRoute: typeof AuthRequestResetRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/mfa-challenge': {
+      id: '/auth/mfa-challenge'
+      path: '/mfa-challenge'
+      fullPath: '/auth/mfa-challenge'
+      preLoaderRoute: typeof AuthMfaChallengeRouteImport
+      parentRoute: typeof AuthRoute
+    }
     '/auth/login': {
       id: '/auth/login'
-      path: '/auth/login'
+      path: '/login'
       fullPath: '/auth/login'
       preLoaderRoute: typeof AuthLoginRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof AuthRoute
     }
     '/_authenticated/account': {
       id: '/_authenticated/account'
@@ -100,25 +265,97 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/auth/reset-password/$key': {
+      id: '/auth/reset-password/$key'
+      path: '/reset-password/$key'
+      fullPath: '/auth/reset-password/$key'
+      preLoaderRoute: typeof AuthResetPasswordKeyRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_authenticated/account/security': {
+      id: '/_authenticated/account/security'
+      path: '/security'
+      fullPath: '/account/security'
+      preLoaderRoute: typeof AuthenticatedAccountSecurityRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
+    '/_authenticated/account/profile': {
+      id: '/_authenticated/account/profile'
+      path: '/profile'
+      fullPath: '/account/profile'
+      preLoaderRoute: typeof AuthenticatedAccountProfileRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
+    '/_authenticated/account/email': {
+      id: '/_authenticated/account/email'
+      path: '/email'
+      fullPath: '/account/email'
+      preLoaderRoute: typeof AuthenticatedAccountEmailRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
+    '/_authenticated/account/danger': {
+      id: '/_authenticated/account/danger'
+      path: '/danger'
+      fullPath: '/account/danger'
+      preLoaderRoute: typeof AuthenticatedAccountDangerRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
   }
 }
 
+interface AuthenticatedAccountRouteChildren {
+  AuthenticatedAccountDangerRoute: typeof AuthenticatedAccountDangerRoute
+  AuthenticatedAccountEmailRoute: typeof AuthenticatedAccountEmailRoute
+  AuthenticatedAccountProfileRoute: typeof AuthenticatedAccountProfileRoute
+  AuthenticatedAccountSecurityRoute: typeof AuthenticatedAccountSecurityRoute
+}
+
+const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
+  AuthenticatedAccountDangerRoute: AuthenticatedAccountDangerRoute,
+  AuthenticatedAccountEmailRoute: AuthenticatedAccountEmailRoute,
+  AuthenticatedAccountProfileRoute: AuthenticatedAccountProfileRoute,
+  AuthenticatedAccountSecurityRoute: AuthenticatedAccountSecurityRoute,
+}
+
+const AuthenticatedAccountRouteWithChildren =
+  AuthenticatedAccountRoute._addFileChildren(AuthenticatedAccountRouteChildren)
+
 interface AuthenticatedRouteChildren {
-  AuthenticatedAccountRoute: typeof AuthenticatedAccountRoute
+  AuthenticatedAccountRoute: typeof AuthenticatedAccountRouteWithChildren
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
-  AuthenticatedAccountRoute: AuthenticatedAccountRoute,
+  AuthenticatedAccountRoute: AuthenticatedAccountRouteWithChildren,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
   AuthenticatedRouteChildren,
 )
 
+interface AuthRouteChildren {
+  AuthLoginRoute: typeof AuthLoginRoute
+  AuthMfaChallengeRoute: typeof AuthMfaChallengeRoute
+  AuthRequestResetRoute: typeof AuthRequestResetRoute
+  AuthSignupRoute: typeof AuthSignupRoute
+  AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
+  AuthResetPasswordKeyRoute: typeof AuthResetPasswordKeyRoute
+}
+
+const AuthRouteChildren: AuthRouteChildren = {
+  AuthLoginRoute: AuthLoginRoute,
+  AuthMfaChallengeRoute: AuthMfaChallengeRoute,
+  AuthRequestResetRoute: AuthRequestResetRoute,
+  AuthSignupRoute: AuthSignupRoute,
+  AuthVerifyEmailRoute: AuthVerifyEmailRoute,
+  AuthResetPasswordKeyRoute: AuthResetPasswordKeyRoute,
+}
+
+const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
-  AuthLoginRoute: AuthLoginRoute,
+  AuthRoute: AuthRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

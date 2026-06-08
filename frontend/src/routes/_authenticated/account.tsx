@@ -1,24 +1,35 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { Card } from "@/components/ui/card";
 
-type Profile = {
-  display_name: string;
-  bio: string;
-  timezone: string;
-};
+const ITEMS = [
+  { to: "/account/profile", label: "Profile" },
+  { to: "/account/email", label: "Email addresses" },
+  { to: "/account/security", label: "Security" },
+  { to: "/account/danger", label: "Danger zone" },
+] as const;
 
 export const Route = createFileRoute("/_authenticated/account")({
-  component: Account,
+  component: AccountLayout,
 });
 
-function Account() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["profile"],
-    queryFn: () => api<Profile>("/api/spa/profile/"),
-  });
-
-  if (isLoading) return <div className="p-8">loading…</div>;
-  if (error) return <div className="p-8">error: {String(error)}</div>;
-  return <pre className="p-8 text-sm">{JSON.stringify(data, null, 2)}</pre>;
+function AccountLayout() {
+  return (
+    <div className="max-w-5xl mx-auto p-6 grid gap-6 md:grid-cols-[180px_1fr]">
+      <nav className="space-y-1">
+        {ITEMS.map((i) => (
+          <Link
+            key={i.to}
+            to={i.to}
+            className="block px-3 py-2 rounded-md text-sm hover:bg-muted"
+            activeProps={{ className: "bg-muted font-medium" }}
+          >
+            {i.label}
+          </Link>
+        ))}
+      </nav>
+      <Card className="p-6">
+        <Outlet />
+      </Card>
+    </div>
+  );
 }

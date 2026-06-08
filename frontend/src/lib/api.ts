@@ -43,3 +43,16 @@ export async function api<T = unknown>(
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
 }
+
+export type AllauthError = { message: string; code: string; param?: string };
+
+export function allauthErrorsByField(error: unknown): Record<string, string> {
+  if (!(error instanceof ApiError)) return {};
+  const data = error.data as { errors?: AllauthError[] } | undefined;
+  const map: Record<string, string> = {};
+  for (const e of data?.errors ?? []) {
+    if (e.param) map[e.param] = e.message;
+    else map["__non_field__"] = e.message;
+  }
+  return map;
+}
