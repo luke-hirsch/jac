@@ -261,9 +261,14 @@ class LanguageSerializer(serializers.ModelSerializer):
 
 
 class CvSerializer(serializers.Serializer):
-    user = serializers.IntegerField(read_only=True)
-    domains = serializers.ListField(child=serializers.CharField(), allow_empty=True, allow_null=True)
-    started = serializers.DateField(allow_null=True)
-    ended = serializers.DateField(allow_null=True)
-    min_skill_proficiency = serializers.CharField(allow_blank=True, allow_null=True)
-    entries = serializers.DictField()
+    """Response shape for `CVEntryListView`: the user's full career DB,
+    grouped by entry type. Read-only — used to document the endpoint for
+    drf-spectacular, not to deserialize input.
+    """
+
+    skills = SkillSerializer(many=True)
+    jobs = JobSerializer(many=True)
+    educations = EducationSerializer(many=True)
+    certifications = CertificationSerializer(many=True)
+    projects = ProjectSerializer(many=True)
+    languages = LanguageSerializer(many=True)

@@ -49,7 +49,7 @@ function MfaChallenge() {
       toast.success("Verified");
       // `next` comes from AdminRequireMfaMiddleware (e.g. /admin/), takes precedence.
       if (next) window.location.href = next;
-      else navigate({ to: redirect ?? "/", search: {} as never });
+      else navigate({ to: redirect ?? "/cv", search: {} as never });
     },
     onError: (e) => {
       const fields = allauthErrorsByField(e);

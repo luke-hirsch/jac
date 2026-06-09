@@ -17,8 +17,16 @@ import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as AuthRequestResetRouteImport } from './routes/auth/request-reset'
 import { Route as AuthMfaChallengeRouteImport } from './routes/auth/mfa-challenge'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
+import { Route as AuthenticatedCvRouteImport } from './routes/_authenticated/cv'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
+import { Route as AuthenticatedCvIndexRouteImport } from './routes/_authenticated/cv/index'
 import { Route as AuthResetPasswordKeyRouteImport } from './routes/auth/reset-password.$key'
+import { Route as AuthenticatedCvSkillsRouteImport } from './routes/_authenticated/cv/skills'
+import { Route as AuthenticatedCvProjectsRouteImport } from './routes/_authenticated/cv/projects'
+import { Route as AuthenticatedCvLanguagesRouteImport } from './routes/_authenticated/cv/languages'
+import { Route as AuthenticatedCvJobsRouteImport } from './routes/_authenticated/cv/jobs'
+import { Route as AuthenticatedCvEducationRouteImport } from './routes/_authenticated/cv/education'
+import { Route as AuthenticatedCvCertificationsRouteImport } from './routes/_authenticated/cv/certifications'
 import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
 import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
@@ -63,16 +71,59 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AuthRoute,
 } as any)
+const AuthenticatedCvRoute = AuthenticatedCvRouteImport.update({
+  id: '/cv',
+  path: '/cv',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   id: '/account',
   path: '/account',
   getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedCvIndexRoute = AuthenticatedCvIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthenticatedCvRoute,
 } as any)
 const AuthResetPasswordKeyRoute = AuthResetPasswordKeyRouteImport.update({
   id: '/reset-password/$key',
   path: '/reset-password/$key',
   getParentRoute: () => AuthRoute,
 } as any)
+const AuthenticatedCvSkillsRoute = AuthenticatedCvSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => AuthenticatedCvRoute,
+} as any)
+const AuthenticatedCvProjectsRoute = AuthenticatedCvProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => AuthenticatedCvRoute,
+} as any)
+const AuthenticatedCvLanguagesRoute =
+  AuthenticatedCvLanguagesRouteImport.update({
+    id: '/languages',
+    path: '/languages',
+    getParentRoute: () => AuthenticatedCvRoute,
+  } as any)
+const AuthenticatedCvJobsRoute = AuthenticatedCvJobsRouteImport.update({
+  id: '/jobs',
+  path: '/jobs',
+  getParentRoute: () => AuthenticatedCvRoute,
+} as any)
+const AuthenticatedCvEducationRoute =
+  AuthenticatedCvEducationRouteImport.update({
+    id: '/education',
+    path: '/education',
+    getParentRoute: () => AuthenticatedCvRoute,
+  } as any)
+const AuthenticatedCvCertificationsRoute =
+  AuthenticatedCvCertificationsRouteImport.update({
+    id: '/certifications',
+    path: '/certifications',
+    getParentRoute: () => AuthenticatedCvRoute,
+  } as any)
 const AuthenticatedAccountSecurityRoute =
   AuthenticatedAccountSecurityRouteImport.update({
     id: '/security',
@@ -102,6 +153,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
   '/account': typeof AuthenticatedAccountRouteWithChildren
+  '/cv': typeof AuthenticatedCvRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
   '/auth/request-reset': typeof AuthRequestResetRoute
@@ -111,7 +163,14 @@ export interface FileRoutesByFullPath {
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
+  '/cv/education': typeof AuthenticatedCvEducationRoute
+  '/cv/jobs': typeof AuthenticatedCvJobsRoute
+  '/cv/languages': typeof AuthenticatedCvLanguagesRoute
+  '/cv/projects': typeof AuthenticatedCvProjectsRoute
+  '/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/cv/': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -126,7 +185,14 @@ export interface FileRoutesByTo {
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
+  '/cv/education': typeof AuthenticatedCvEducationRoute
+  '/cv/jobs': typeof AuthenticatedCvJobsRoute
+  '/cv/languages': typeof AuthenticatedCvLanguagesRoute
+  '/cv/projects': typeof AuthenticatedCvProjectsRoute
+  '/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/cv': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -134,6 +200,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/auth': typeof AuthRouteWithChildren
   '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
+  '/_authenticated/cv': typeof AuthenticatedCvRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
   '/auth/request-reset': typeof AuthRequestResetRoute
@@ -143,7 +210,14 @@ export interface FileRoutesById {
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
   '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
   '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/_authenticated/cv/certifications': typeof AuthenticatedCvCertificationsRoute
+  '/_authenticated/cv/education': typeof AuthenticatedCvEducationRoute
+  '/_authenticated/cv/jobs': typeof AuthenticatedCvJobsRoute
+  '/_authenticated/cv/languages': typeof AuthenticatedCvLanguagesRoute
+  '/_authenticated/cv/projects': typeof AuthenticatedCvProjectsRoute
+  '/_authenticated/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/_authenticated/cv/': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -151,6 +225,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/account'
+    | '/cv'
     | '/auth/login'
     | '/auth/mfa-challenge'
     | '/auth/request-reset'
@@ -160,7 +235,14 @@ export interface FileRouteTypes {
     | '/account/email'
     | '/account/profile'
     | '/account/security'
+    | '/cv/certifications'
+    | '/cv/education'
+    | '/cv/jobs'
+    | '/cv/languages'
+    | '/cv/projects'
+    | '/cv/skills'
     | '/auth/reset-password/$key'
+    | '/cv/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -175,13 +257,21 @@ export interface FileRouteTypes {
     | '/account/email'
     | '/account/profile'
     | '/account/security'
+    | '/cv/certifications'
+    | '/cv/education'
+    | '/cv/jobs'
+    | '/cv/languages'
+    | '/cv/projects'
+    | '/cv/skills'
     | '/auth/reset-password/$key'
+    | '/cv'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/auth'
     | '/_authenticated/account'
+    | '/_authenticated/cv'
     | '/auth/login'
     | '/auth/mfa-challenge'
     | '/auth/request-reset'
@@ -191,7 +281,14 @@ export interface FileRouteTypes {
     | '/_authenticated/account/email'
     | '/_authenticated/account/profile'
     | '/_authenticated/account/security'
+    | '/_authenticated/cv/certifications'
+    | '/_authenticated/cv/education'
+    | '/_authenticated/cv/jobs'
+    | '/_authenticated/cv/languages'
+    | '/_authenticated/cv/projects'
+    | '/_authenticated/cv/skills'
     | '/auth/reset-password/$key'
+    | '/_authenticated/cv/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -258,6 +355,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/_authenticated/cv': {
+      id: '/_authenticated/cv'
+      path: '/cv'
+      fullPath: '/cv'
+      preLoaderRoute: typeof AuthenticatedCvRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/account': {
       id: '/_authenticated/account'
       path: '/account'
@@ -265,12 +369,61 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/cv/': {
+      id: '/_authenticated/cv/'
+      path: '/'
+      fullPath: '/cv/'
+      preLoaderRoute: typeof AuthenticatedCvIndexRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
     '/auth/reset-password/$key': {
       id: '/auth/reset-password/$key'
       path: '/reset-password/$key'
       fullPath: '/auth/reset-password/$key'
       preLoaderRoute: typeof AuthResetPasswordKeyRouteImport
       parentRoute: typeof AuthRoute
+    }
+    '/_authenticated/cv/skills': {
+      id: '/_authenticated/cv/skills'
+      path: '/skills'
+      fullPath: '/cv/skills'
+      preLoaderRoute: typeof AuthenticatedCvSkillsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/cv/projects': {
+      id: '/_authenticated/cv/projects'
+      path: '/projects'
+      fullPath: '/cv/projects'
+      preLoaderRoute: typeof AuthenticatedCvProjectsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/cv/languages': {
+      id: '/_authenticated/cv/languages'
+      path: '/languages'
+      fullPath: '/cv/languages'
+      preLoaderRoute: typeof AuthenticatedCvLanguagesRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/cv/jobs': {
+      id: '/_authenticated/cv/jobs'
+      path: '/jobs'
+      fullPath: '/cv/jobs'
+      preLoaderRoute: typeof AuthenticatedCvJobsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/cv/education': {
+      id: '/_authenticated/cv/education'
+      path: '/education'
+      fullPath: '/cv/education'
+      preLoaderRoute: typeof AuthenticatedCvEducationRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/cv/certifications': {
+      id: '/_authenticated/cv/certifications'
+      path: '/certifications'
+      fullPath: '/cv/certifications'
+      preLoaderRoute: typeof AuthenticatedCvCertificationsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
     }
     '/_authenticated/account/security': {
       id: '/_authenticated/account/security'
@@ -320,12 +473,38 @@ const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
 const AuthenticatedAccountRouteWithChildren =
   AuthenticatedAccountRoute._addFileChildren(AuthenticatedAccountRouteChildren)
 
+interface AuthenticatedCvRouteChildren {
+  AuthenticatedCvCertificationsRoute: typeof AuthenticatedCvCertificationsRoute
+  AuthenticatedCvEducationRoute: typeof AuthenticatedCvEducationRoute
+  AuthenticatedCvJobsRoute: typeof AuthenticatedCvJobsRoute
+  AuthenticatedCvLanguagesRoute: typeof AuthenticatedCvLanguagesRoute
+  AuthenticatedCvProjectsRoute: typeof AuthenticatedCvProjectsRoute
+  AuthenticatedCvSkillsRoute: typeof AuthenticatedCvSkillsRoute
+  AuthenticatedCvIndexRoute: typeof AuthenticatedCvIndexRoute
+}
+
+const AuthenticatedCvRouteChildren: AuthenticatedCvRouteChildren = {
+  AuthenticatedCvCertificationsRoute: AuthenticatedCvCertificationsRoute,
+  AuthenticatedCvEducationRoute: AuthenticatedCvEducationRoute,
+  AuthenticatedCvJobsRoute: AuthenticatedCvJobsRoute,
+  AuthenticatedCvLanguagesRoute: AuthenticatedCvLanguagesRoute,
+  AuthenticatedCvProjectsRoute: AuthenticatedCvProjectsRoute,
+  AuthenticatedCvSkillsRoute: AuthenticatedCvSkillsRoute,
+  AuthenticatedCvIndexRoute: AuthenticatedCvIndexRoute,
+}
+
+const AuthenticatedCvRouteWithChildren = AuthenticatedCvRoute._addFileChildren(
+  AuthenticatedCvRouteChildren,
+)
+
 interface AuthenticatedRouteChildren {
   AuthenticatedAccountRoute: typeof AuthenticatedAccountRouteWithChildren
+  AuthenticatedCvRoute: typeof AuthenticatedCvRouteWithChildren
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAccountRoute: AuthenticatedAccountRouteWithChildren,
+  AuthenticatedCvRoute: AuthenticatedCvRouteWithChildren,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

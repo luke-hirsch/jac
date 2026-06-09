@@ -30,7 +30,7 @@ function VerifyEmail() {
     onSuccess: async () => {
       await invalidate();
       toast.success("Email verified");
-      navigate({ to: "/account/profile" });
+      navigate({ to: "/cv" });
     },
     onError: (e) => {
       const fields = allauthErrorsByField(e);

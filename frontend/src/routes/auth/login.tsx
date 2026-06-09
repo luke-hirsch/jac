@@ -37,7 +37,7 @@ function Login() {
     switch (outcome.kind) {
       case "authenticated":
       case "already_authenticated":
-        navigate({ to: redirect ?? "/", search: {} as never });
+        navigate({ to: redirect ?? "/cv", search: {} as never });
         return;
       case "mfa_authenticate":
         navigate({ to: "/auth/mfa-challenge", search: { redirect } });

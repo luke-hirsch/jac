@@ -1,0 +1,598 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { useForm } from "@tanstack/react-form";
+import {
+  createColumnHelper,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type RowSelectionState,
+} from "@tanstack/react-table";
+import { toast } from "sonner";
+import { ArrowDown, ArrowDownUp, ArrowUp, Pencil, Trash2 } from "lucide-react";
+import {
+  useList,
+  useCreate,
+  useUpdate,
+  useDestroy,
+  useBulkDestroy,
+  useBulkPatchDomains,
+  type SkillRow,
+} from "@/lib/queries/jac";
+import { useDebounced } from "@/lib/use-debounced";
+import { zodValidator, z } from "@/lib/form";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { SectionPage } from "@/components/cv/section-page";
+import { DomainPicker } from "@/components/cv/domain-picker";
+
+import { MarkdownPreview } from "@/components/markdown-preview";
+import { BulkBar } from "@/components/cv/bulk-bar";
+const PROFICIENCY: { value: SkillRow["proficiency"]; label: string }[] = [
+  { value: "beginner", label: "Beginner" },
+  { value: "intermediate", label: "Intermediate" },
+  { value: "advanced", label: "Advanced" },
+  { value: "expert", label: "Expert" },
+];
+const CATEGORIES: { value: SkillRow["category"]; label: string }[] = [
+  { value: "technical", label: "Technical" },
+  { value: "soft", label: "Soft" },
+  { value: "domain", label: "Domain" },
+  { value: "other", label: "Other" },
+];
+
+const schema = z.object({
+  name: z.string().min(1).max(200),
+  proficiency: z.enum(["beginner", "intermediate", "advanced", "expert"]),
+  category: z.enum(["technical", "soft", "domain", "other"]),
+  domains: z.array(z.number()),
+  first_used: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .or(z.literal("")),
+  certification: z.number().nullable(),
+  description: z.string(),
+});
+
+type SkillInput = z.infer<typeof schema>;
+
+export const Route = createFileRoute("/_authenticated/cv/skills")({
+  component: SkillPage,
+});
+
+function SkillPage() {
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search);
+  const [proficiency, setProficiency] = useState<SkillRow["proficiency"] | "">(
+    "",
+  );
+  const [category, setCategory] = useState<SkillRow["category"] | "">("");
+  // "" = default (name), "experience_since" = most experience first,
+  // "-experience_since" = least first.
+  const [expSort, setExpSort] = useState<
+    "" | "experience_since" | "-experience_since"
+  >("");
+  const [selection, setSelection] = useState<RowSelectionState>({});
+  const [editing, setEditing] = useState<SkillRow | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const list = useList<SkillRow>("skills", {
+    search: debouncedSearch,
+    filters: { proficiency, category },
+    ordering: expSort || undefined,
+  });
+
+  const cycleExpSort = () =>
+    setExpSort((o) =>
+      o === ""
+        ? "experience_since"
+        : o === "experience_since"
+          ? "-experience_since"
+          : "",
+    );
+
+  const destroy = useDestroy("skills");
+  const bulkDestroy = useBulkDestroy("skills");
+  const bulkDomains = useBulkPatchDomains("skills");
+
+  const columns = useMemo(
+    () =>
+      buildColumns({
+        onEdit: (row) => {
+          setEditing(row);
+          setOpen(true);
+        },
+        onDelete: (row) => {
+          if (!confirm(`Delete "${row.name}"?`)) return;
+          destroy.mutate(row.id, {
+            onSuccess: () => toast.success("Deleted"),
+            onError: () => toast.error("Delete failed"),
+          });
+        },
+        expSort,
+        onToggleExpSort: cycleExpSort,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [destroy, expSort],
+  );
+
+  const rows = list.data?.results ?? [];
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: { rowSelection: selection },
+    onRowSelectionChange: setSelection,
+    enableRowSelection: true,
+    getRowId: (r) => String(r.id),
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  const selectedIds = Object.keys(selection).map(Number);
+
+  return (
+    <SectionPage<SkillRow>
+      title="Skills"
+      description="Technical, soft, and domain skills with self-assessed proficiency."
+      search={search}
+      onSearchChange={setSearch}
+      filters={
+        <>
+          {" "}
+          <Select
+            value={proficiency || "all"}
+            onValueChange={(v) =>
+              setProficiency(v === "all" ? "" : (v as SkillRow["proficiency"]))
+            }
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All proficiencies</SelectItem>
+              {PROFICIENCY.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={category || "all"}
+            onValueChange={(v) =>
+              setCategory(v === "all" ? "" : (v as SkillRow["category"]))
+            }
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All categories</SelectItem>
+              {CATEGORIES.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>{" "}
+        </>
+      }
+      table={
+        <>
+          <BulkBar
+            count={selectedIds.length}
+            onDelete={() => {
+              if (!confirm(`Delete ${selectedIds.length} skills?`)) return;
+              bulkDestroy.mutate(selectedIds, {
+                onSuccess: () => {
+                  toast.success("Deleted");
+                  setSelection({});
+                },
+                onError: () => toast.error("Bulk delete failed"),
+              });
+            }}
+            onAssignDomains={(add, remove) =>
+              bulkDomains.mutate(
+                { ids: selectedIds, add, remove },
+                {
+                  onSuccess: () => {
+                    toast.success("Domains updated");
+                    setSelection({});
+                  },
+                  onError: () => toast.error("Bulk domain update failed"),
+                },
+              )
+            }
+          />
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                {table.getHeaderGroups().map((hg) => (
+                  <TableRow key={hg.id}>
+                    {hg.headers.map((h) => (
+                      <TableHead key={h.id} style={{ width: h.getSize() }}>
+                        {flexRender(h.column.columnDef.header, h.getContext())}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {list.isLoading && (
+                  <TableRow>
+                    <TableCell
+                      colSpan={columns.length}
+                      className="text-center text-muted-foreground"
+                    >
+                      Loading…
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!list.isLoading && rows.length === 0 && (
+                  <TableRow>
+                    <TableCell
+                      colSpan={columns.length}
+                      className="text-center text-muted-foreground"
+                    >
+                      No skills yet — click <strong>New</strong> to add one.
+                    </TableCell>
+                  </TableRow>
+                )}
+                {table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    key={row.id}
+                    data-state={row.getIsSelected() ? "selected" : undefined}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      }
+      editor={(row, close) => <SkillEditor row={row} onClose={close} />}
+      open={open}
+      editing={editing}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setEditing(null);
+      }}
+      onNew={() => {
+        setEditing(null);
+        setOpen(true);
+      }}
+    />
+  );
+}
+
+const col = createColumnHelper<SkillRow>();
+
+function buildColumns(opts: {
+  onEdit: (r: SkillRow) => void;
+  onDelete: (r: SkillRow) => void;
+  expSort: "" | "experience_since" | "-experience_since";
+  onToggleExpSort: () => void;
+}) {
+  return [
+    col.display({
+      id: "select",
+      size: 32,
+      header: ({ table }) => (
+        <Checkbox
+          checked={
+            table.getIsAllRowsSelected() ||
+            (table.getIsSomeRowsSelected() && "indeterminate")
+          }
+          onCheckedChange={(v) => table.toggleAllRowsSelected(!!v)}
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(v) => row.toggleSelected(!!v)}
+        />
+      ),
+    }),
+    col.accessor("name", { header: "Name" }),
+
+    col.accessor("proficiency", {
+      header: "Proficiency",
+      cell: ({ getValue }) => (
+        <Badge variant="outline">
+          {PROFICIENCY.find((t) => t.value === getValue())?.label ?? getValue()}
+        </Badge>
+      ),
+    }),
+    col.accessor("category", {
+      header: "Category",
+      cell: ({ getValue }) => (
+        <Badge variant="outline">
+          {CATEGORIES.find((t) => t.value === getValue())?.label ?? getValue()}
+        </Badge>
+      ),
+    }),
+    col.accessor("years_of_experience", {
+      header: () => (
+        <button
+          type="button"
+          onClick={opts.onToggleExpSort}
+          className="flex items-center gap-1 hover:text-foreground"
+        >
+          Experience
+          {opts.expSort === "experience_since" ? (
+            <ArrowDown className="size-3" />
+          ) : opts.expSort === "-experience_since" ? (
+            <ArrowUp className="size-3" />
+          ) : (
+            <ArrowDownUp className="size-3 opacity-50" />
+          )}
+        </button>
+      ),
+      cell: ({ getValue }) => {
+        const years = getValue();
+        return years == null ? "—" : `${years} yr${years === 1 ? "" : "s"}`;
+      },
+    }),
+
+    col.display({
+      id: "actions",
+      header: "",
+      size: 80,
+      cell: ({ row }) => (
+        <div className="flex gap-1 justify-end">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => opts.onEdit(row.original)}
+          >
+            <Pencil className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => opts.onDelete(row.original)}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ),
+    }),
+  ];
+}
+
+function SkillEditor({
+  row,
+  onClose,
+}: {
+  row: SkillRow | null;
+  onClose: () => void;
+}) {
+  const create = useCreate<SkillRow>("skills");
+  const update = useUpdate<SkillRow>("skills");
+  const initial: SkillInput = row
+    ? {
+        name: row.name,
+        proficiency: row.proficiency,
+        category: row.category,
+        domains: row.domains,
+        first_used: row.first_used ?? "",
+        certification: row.certification,
+        description: row.description,
+      }
+    : {
+        name: "",
+        proficiency: "beginner",
+        category: "technical",
+        domains: [],
+        first_used: "",
+        certification: null,
+        description: "",
+      };
+
+  const form = useForm({
+    defaultValues: initial,
+    validators: { onChange: zodValidator(schema) },
+    onSubmit: async ({ value }) => {
+      // DRF's DateField rejects "" for the nullable `first_used` — send null.
+      const body = { ...value, first_used: value.first_used || null };
+      try {
+        if (row) await update.mutateAsync({ id: row.id, body });
+        else await create.mutateAsync(body);
+        toast.success(row ? "Updated" : "Created");
+        onClose();
+      } catch (e) {
+        console.error(e);
+        toast.error("Save failed — check field errors");
+      }
+    },
+  });
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        form.handleSubmit();
+      }}
+    >
+      <form.Field name="name">
+        {(f) => (
+          <div className="space-y-1">
+            <Label htmlFor={f.name}>Name</Label>
+            <Input
+              id={f.name}
+              value={f.state.value}
+              onChange={(e) => f.handleChange(e.target.value)}
+            />
+            <FieldError errors={f.state.meta.errors} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="proficiency">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Proficiency</Label>
+            <Select
+              value={f.state.value}
+              onValueChange={(v) =>
+                f.handleChange(v as SkillInput["proficiency"])
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PROFICIENCY.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </form.Field>
+      <form.Field name="category">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Category</Label>
+            <Select
+              value={f.state.value}
+              onValueChange={(v) => f.handleChange(v as SkillInput["category"])}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CATEGORIES.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </form.Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <form.Field name="first_used">
+          {(f) => (
+            <div className="space-y-1">
+              <Label htmlFor={f.name}>First used</Label>
+              <Input
+                id={f.name}
+                type="date"
+                value={f.state.value}
+                onChange={(e) => f.handleChange(e.target.value)}
+              />
+              <FieldError errors={f.state.meta.errors} />
+            </div>
+          )}
+        </form.Field>
+      </div>
+
+      <form.Field name="certification">
+        {(f) => (
+          <div className="space-y-1">
+            <Label htmlFor={f.name}>Certification</Label>
+            <Input
+              id={f.name}
+              type="number"
+              value={f.state.value ?? ""}
+              onChange={(e) =>
+                f.handleChange(
+                  e.target.value === "" ? null : Number(e.target.value),
+                )
+              }
+            />
+            <FieldError errors={f.state.meta.errors} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="domains">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Domains</Label>
+            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="description">
+        {(f) => (
+          <div className="space-y-1">
+            <Label htmlFor={f.name}>Description (Markdown)</Label>
+            <div className="grid md:grid-cols-2 gap-3">
+              <Textarea
+                id={f.name}
+                rows={10}
+                value={f.state.value}
+                onChange={(e) => f.handleChange(e.target.value)}
+                className="font-mono text-sm"
+              />
+              <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
+                <MarkdownPreview source={f.state.value} />
+              </div>
+            </div>
+          </div>
+        )}
+      </form.Field>
+
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={create.isPending || update.isPending}>
+          {row ? "Save" : "Create"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function FieldError({ errors }: { errors: Array<unknown> }) {
+  const msg = errors.find(
+    (e) => typeof e === "string" || (e && typeof e === "object"),
+  );
+  if (!msg) return null;
+  const text =
+    typeof msg === "string"
+      ? msg
+      : ((msg as { message?: string }).message ??
+        (msg as { fields?: Record<string, string> }).fields?.[
+          Object.keys(
+            (msg as { fields?: Record<string, string> }).fields ?? {},
+          )[0]
+        ] ??
+        "Invalid");
+  return <p className="text-xs text-destructive">{String(text)}</p>;
+}

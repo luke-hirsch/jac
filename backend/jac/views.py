@@ -15,6 +15,10 @@ The `user` FK on writes is injected by the serializers via
 `HiddenField(default=CurrentUserDefault())`, so we don't need to set it here.
 """
 
+from datetime import date
+
+from django.db.models.functions import Coalesce, Least
+from drf_spectacular.utils import extend_schema
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
@@ -34,6 +38,7 @@ from jac.models import (
 )
 from jac.serializers import (
     CertificationSerializer,
+    CvSerializer,
     DomainSerializer,
     EducationSerializer,
     JobSerializer,
@@ -69,6 +74,7 @@ class EducationViewSet(viewsets.ModelViewSet):
     serializer_class = EducationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["institution", "degree", "field_of_study"]
+    ordering_fields = ["started", "ended", "institution", "field_of_study"]
 
     def get_queryset(self):
         return Education.objects.filter(user=self.request.user).order_by("-started")
@@ -78,6 +84,7 @@ class CertificationViewSet(viewsets.ModelViewSet):
     serializer_class = CertificationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name", "issuer"]
+    ordering_fields = ["issued_on", "expires_on", "name", "issuer"]
 
     def get_queryset(self):
         return Certification.objects.filter(user=self.request.user).order_by("-issued_on")
@@ -88,9 +95,27 @@ class SkillViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["category", "proficiency", "domains"]
+    # `experience_since` mirrors the `years_of_experience` property (computed,
+    # so not orderable on its own). Ordering by it ascending == most years of
+    # experience first.
+    ordering_fields = ["name", "first_used", "proficiency", "experience_since"]
 
     def get_queryset(self):
-        return Skill.objects.filter(user=self.request.user).order_by("name")
+        # `_earliest_job_started` / `_earliest_project_started` are annotated by
+        # SkillManager; combine them with `first_used` into a single orderable
+        # date. Nulls sort last via a far-future sentinel.
+        far_future = date(9999, 12, 31)
+        return (
+            Skill.objects.filter(user=self.request.user)
+            .annotate(
+                experience_since=Least(
+                    Coalesce("first_used", far_future),
+                    Coalesce("_earliest_job_started", far_future),
+                    Coalesce("_earliest_project_started", far_future),
+                )
+            )
+            .order_by("name")
+        )
 
 
 class JobViewSet(viewsets.ModelViewSet):
@@ -98,6 +123,7 @@ class JobViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["title", "company"]
     filterset_fields = ["domains", "job_type"]
+    ordering_fields = ["started", "ended", "title", "company"]
 
     def get_queryset(self):
         return Job.objects.filter(user=self.request.user).order_by("-started")
@@ -108,6 +134,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["domains"]
+    ordering_fields = ["started", "ended", "name"]
 
     def get_queryset(self):
         return Project.objects.filter(user=self.request.user).order_by("-started", "name")
@@ -118,6 +145,7 @@ class LanguageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["fluency"]
+    ordering_fields = ["name", "fluency"]
 
     def get_queryset(self):
         return Language.objects.filter(user=self.request.user).order_by("name")
@@ -128,6 +156,7 @@ class CVEntryListView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses=CvSerializer)
     def get(self, request):
         cv = CV(request.user.pk)
         context = {"request": request}

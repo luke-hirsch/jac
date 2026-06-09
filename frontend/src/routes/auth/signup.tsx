@@ -34,7 +34,7 @@ function Signup() {
     switch (outcome.kind) {
       case "authenticated":
       case "already_authenticated":
-        navigate({ to: "/", search: {} as never });
+        navigate({ to: "/cv", search: {} as never });
         return;
       case "verify_email":
         navigate({ to: "/auth/verify-email" });
