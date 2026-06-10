@@ -321,7 +321,21 @@ function CertificationEditor({
       <form.Field name="name">
         {(f) => (
           <div className="space-y-1">
-            <Label htmlFor={f.name}>Title</Label>
+            <Label htmlFor={f.name}>Name</Label>
+            <Input
+              id={f.name}
+              value={f.state.value}
+              onChange={(e) => f.handleChange(e.target.value)}
+            />
+            <FieldError errors={f.state.meta.errors} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="issuer">
+        {(f) => (
+          <div className="space-y-1">
+            <Label htmlFor={f.name}>Issuer</Label>
             <Input
               id={f.name}
               value={f.state.value}
@@ -407,6 +421,21 @@ function CertificationEditor({
           </div>
         )}
       </form.Field>
+
+      <form.Subscribe
+        selector={(s) => ({
+          submitted: s.submissionAttempts,
+          canSubmit: s.canSubmit,
+        })}
+      >
+        {({ submitted, canSubmit }) =>
+          submitted > 0 && !canSubmit ? (
+            <p className="text-sm text-destructive">
+              Some fields are invalid — check the highlighted fields above.
+            </p>
+          ) : null
+        }
+      </form.Subscribe>
 
       <div className="flex justify-end gap-2 pt-2">
         <Button type="button" variant="ghost" onClick={onClose}>

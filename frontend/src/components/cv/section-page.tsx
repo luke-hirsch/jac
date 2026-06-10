@@ -56,7 +56,7 @@ export function SectionPage<EditorRow>({
       </div>
       {table}
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+        <SheetContent className="w-full data-[side=right]:sm:max-w-2xl data-[side=right]:lg:max-w-3xl overflow-y-auto">
           <SheetHeader>
             <SheetTitle>
               {editing ? "Edit" : "New"} {title.toLowerCase()}
@@ -65,9 +65,11 @@ export function SectionPage<EditorRow>({
           {/* Key by row id so the form fully remounts (and re-reads its
               defaultValues) whenever the edited row — or new/edit mode —
               changes. Without this the editor keeps a previous row's form
-              state, so edits to fields like `name` silently don't apply. */}
+              state, so edits to fields like `name` silently don't apply.
+              `px-8 pb-8` shares the header's gutter so fields aren't flush
+              to the panel edge. */}
           <div
-            className="mt-4"
+            className="px-8 pb-8"
             key={
               editing
                 ? `edit-${(editing as { id?: number }).id ?? "?"}`
