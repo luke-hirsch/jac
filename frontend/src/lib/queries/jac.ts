@@ -55,9 +55,11 @@ export type SkillRow = {
   proficiency: "beginner" | "intermediate" | "advanced" | "expert";
   category: "technical" | "soft" | "domain" | "other";
   domains: number[];
+  related_skills: number[];
   first_used: string | null;
   certification: number | null;
   years_of_experience: number | null;
+  years_of_experience_override: number | null;
   description: string;
 };
 

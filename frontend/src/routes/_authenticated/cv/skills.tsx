@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { SkillPicker } from "@/components/cv/skill-picker";
+import { CertificationPicker } from "@/components/cv/certification-picker";
 
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -65,11 +67,13 @@ const schema = z.object({
   proficiency: z.enum(["beginner", "intermediate", "advanced", "expert"]),
   category: z.enum(["technical", "soft", "domain", "other"]),
   domains: z.array(z.number()),
+  related_skills: z.array(z.number()),
   first_used: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .or(z.literal("")),
   certification: z.number().nullable(),
+  years_of_experience_override: z.number().int().min(0).nullable(),
   description: z.string(),
 });
 
@@ -401,8 +405,10 @@ function SkillEditor({
         proficiency: row.proficiency,
         category: row.category,
         domains: row.domains,
+        related_skills: row.related_skills,
         first_used: row.first_used ?? "",
         certification: row.certification,
+        years_of_experience_override: row.years_of_experience_override,
         description: row.description,
       }
     : {
@@ -410,8 +416,10 @@ function SkillEditor({
         proficiency: "beginner",
         category: "technical",
         domains: [],
+        related_skills: [],
         first_used: "",
         certification: null,
+        years_of_experience_override: null,
         description: "",
       };
 
@@ -517,21 +525,41 @@ function SkillEditor({
             </div>
           )}
         </form.Field>
+        <form.Field name="years_of_experience_override">
+          {(f) => (
+            <div className="space-y-1">
+              <Label htmlFor={f.name}>Years of experience</Label>
+              <Input
+                id={f.name}
+                type="number"
+                min={0}
+                placeholder="auto"
+                value={f.state.value ?? ""}
+                onChange={(e) =>
+                  f.handleChange(
+                    e.target.value === "" ? null : Number(e.target.value),
+                  )
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave blank to auto-compute from first use / job history
+                {row?.years_of_experience != null &&
+                  ` (currently ${row.years_of_experience}y)`}
+                .
+              </p>
+              <FieldError errors={f.state.meta.errors} />
+            </div>
+          )}
+        </form.Field>
       </div>
 
       <form.Field name="certification">
         {(f) => (
           <div className="space-y-1">
-            <Label htmlFor={f.name}>Certification</Label>
-            <Input
-              id={f.name}
-              type="number"
-              value={f.state.value ?? ""}
-              onChange={(e) =>
-                f.handleChange(
-                  e.target.value === "" ? null : Number(e.target.value),
-                )
-              }
+            <Label>Certification</Label>
+            <CertificationPicker
+              value={f.state.value}
+              onChange={f.handleChange}
             />
             <FieldError errors={f.state.meta.errors} />
           </div>
@@ -543,6 +571,19 @@ function SkillEditor({
           <div className="space-y-1">
             <Label>Domains</Label>
             <DomainPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="related_skills">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Related skills</Label>
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              excludeId={row?.id}
+            />
           </div>
         )}
       </form.Field>

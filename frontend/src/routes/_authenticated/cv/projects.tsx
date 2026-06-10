@@ -38,6 +38,7 @@ import {
 import { SectionPage } from "@/components/cv/section-page";
 import { DomainPicker } from "@/components/cv/domain-picker";
 import { LocationPicker } from "@/components/cv/location-picker";
+import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -405,6 +406,15 @@ function ProjectEditor({
           <div className="space-y-1">
             <Label>Domains</Label>
             <DomainPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="skills">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Skills</Label>
+            <SkillPicker value={f.state.value} onChange={f.handleChange} />
           </div>
         )}
       </form.Field>
