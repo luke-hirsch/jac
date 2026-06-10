@@ -50,6 +50,7 @@ python manage.py llm_check --user 1 reasoning    # check a specific alias for us
 python manage.py cv_test --user 1 --job-file path/to/posting.txt
 python manage.py cv_import --user 1 ...          # bulk-import career entries from JSON
 python manage.py cv_export --user 1 --file cv.json  # dump a user's CV to JSON (round-trips with cv_import)
+python manage.py seed_default_domains            # idempotently create the shared system-default Domain taxonomy (--prune to trim)
 ```
 
 ### Frontend (run from `frontend/`)
