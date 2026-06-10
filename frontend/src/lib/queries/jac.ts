@@ -13,6 +13,7 @@ export type DomainRow = {
   id: number;
   name: string;
   description: string;
+  is_default: boolean;
 };
 
 export type LocationRow = {
@@ -111,6 +112,10 @@ const R = {
   languages: { key: "languages", url: "/api/jac/languages/" },
 } as const satisfies Record<string, Resource>;
 
+function bulkUrl(key: ResourceKey) {
+  return `${R[key].url}bulk/`;
+}
+
 export type ResourceKey = keyof typeof R;
 
 function listKey(key: ResourceKey, params: ListParams) {
@@ -176,11 +181,11 @@ export function useDestroy(key: ResourceKey) {
 export function useBulkDestroy(key: ResourceKey) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (ids: number[]) => {
-      await Promise.all(
-        ids.map((id) => api<void>(`${R[key].url}${id}/`, { method: "DELETE" })),
-      );
-    },
+    mutationFn: (ids: number[]) =>
+      api<{ deleted: number }>(bulkUrl(key), {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", ids }),
+      }),
     onSuccess: () => invalidateResource(qc, key),
   });
 }
@@ -190,7 +195,7 @@ export function useBulkPatchDomains(
 ) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({
+    mutationFn: ({
       ids,
       add,
       remove,
@@ -198,20 +203,11 @@ export function useBulkPatchDomains(
       ids: number[];
       add: number[];
       remove: number[];
-    }) => {
-      await Promise.all(
-        ids.map(async (id) => {
-          const row = await api<{ domains: number[] }>(`${R[key].url}${id}/`);
-          const next = new Set(row.domains);
-          for (const d of add) next.add(d);
-          for (const d of remove) next.delete(d);
-          await api(`${R[key].url}${id}/`, {
-            method: "PATCH",
-            body: JSON.stringify({ domains: [...next] }),
-          });
-        }),
-      );
-    },
+    }) =>
+      api<{ updated: number }>(bulkUrl(key), {
+        method: "POST",
+        body: JSON.stringify({ action: "patch_domains", ids, add, remove }),
+      }),
     onSuccess: () => invalidateResource(qc, key),
   });
 }

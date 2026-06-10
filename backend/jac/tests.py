@@ -1,8 +1,10 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from jac import llm as jac_llm
@@ -472,9 +474,7 @@ class CVAIMethodsTests(TestCase):
             {"id": f"job:{self.job.pk}", "score": 0.5, "reason": "ok"},
         ]
         # Patch the per-section floors to 0 so the threshold drop is what's tested.
-        with patch.dict(
-            CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False
-        ):
+        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
             cv.ai_filter_entries("some job text", threshold=0.4)
         skill_names = {s.name for s in cv.entries["skills"]}
         self.assertEqual(skill_names, {"Python"})
@@ -515,7 +515,9 @@ class CVAIMethodsTests(TestCase):
         mock_extract.return_value = ["Python", "Django"]
         cv = CV(user_pk=self.user.pk)
         self.assertEqual(cv.ai_extract_keywords("posting"), ["Python", "Django"])
-        mock_extract.assert_called_once_with("posting", llm="default", user=self.user.pk)
+        mock_extract.assert_called_once_with(
+            "posting", llm="default", user=self.user.pk
+        )
 
     @patch("jac.cv.jac_llm.score_entries_with_analysis")
     @patch("jac.cv.jac_llm.analyze_job")
@@ -630,9 +632,7 @@ class CVTailorWithFallbackTests(TestCase):
             {"id": f"job:{self.job.pk}", "score": 0.8},
         ]
         cv = CV(user_pk=self.user.pk)
-        with patch.dict(
-            CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False
-        ):
+        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
             result = cv.ai_tailor_with_fallback("posting", threshold=0.4)
         self.assertEqual(result["tier"], "filter")
         self.assertEqual(result["selection"], None)
@@ -642,9 +642,7 @@ class CVTailorWithFallbackTests(TestCase):
     @patch("jac.cv.jac_llm.extract_job_keywords")
     @patch("jac.cv.jac_llm.score_entries_for_job")
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_falls_through_to_keyword_tier(
-        self, mock_tailor, mock_score, mock_extract
-    ):
+    def test_falls_through_to_keyword_tier(self, mock_tailor, mock_score, mock_extract):
         mock_tailor.side_effect = RuntimeError("boom")
         mock_score.side_effect = RuntimeError("boom")
         mock_extract.return_value = ["python"]
@@ -1174,3 +1172,213 @@ class ResumeSnippetAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 400)
+
+
+class BulkDeleteAPITests(APITestCase):
+    """`POST <resource>/bulk/ {"action":"delete"}` removes the user's own rows
+    in one request, and refuses the whole batch if any id isn't theirs.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="bulk_alice", password="pass")
+        cls.bob = User.objects.create_user(username="bulk_bob", password="pass")
+        cls.s1 = Skill.objects.create(user=cls.alice, name="Python")
+        cls.s2 = Skill.objects.create(user=cls.alice, name="Django")
+        cls.bob_skill = Skill.objects.create(user=cls.bob, name="Rust")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def test_bulk_delete_removes_own_rows(self):
+        r = self.client.post(
+            "/api/jac/skills/bulk/",
+            {"action": "delete", "ids": [self.s1.pk, self.s2.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data, {"deleted": 2})
+        self.assertFalse(Skill.objects.filter(pk__in=[self.s1.pk, self.s2.pk]).exists())
+
+    def test_nonexistent_id_aborts_whole_batch(self):
+        r = self.client.post(
+            "/api/jac/skills/bulk/",
+            {"action": "delete", "ids": [self.s1.pk, 999999]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("ids", r.data)
+        self.assertTrue(Skill.objects.filter(pk=self.s1.pk).exists())  # nothing deleted
+
+    def test_cannot_delete_another_users_row(self):
+        # bob's id is "missing" from alice's get_queryset() → 400, his row intact.
+        r = self.client.post(
+            "/api/jac/skills/bulk/",
+            {"action": "delete", "ids": [self.s1.pk, self.bob_skill.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(Skill.objects.filter(pk=self.bob_skill.pk).exists())
+
+    def test_unknown_action_is_400(self):
+        r = self.client.post(
+            "/api/jac/skills/bulk/",
+            {"action": "nope", "ids": [self.s1.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_non_integer_ids_is_400(self):
+        r = self.client.post(
+            "/api/jac/skills/bulk/",
+            {"action": "delete", "ids": ["not-an-int"]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+
+class BulkPatchDomainsAPITests(APITestCase):
+    """`patch_domains` merges domains onto the user's rows (add/remove, not
+    replace), only accepts domains the user may see, and only exists on
+    resources that actually carry a `domains` M2M.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="bpd_user", password="pass")
+        cls.other = User.objects.create_user(username="bpd_other", password="pass")
+        cls.system = User.objects.create_user(username=settings.SYSTEM_USER_USERNAME)
+        cls.d_keep = Domain.objects.create(user=cls.user, name="Keep")
+        cls.d_remove = Domain.objects.create(user=cls.user, name="Remove")
+        cls.d_add = Domain.objects.create(user=cls.user, name="Add")
+        cls.d_default = Domain.objects.create(user=cls.system, name="Backend")
+        cls.foreign = Domain.objects.create(user=cls.other, name="Foreign")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Co", started=date(2022, 1, 1)
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.job.domains.set([self.d_keep, self.d_remove])
+
+    def test_add_and_remove_preserve_the_rest(self):
+        r = self.client.post(
+            "/api/jac/jobs/bulk/",
+            {
+                "action": "patch_domains",
+                "ids": [self.job.pk],
+                "add": [self.d_add.pk],
+                "remove": [self.d_remove.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data, {"updated": 1})
+        self.assertEqual(
+            set(self.job.domains.values_list("pk", flat=True)),
+            {self.d_keep.pk, self.d_add.pk},  # kept Keep, gained Add, lost Remove
+        )
+
+    def test_system_default_domain_is_allowed(self):
+        r = self.client.post(
+            "/api/jac/jobs/bulk/",
+            {
+                "action": "patch_domains",
+                "ids": [self.job.pk],
+                "add": [self.d_default.pk],
+                "remove": [],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(self.d_default.pk, self.job.domains.values_list("pk", flat=True))
+
+    def test_foreign_domain_is_rejected(self):
+        r = self.client.post(
+            "/api/jac/jobs/bulk/",
+            {
+                "action": "patch_domains",
+                "ids": [self.job.pk],
+                "add": [self.foreign.pk],
+                "remove": [],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn(self.foreign.pk, self.job.domains.values_list("pk", flat=True))
+
+    def test_patch_domains_unsupported_on_domainless_resource(self):
+        lang = Language.objects.create(user=self.user, name="German")
+        r = self.client.post(
+            "/api/jac/languages/bulk/",
+            {"action": "patch_domains", "ids": [lang.pk], "add": [], "remove": []},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+
+class OrderingFieldsAPITests(APITestCase):
+    """`updated_at` is now an allowed ordering (the `/cv` dashboard relies on
+    it); a field outside the allow-list is ignored, not honoured.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="ord_user", password="pass")
+        cls.a = Job.objects.create(
+            user=cls.user, title="Older", company="Co", started=date(2020, 1, 1)
+        )
+        cls.b = Job.objects.create(
+            user=cls.user, title="Newer", company="Co", started=date(2023, 1, 1)
+        )
+        now = timezone.now()
+        Job.objects.filter(pk=cls.a.pk).update(updated_at=now)
+        Job.objects.filter(pk=cls.b.pk).update(updated_at=now - timedelta(days=1))
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_ordering_by_updated_at_is_honoured(self):
+        r = self.client.get("/api/jac/jobs/?ordering=-updated_at")
+        self.assertEqual(r.status_code, 200)
+        ids = [row["id"] for row in r.data["results"]]
+        self.assertEqual(ids, [self.a.pk, self.b.pk])  # most-recently-updated first
+
+    def test_disallowed_ordering_field_falls_back_to_default(self):
+
+        r = self.client.get("/api/jac/jobs/?ordering=title")
+        self.assertEqual(r.status_code, 200)
+        ids = [row["id"] for row in r.data["results"]]
+        self.assertEqual(ids, [self.b.pk, self.a.pk])
+
+
+class DomainIsDefaultAPITests(APITestCase):
+    """`is_default` is a read-only flag: true for the sentinel-owned shared
+    taxonomy, false for the user's own tags, and never writable.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="def_user", password="pass")
+        cls.system = User.objects.create_user(username=settings.SYSTEM_USER_USERNAME)
+        cls.own = Domain.objects.create(user=cls.user, name="Mine")
+        cls.default = Domain.objects.create(user=cls.system, name="Backend")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_flag_distinguishes_default_from_own(self):
+        r = self.client.get("/api/jac/domains/")
+        self.assertEqual(r.status_code, 200)
+        flags = {row["id"]: row["is_default"] for row in r.data["results"]}
+        self.assertFalse(flags[self.own.pk])
+        self.assertTrue(flags[self.default.pk])
+
+    def test_is_default_is_read_only(self):
+        r = self.client.patch(
+            f"/api/jac/domains/{self.own.pk}/",
+            {"is_default": True},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["is_default"])

@@ -22,6 +22,5 @@ db.sqlite3
 Thumbs.db
 .python-version
 
-.claude/
 data/
 dump.txt

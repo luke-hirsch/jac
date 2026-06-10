@@ -17,10 +17,12 @@ The `user` FK on writes is injected by the serializers via
 
 from datetime import date
 
+from django.db import transaction
 from django.db.models.functions import Coalesce, Least
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
-from rest_framework import viewsets
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -51,10 +53,84 @@ from jac.serializers import (
 )
 
 
-class DomainViewSet(viewsets.ModelViewSet):
+class BulkActionMixin:
+    @extend_schema(
+        request=inline_serializer(
+            "BulkAction",
+            {
+                "action": serializers.ChoiceField(["delete", "patch_domains"]),
+                "ids": serializers.ListField(child=serializers.IntegerField()),
+                "add": serializers.ListField(
+                    child=serializers.IntegerField(), required=False
+                ),
+                "remove": serializers.ListField(
+                    child=serializers.IntegerField(), required=False
+                ),
+            },
+        ),
+        responses=OpenApiResponse(description="{'deleted': n} or {'updated': n}"),
+    )
+    @action(detail=False, methods=["post"])
+    def bulk(self, request):
+        op = request.data.get("action")
+        ids = request.data.get("ids", [])
+        if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+            return Response(
+                {"ids": ["Expected a list of integer IDs"]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = self.get_queryset().filter(pk__in=ids)
+        found = {obj.pk for obj in qs}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            return Response(
+                {"ids": [f"Not found or not yours: {missing}"]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if op == "delete":
+            with transaction.atomic():
+                count, _ = qs.delete()
+            return Response({"deleted": len(found)})
+
+        if op == "patch_domains":
+            model = self.get_queryset().model
+            if not hasattr(model, "domains"):
+                return Response(
+                    {"action": ["patch_domains not supported for this resource."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            allowed = set(
+                Domain.objects.for_user(request.user).values_list("pk", flat=True)
+            )
+            add = request.data.get("add") or []
+            remove = request.data.get("remove") or []
+            bad = [d for d in (*add, *remove) if d not in allowed]
+            if bad:
+                return Response(
+                    {"domains": [f"Not found or not yours: {bad}"]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            with transaction.atomic():
+                for obj in qs:
+                    if add:
+                        obj.domains.add(*add)
+                    if remove:
+                        obj.domains.remove(*remove)
+            return Response({"updated": len(found)})
+
+        return Response(
+            {"action": ['Expected "delete" or "patch_domains".']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class DomainViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = DomainSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
     search_fields = ["name"]
+    ordering_fields = ["name"]
 
     def get_queryset(self):
         if self.action in ("list", "retrieve"):
@@ -62,31 +138,46 @@ class DomainViewSet(viewsets.ModelViewSet):
         return Domain.objects.filter(user=self.request.user).order_by("name")
 
 
-class LocationViewSet(viewsets.ModelViewSet):
+class LocationViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["city"]
     filterset_fields = ["country"]
+    ordering_fields = ["city", "country"]
 
     def get_queryset(self):
         return Location.objects.filter(user=self.request.user).order_by("city")
 
 
-class EducationViewSet(viewsets.ModelViewSet):
+class EducationViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = EducationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["institution", "degree", "field_of_study"]
-    ordering_fields = ["started", "ended", "institution", "field_of_study"]
+    ordering_fields = [
+        "started",
+        "ended",
+        "institution",
+        "field_of_study",
+        "created_at",
+        "updated_at",
+    ]
 
     def get_queryset(self):
         return Education.objects.filter(user=self.request.user).order_by("-started")
 
 
-class CertificationViewSet(viewsets.ModelViewSet):
+class CertificationViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = CertificationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name", "issuer"]
-    ordering_fields = ["issued_on", "expires_on", "name", "issuer"]
+    ordering_fields = [
+        "issued_on",
+        "expires_on",
+        "name",
+        "issuer",
+        "created_at",
+        "updated_at",
+    ]
 
     def get_queryset(self):
         return Certification.objects.filter(user=self.request.user).order_by(
@@ -94,20 +185,21 @@ class CertificationViewSet(viewsets.ModelViewSet):
         )
 
 
-class SkillViewSet(viewsets.ModelViewSet):
+class SkillViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = SkillSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["category", "proficiency", "domains"]
-    # `experience_since` mirrors the `years_of_experience` property (computed,
-    # so not orderable on its own). Ordering by it ascending == most years of
-    # experience first.
-    ordering_fields = ["name", "first_used", "proficiency", "experience_since"]
+    ordering_fields = [
+        "name",
+        "first_used",
+        "proficiency",
+        "experience_since",
+        "created_at",
+        "updated_at",
+    ]
 
     def get_queryset(self):
-        # `_earliest_job_started` / `_earliest_project_started` are annotated by
-        # SkillManager; combine them with `first_used` into a single orderable
-        # date. Nulls sort last via a far-future sentinel.
         far_future = date(9999, 12, 31)
         return (
             Skill.objects.filter(user=self.request.user)
@@ -122,23 +214,30 @@ class SkillViewSet(viewsets.ModelViewSet):
         )
 
 
-class JobViewSet(viewsets.ModelViewSet):
+class JobViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["title", "company"]
     filterset_fields = ["domains", "job_type"]
-    ordering_fields = ["started", "ended", "title", "company"]
+    ordering_fields = [
+        "started",
+        "ended",
+        "title",
+        "company",
+        "created_at",
+        "updated_at",
+    ]
 
     def get_queryset(self):
         return Job.objects.filter(user=self.request.user).order_by("-started")
 
 
-class ProjectViewSet(viewsets.ModelViewSet):
+class ProjectViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["domains"]
-    ordering_fields = ["started", "ended", "name"]
+    ordering_fields = ["started", "ended", "name", "created_at", "updated_at"]
 
     def get_queryset(self):
         return Project.objects.filter(user=self.request.user).order_by(
@@ -146,12 +245,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
         )
 
 
-class LanguageViewSet(viewsets.ModelViewSet):
+class LanguageViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = LanguageSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["fluency"]
-    ordering_fields = ["name", "fluency"]
+    ordering_fields = ["name", "fluency", "created_at", "updated_at"]
 
     def get_queryset(self):
         return Language.objects.filter(user=self.request.user).order_by("name")
@@ -190,7 +289,7 @@ class CVEntryListView(APIView):
         )
 
 
-class ResumeSnippetViewSet(viewsets.ModelViewSet):
+class ResumeSnippetViewSet(BulkActionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     serializer_class = ResumeSnippetSerializer
     search_fields = ["title", "content"]

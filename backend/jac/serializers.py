@@ -1,3 +1,4 @@
+from django.conf import settings
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
@@ -41,17 +42,21 @@ class ScopeDomainsToUserMixin(ScopeRelatedToUserMixin):
 
 class DomainSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    is_default = serializers.SerializerMethodField()
 
     class Meta:
         model = Domain
-        fields = ["id", "name", "description", "user"]
-        read_only_fields = ["id"]
+        fields = ["id", "name", "description", "is_default", "user"]
+        read_only_fields = ["id", "is_default"]
         validators = [
             UniqueTogetherValidator(
                 queryset=Domain.objects.all(),
                 fields=["user", "name"],
             )
         ]
+
+    def get_is_default(self, obj) -> bool:
+        return obj.user.username == settings.SYSTEM_USER_USERNAME
 
 
 class LocationSerializer(serializers.ModelSerializer):

@@ -188,8 +188,7 @@ LLM_ENCRYPTION_KEY = os.getenv(
     "ZGphbmdvLWluc2VjdXJlLWxsbS1kZXYta2V5LW9ubHk=",
 )
 
-# Sentinel user that owns read-only system defaults (e.g. `jac.Domain` rows
-# shared across all users). Looked up by username so it survives pk drift.
+
 SYSTEM_USER_USERNAME = "system"
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
