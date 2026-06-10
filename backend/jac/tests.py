@@ -1066,6 +1066,66 @@ class SkillRelatedSkillsAPITests(APITestCase):
         self.assertEqual(self.accounting.related_skills.count(), 0)
 
 
+class SkillBuildsOnAPITests(APITestCase):
+    """`builds_on` is directed (unlike `related_skills`): setting it on A does
+    not make B build on A; B instead lists A under the read-only `enables`.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="bo_api", password="pass")
+        cls.other = User.objects.create_user(username="bo_other", password="pass")
+        cls.drf = Skill.objects.create(user=cls.user, name="DRF")
+        cls.django = Skill.objects.create(user=cls.user, name="Django")
+        cls.foreign = Skill.objects.create(user=cls.other, name="Foreign")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_relation_is_directed_not_symmetric(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.drf.pk}/",
+            {"builds_on": [self.django.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["builds_on"], [self.django.pk])
+
+        # Django does NOT build on DRF, but lists it under `enables`.
+        r = self.client.get(f"/api/jac/skills/{self.django.pk}/")
+        self.assertEqual(r.data["builds_on"], [])
+        self.assertIn(self.drf.pk, r.data["enables"])
+
+    def test_self_reference_is_rejected(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.drf.pk}/",
+            {"builds_on": [self.drf.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_cannot_build_on_another_users_skill(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.drf.pk}/",
+            {"builds_on": [self.foreign.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.drf.refresh_from_db()
+        self.assertEqual(self.drf.builds_on.count(), 0)
+
+    def test_enables_is_read_only(self):
+        # Writing `enables` directly is silently ignored (read-only field).
+        r = self.client.patch(
+            f"/api/jac/skills/{self.drf.pk}/",
+            {"enables": [self.django.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.drf.refresh_from_db()
+        self.assertEqual(self.drf.enables.count(), 0)
+
+
 # ---------------------------------------------------------------------------
 # Phase 3a — ResumeSnippet CRUD + scoping
 # ---------------------------------------------------------------------------
@@ -1423,6 +1483,16 @@ class CvExportImportRoundTripTests(TestCase):
         py.related_skills.add(sev)
         py.domains.add(domain)
 
+        # Directed prerequisite chain: DRF builds on Django builds on Python.
+        django = Skill.objects.create(user=cls.a, name="Django")
+        drf = Skill.objects.create(user=cls.a, name="DRF")
+        django.builds_on.add(py)
+        drf.builds_on.add(django)
+
+        # Certification evidences a skill + sits in a domain.
+        cert.skills.add(py)
+        cert.domains.add(domain)
+
         job = Job.objects.create(
             user=cls.a,
             title="Engineer",
@@ -1433,10 +1503,30 @@ class CvExportImportRoundTripTests(TestCase):
         job.skills.add(py)
         job.domains.add(domain)
 
+        # Education with its own skills + domains.
+        edu = Education.objects.create(
+            user=cls.a,
+            institution="TU Berlin",
+            field_of_study="CS",
+            started=date(2015, 10, 1),
+        )
+        edu.skills.add(py)
+        edu.domains.add(domain)
+
+        # Project tied to the job it was built at.
+        project = Project.objects.create(
+            user=cls.a, name="Pipeline", started=date(2021, 3, 1), job=job
+        )
+
         Language.objects.create(user=cls.a, name="German", fluency="native")
 
         snippet = ResumeSnippet.objects.create(
-            user=cls.a, title="Intro", content="Hi.", kind="intro"
+            user=cls.a,
+            title="Intro",
+            content="Hi.",
+            kind="intro",
+            job=job,
+            project=project,
         )
         snippet.skills.add(py)
         snippet.domains.add(domain)
@@ -1465,6 +1555,37 @@ class CvExportImportRoundTripTests(TestCase):
         self.assertIn("SevDesk", py.related_skills.values_list("name", flat=True))
         sev = Skill.objects.get(user=self.b, name="SevDesk")
         self.assertIn("Python", sev.related_skills.values_list("name", flat=True))
+
+    def test_builds_on_direction_survives(self):
+        self._round_trip()
+        drf = Skill.objects.get(user=self.b, name="DRF")
+        django = Skill.objects.get(user=self.b, name="Django")
+        py = Skill.objects.get(user=self.b, name="Python")
+        # Forward edges preserved …
+        self.assertIn("Django", drf.builds_on.values_list("name", flat=True))
+        self.assertIn("Python", django.builds_on.values_list("name", flat=True))
+        # … and the direction does NOT leak back (asymmetry holds).
+        self.assertNotIn("DRF", django.builds_on.values_list("name", flat=True))
+        self.assertEqual(py.builds_on.count(), 0)
+        self.assertIn("Django", py.enables.values_list("name", flat=True))
+
+    def test_education_certification_project_relations_survive(self):
+        self._round_trip()
+        edu = Education.objects.get(user=self.b, institution="TU Berlin")
+        self.assertIn("Python", edu.skills.values_list("name", flat=True))
+        self.assertIn("Backend", edu.domains.values_list("name", flat=True))
+
+        cert = Certification.objects.get(user=self.b, name="AWS SAA")
+        self.assertIn("Python", cert.skills.values_list("name", flat=True))
+        self.assertIn("Backend", cert.domains.values_list("name", flat=True))
+
+        project = Project.objects.get(user=self.b, name="Pipeline")
+        self.assertEqual(project.job.title, "Engineer")
+        self.assertEqual(project.job.user, self.b)
+
+        snippet = ResumeSnippet.objects.get(user=self.b, title="Intro")
+        self.assertEqual(snippet.job.title, "Engineer")
+        self.assertEqual(snippet.project.name, "Pipeline")
 
     def test_domains_are_scoped_to_importing_user(self):
         self._round_trip()

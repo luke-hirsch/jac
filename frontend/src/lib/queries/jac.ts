@@ -36,6 +36,8 @@ export type EducationRow = {
   grade: string | null;
   description: string;
   location: number | null;
+  skills: number[];
+  domains: number[];
 };
 
 export type CertificationRow = {
@@ -47,6 +49,8 @@ export type CertificationRow = {
   credential_id: string;
   url: string;
   description: string;
+  skills: number[];
+  domains: number[];
 };
 
 export type SkillRow = {
@@ -56,6 +60,10 @@ export type SkillRow = {
   category: "technical" | "soft" | "domain" | "other";
   domains: number[];
   related_skills: number[];
+  // Directed prerequisite edge: `builds_on` is what this skill rests on;
+  // `enables` is the read-only reverse (skills that build on this one).
+  builds_on: number[];
+  enables: number[];
   first_used: string | null;
   certification: number | null;
   years_of_experience: number | null;
@@ -82,6 +90,7 @@ export type ProjectRow = {
   name: string;
   skills: number[];
   domains: number[];
+  job: number | null;
   location: number | null;
   started: string | null;
   ended: string | null;

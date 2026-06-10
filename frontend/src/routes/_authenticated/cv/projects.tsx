@@ -39,6 +39,7 @@ import { SectionPage } from "@/components/cv/section-page";
 import { DomainPicker } from "@/components/cv/domain-picker";
 import { LocationPicker } from "@/components/cv/location-picker";
 import { SkillPicker } from "@/components/cv/skill-picker";
+import { JobPicker } from "@/components/cv/job-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -56,6 +57,7 @@ const schema = z.object({
   url: z.string().url().or(z.literal("")),
   description: z.string(),
   location: z.number().nullable(),
+  job: z.number().nullable(),
   skills: z.array(z.number()),
   domains: z.array(z.number()),
 });
@@ -290,6 +292,7 @@ function ProjectEditor({
         url: row.url ?? "",
         description: row.description,
         location: row.location,
+        job: row.job,
         domains: row.domains,
         skills: row.skills,
       }
@@ -300,6 +303,7 @@ function ProjectEditor({
         url: "",
         description: "",
         location: null,
+        job: null,
         domains: [],
         skills: [],
       };
@@ -397,6 +401,15 @@ function ProjectEditor({
           <div className="space-y-1">
             <Label>Location</Label>
             <LocationPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="job">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Done at (job)</Label>
+            <JobPicker value={f.state.value} onChange={f.handleChange} />
           </div>
         )}
       </form.Field>

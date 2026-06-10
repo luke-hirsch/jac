@@ -135,6 +135,8 @@ class Education(CvEntry):
     ended = models.DateField(null=True, blank=True)
     degree = models.CharField(max_length=100, null=True, blank=True)
     grade = models.CharField(max_length=50, null=True, blank=True)
+    skills = models.ManyToManyField("Skill", blank=True)
+    domains = models.ManyToManyField(Domain, blank=True)
 
 
 class Certification(CvEntry):
@@ -146,6 +148,8 @@ class Certification(CvEntry):
     expires_on = models.DateField(null=True, blank=True)
     credential_id = models.CharField(max_length=200, blank=True)
     url = models.URLField(blank=True)
+    skills = models.ManyToManyField("Skill", blank=True, related_name="certifications")
+    domains = models.ManyToManyField(Domain, blank=True)
 
 
 class Skill(CvEntry):
@@ -177,6 +181,12 @@ class Skill(CvEntry):
     domains = models.ManyToManyField(Domain, blank=True)
     first_used = models.DateField(null=True, blank=True)
     related_skills = models.ManyToManyField("self", blank=True)
+    builds_on = models.ManyToManyField(
+        "self",
+        symmetrical=False,
+        related_name="enables",
+        blank=True,
+    )
     years_of_experience_override = models.IntegerField(null=True, blank=True)
     certification = models.ForeignKey(
         Certification, on_delete=models.SET_NULL, null=True, blank=True
@@ -247,6 +257,13 @@ class Project(CvEntry):
     name = models.CharField(max_length=200)
     skills = models.ManyToManyField(Skill, blank=True)
     domains = models.ManyToManyField(Domain, blank=True)
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="projects",
+    )
     location = models.ForeignKey(
         Location, on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -288,6 +305,20 @@ class ResumeSnippet(models.Model):
     kind = models.CharField(max_length=16, choices=Kind, default=Kind.other)
     domains = models.ManyToManyField(Domain, blank=True)
     skills = models.ManyToManyField(Skill, blank=True)
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resume_snippets",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resume_snippets",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -296,6 +327,4 @@ class ResumeSnippet(models.Model):
         ordering = ["kind", "title"]
 
     def __str__(self) -> str:
-        # get_kind_display is one of Django's dynamically generated
-        # get_FOO_display methods; Pylance can't see it statically.
         return f"{self.get_kind_display()}: {self.title}"  # type: ignore[attr-defined]

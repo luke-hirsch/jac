@@ -29,12 +29,14 @@ class LocationAdmin(admin.ModelAdmin):
 class EducationAdmin(admin.ModelAdmin):
     list_display = ("institution", "field_of_study", "degree", "started", "ended")
     search_fields = ("institution", "field_of_study", "degree")
+    filter_horizontal = ("skills", "domains")
 
 
 @admin.register(Certification)
 class CertificationAdmin(admin.ModelAdmin):
     list_display = ("name", "issuer", "issued_on", "expires_on")
     search_fields = ("name", "issuer")
+    filter_horizontal = ("skills", "domains")
 
 
 @admin.register(Skill)
@@ -42,7 +44,7 @@ class SkillAdmin(admin.ModelAdmin):
     list_display = ("name", "category", "proficiency", "years_of_experience_override")
     list_filter = ("category", "proficiency", "domains")
     search_fields = ("name",)
-    filter_horizontal = ("domains", "related_skills")
+    filter_horizontal = ("domains", "related_skills", "builds_on")
 
 
 @admin.register(Job)
@@ -59,6 +61,7 @@ class ProjectAdmin(admin.ModelAdmin):
     list_filter = ("domains",)
     search_fields = ("name",)
     filter_horizontal = ("skills", "domains")
+    autocomplete_fields = ("job",)
 
 
 @admin.register(Language)
@@ -74,3 +77,4 @@ class SnippetAdmin(admin.ModelAdmin):
     list_filter = ("kind", "is_active")
     search_fields = ("title", "content")
     filter_horizontal = ("domains", "skills")
+    autocomplete_fields = ("job", "project")

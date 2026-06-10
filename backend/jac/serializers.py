@@ -77,13 +77,24 @@ class LocationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class EducationSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("location",)
+class EducationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+    user_scoped_fields = ("location", "skills")
+    domain_scoped_fields = ("domains",)
 
     location = serializers.PrimaryKeyRelatedField(
         queryset=Location.objects.all(),
         required=False,
         allow_null=True,
+    )
+    skills = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Skill.objects.all(),
+        required=False,
+    )
+    domains = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Domain.objects.all(),
+        required=False,
     )
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
 
@@ -99,13 +110,28 @@ class EducationSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
             "grade",
             "description",
             "location",
+            "skills",
+            "domains",
             "user",
         ]
         read_only_fields = ["id"]
 
 
-class CertificationSerializer(serializers.ModelSerializer):
+class CertificationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+    user_scoped_fields = ("skills",)
+    domain_scoped_fields = ("domains",)
+
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    skills = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Skill.objects.all(),
+        required=False,
+    )
+    domains = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Domain.objects.all(),
+        required=False,
+    )
 
     class Meta:
         model = Certification
@@ -118,13 +144,15 @@ class CertificationSerializer(serializers.ModelSerializer):
             "credential_id",
             "url",
             "description",
+            "skills",
+            "domains",
             "user",
         ]
         read_only_fields = ["id"]
 
 
 class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("certification", "related_skills")
+    user_scoped_fields = ("certification", "related_skills", "builds_on")
     domain_scoped_fields = ("domains",)
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -140,6 +168,15 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+
+    # Directed prerequisite edge (symmetrical=False). `builds_on` is the writable
+    # forward side; `enables` is its read-only reverse (skills that build on this).
+    builds_on = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Skill.objects.all(),
+        required=False,
+    )
+    enables = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
 
     # Computed field
     years_of_experience = serializers.SerializerMethodField()
@@ -158,9 +195,11 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "years_of_experience",
             "description",
             "related_skills",
+            "builds_on",
+            "enables",
             "user",
         ]
-        read_only_fields = ["id", "years_of_experience"]
+        read_only_fields = ["id", "years_of_experience", "enables"]
 
         validators = [
             UniqueTogetherValidator(
@@ -175,6 +214,11 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
     def validate_related_skills(self, value):
         if self.instance and any(s.pk == self.instance.pk for s in value):
             raise serializers.ValidationError("A skill can't relate to itself.")
+        return value
+
+    def validate_builds_on(self, value):
+        if self.instance and any(s.pk == self.instance.pk for s in value):
+            raise serializers.ValidationError("A skill can't build on itself.")
         return value
 
 
@@ -220,11 +264,16 @@ class JobSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
 
 
 class ProjectSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("location", "skills")
+    user_scoped_fields = ("location", "skills", "job")
     domain_scoped_fields = ("domains",)
 
     location = serializers.PrimaryKeyRelatedField(
         queryset=Location.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    job = serializers.PrimaryKeyRelatedField(
+        queryset=Job.objects.all(),
         required=False,
         allow_null=True,
     )
@@ -248,6 +297,7 @@ class ProjectSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "name",
             "skills",
             "domains",
+            "job",
             "location",
             "started",
             "ended",
@@ -288,7 +338,7 @@ class CvSerializer(serializers.Serializer):
 
 
 class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("skills",)
+    user_scoped_fields = ("skills", "job", "project")
     domain_scoped_fields = ("domains",)
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -302,6 +352,16 @@ class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
         queryset=Skill.objects.all(),
         required=False,
     )
+    job = serializers.PrimaryKeyRelatedField(
+        queryset=Job.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    project = serializers.PrimaryKeyRelatedField(
+        queryset=Project.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = ResumeSnippet
@@ -312,6 +372,8 @@ class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
             "kind",
             "domains",
             "skills",
+            "job",
+            "project",
             "is_active",
             "created_at",
             "updated_at",

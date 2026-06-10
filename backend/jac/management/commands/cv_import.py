@@ -9,23 +9,26 @@ JSON schema (all sections optional):
     {
       "domains":        [{"name": "...", "description": "..."}],
       "locations":      [{"city": "...", "country": "...", "street": "...", "zip": "..."}],
-      "certifications": [{"name", "issuer", "issued_on", "expires_on", "credential_id", "url", "description"}],
+      "certifications": [{"name", "issuer", "issued_on", "expires_on", "credential_id", "url",
+                          "description", "skills": [...], "domains": [...]}],
       "skills":         [{"name", "proficiency", "category", "first_used", "domains": [...],
                           "certification": "<cert name>", "description",
                           "years_of_experience_override": <int|null>,
-                          "related_skills": ["<skill name>", ...]}],
+                          "related_skills": ["<skill name>", ...],
+                          "builds_on": ["<skill name>", ...]}],
       "jobs":           [{"title", "company", "location": "<city>", "job_type", "started", "ended",
                           "url", "description", "skills": [...], "domains": [...]}],
-      "projects":       [{"name", "location", "started", "ended", "url", "description",
-                          "skills": [...], "domains": [...]}],
+      "projects":       [{"name", "location", "job": "<job title>", "started", "ended", "url",
+                          "description", "skills": [...], "domains": [...]}],
       "educations":     [{"institution", "location", "field_of_study", "degree", "grade",
-                          "started", "ended", "description"}],
+                          "started", "ended", "description", "skills": [...], "domains": [...]}],
       "languages":      [{"name", "fluency", "certification": "<cert name>", "description"}],
-      "resume_snippets":[{"title", "content", "kind", "is_active",
-                          "domains": [...], "skills": [...]}]
+      "resume_snippets":[{"title", "content", "kind", "is_active", "job": "<job title>",
+                          "project": "<project name>", "domains": [...], "skills": [...]}]
     }
 
-References (`location`, `domains`, `skills`, `related_skills`, `certification`) are resolved by
+References (`location`, `domains`, `skills`, `related_skills`, `builds_on`, `certification`,
+a project's/snippet's source `job` by title, a snippet's `project` by name) are resolved by
 name against items declared earlier in the same file or already present in the DB. Domains and
 locations are scoped to the target user (own + system-default domains); an unresolved name is
 created under the user, so a fresh server need not pre-share the taxonomy. `cv_export` writes
@@ -131,6 +134,8 @@ class Command(BaseCommand):
                 user, data.get("certifications", [])
             )
             counts["skills"] = self._import_skills(user, data.get("skills", []))
+            # cert.skills can only resolve now that skills exist.
+            self._wire_certification_skills(user, data.get("certifications", []))
             counts["jobs"] = self._import_jobs(user, data.get("jobs", []))
             counts["projects"] = self._import_projects(user, data.get("projects", []))
             counts["educations"] = self._import_educations(
@@ -218,9 +223,27 @@ class Command(BaseCommand):
             raise CommandError(f"Unknown certification for user: {name!r}")
         return cert
 
+    def _resolve_job(self, user: User, title: str | None) -> Job | None:
+        # Jobs have no unique name; reference by title (first match wins). Imported
+        # before projects/snippets, so the job exists by the time we resolve it.
+        if not title:
+            return None
+        job = Job.objects.filter(user=user, title=title).first()
+        if not job:
+            raise CommandError(f"Unknown job for user: {title!r}")
+        return job
+
+    def _resolve_project(self, user: User, name: str | None) -> Project | None:
+        if not name:
+            return None
+        project = Project.objects.filter(user=user, name=name).first()
+        if not project:
+            raise CommandError(f"Unknown project for user: {name!r}")
+        return project
+
     def _import_certifications(self, user: User, items: list[dict]) -> int:
         for item in items:
-            Certification.objects.create(
+            cert = Certification.objects.create(
                 user=user,
                 name=item["name"],
                 issuer=item["issuer"],
@@ -230,7 +253,21 @@ class Command(BaseCommand):
                 url=item.get("url", ""),
                 description=item.get("description", ""),
             )
+            domains = self._resolve_domains(user, item.get("domains", []))
+            if domains:
+                cert.domains.set(domains)
+        # cert.skills is wired in a later pass (see _wire_certification_skills):
+        # certifications import before skills exist, so the skill names can't
+        # resolve yet here.
         return len(items)
+
+    def _wire_certification_skills(self, user: User, items: list[dict]) -> None:
+        for item in items:
+            skills = self._resolve_skills(user, item.get("skills", []))
+            if skills:
+                Certification.objects.get(user=user, name=item["name"]).skills.set(
+                    skills
+                )
 
     def _import_skills(self, user: User, items: list[dict]) -> int:
         # Two passes: create every skill (so related_skills can reference one
@@ -251,10 +288,13 @@ class Command(BaseCommand):
                 skill.domains.set(domains)
         for item in items:
             related = self._resolve_skills(user, item.get("related_skills", []))
-            if related:
-                Skill.objects.get(user=user, name=item["name"]).related_skills.set(
-                    related
-                )
+            builds_on = self._resolve_skills(user, item.get("builds_on", []))
+            if related or builds_on:
+                skill = Skill.objects.get(user=user, name=item["name"])
+                if related:
+                    skill.related_skills.set(related)
+                if builds_on:
+                    skill.builds_on.set(builds_on)
         return len(items)
 
     def _import_jobs(self, user: User, items: list[dict]) -> int:
@@ -284,6 +324,7 @@ class Command(BaseCommand):
                 user=user,
                 name=item["name"],
                 location=self._resolve_location(user, item.get("location")),
+                job=self._resolve_job(user, item.get("job")),
                 started=_parse_date(item.get("started")),
                 ended=_parse_date(item.get("ended")),
                 url=item.get("url", ""),
@@ -299,7 +340,7 @@ class Command(BaseCommand):
 
     def _import_educations(self, user: User, items: list[dict]) -> int:
         for item in items:
-            Education.objects.create(
+            education = Education.objects.create(
                 user=user,
                 institution=item["institution"],
                 location=self._resolve_location(user, item.get("location")),
@@ -310,6 +351,12 @@ class Command(BaseCommand):
                 ended=_parse_date(item.get("ended")),
                 description=item.get("description", ""),
             )
+            skills = self._resolve_skills(user, item.get("skills", []))
+            if skills:
+                education.skills.set(skills)
+            domains = self._resolve_domains(user, item.get("domains", []))
+            if domains:
+                education.domains.set(domains)
         return len(items)
 
     def _import_languages(self, user: User, items: list[dict]) -> int:
@@ -331,6 +378,8 @@ class Command(BaseCommand):
                 content=item.get("content", ""),
                 kind=item.get("kind", ResumeSnippet.Kind.other),
                 is_active=item.get("is_active", True),
+                job=self._resolve_job(user, item.get("job")),
+                project=self._resolve_project(user, item.get("project")),
             )
             domains = self._resolve_domains(user, item.get("domains", []))
             if domains:

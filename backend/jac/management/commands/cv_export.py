@@ -4,9 +4,10 @@ Usage:
     python manage.py cv_export --user 1 --file /tmp/cv.json
     python manage.py cv_export --username lukas            # → stdout
 
-References (locations, domains, skills, related_skills, certifications) are emitted
-**by name**, not by database id, so the dump is portable across servers: export here,
-copy the file, `cv_import` it on the deployed box. Round-trippable with `cv_import`.
+References (locations, domains, skills, related_skills, builds_on, certifications, and a
+project's/snippet's source job by title) are emitted **by name**, not by database id, so the
+dump is portable across servers: export here, copy the file, `cv_import` it on the deployed
+box. Round-trippable with `cv_import`.
 
 The computed `Skill.years_of_experience` is deliberately *not* exported — only the manual
 `years_of_experience_override`, since the computed value is derived on read.
@@ -123,6 +124,8 @@ class Command(BaseCommand):
                 "credential_id": c.credential_id,
                 "url": c.url,
                 "description": c.description,
+                "skills": _names(c.skills),
+                "domains": _names(c.domains),
             }
             for c in Certification.objects.filter(user=user).order_by("name")
         ]
@@ -138,6 +141,7 @@ class Command(BaseCommand):
                 "certification": s.certification.name if s.certification else None,
                 "domains": _names(s.domains),
                 "related_skills": _names(s.related_skills),
+                "builds_on": _names(s.builds_on),
                 "description": s.description,
             }
             for s in Skill.objects.filter(user=user).order_by("name")
@@ -165,6 +169,7 @@ class Command(BaseCommand):
             {
                 "name": p.name,
                 "location": p.location.city if p.location else None,
+                "job": p.job.title if p.job else None,
                 "started": p.started,
                 "ended": p.ended,
                 "url": p.url,
@@ -186,6 +191,8 @@ class Command(BaseCommand):
                 "started": e.started,
                 "ended": e.ended,
                 "description": e.description,
+                "skills": _names(e.skills),
+                "domains": _names(e.domains),
             }
             for e in Education.objects.filter(user=user).order_by("started")
         ]
@@ -210,6 +217,8 @@ class Command(BaseCommand):
                 "content": s.content,
                 "kind": s.kind,
                 "is_active": s.is_active,
+                "job": s.job.title if s.job else None,
+                "project": s.project.name if s.project else None,
                 "domains": _names(s.domains),
                 "skills": _names(s.skills),
             }

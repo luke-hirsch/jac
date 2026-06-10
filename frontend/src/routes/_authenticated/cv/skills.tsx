@@ -68,6 +68,7 @@ const schema = z.object({
   category: z.enum(["technical", "soft", "domain", "other"]),
   domains: z.array(z.number()),
   related_skills: z.array(z.number()),
+  builds_on: z.array(z.number()),
   first_used: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -406,6 +407,7 @@ function SkillEditor({
         category: row.category,
         domains: row.domains,
         related_skills: row.related_skills,
+        builds_on: row.builds_on,
         first_used: row.first_used ?? "",
         certification: row.certification,
         years_of_experience_override: row.years_of_experience_override,
@@ -417,6 +419,7 @@ function SkillEditor({
         category: "technical",
         domains: [],
         related_skills: [],
+        builds_on: [],
         first_used: "",
         certification: null,
         years_of_experience_override: null,
@@ -584,6 +587,26 @@ function SkillEditor({
               onChange={f.handleChange}
               excludeId={row?.id}
             />
+            <p className="text-xs text-muted-foreground">
+              Sibling skills (symmetric) — adjacent tools you'd group together.
+            </p>
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="builds_on">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Builds on</Label>
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              excludeId={row?.id}
+            />
+            <p className="text-xs text-muted-foreground">
+              Prerequisite skills this one rests on (directed, e.g. DRF builds on
+              Django + Python).
+            </p>
           </div>
         )}
       </form.Field>

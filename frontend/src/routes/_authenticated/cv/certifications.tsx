@@ -35,6 +35,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { DomainPicker } from "@/components/cv/domain-picker";
+import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -53,6 +55,8 @@ const schema = z.object({
   credential_id: z.string().max(200),
   url: z.string().url().or(z.literal("")),
   description: z.string(),
+  skills: z.array(z.number()),
+  domains: z.array(z.number()),
 });
 type CertificationInput = z.infer<typeof schema>;
 
@@ -277,6 +281,8 @@ function CertificationEditor({
         credential_id: row.credential_id,
         url: row.url,
         description: row.description,
+        skills: row.skills,
+        domains: row.domains,
       }
     : {
         name: "",
@@ -286,6 +292,8 @@ function CertificationEditor({
         credential_id: "",
         url: "",
         description: "",
+        skills: [],
+        domains: [],
       };
 
   const form = useForm({
@@ -402,6 +410,25 @@ function CertificationEditor({
           </div>
         )}
       </form.Field>
+
+      <form.Field name="domains">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Domains</Label>
+            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="skills">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Skills it evidences</Label>
+            <SkillPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
       <form.Field name="description">
         {(f) => (
           <div className="space-y-1">

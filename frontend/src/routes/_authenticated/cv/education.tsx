@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
 import { LocationPicker } from "@/components/cv/location-picker";
+import { DomainPicker } from "@/components/cv/domain-picker";
+import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -51,6 +53,8 @@ const schema = z.object({
   grade: z.string().max(50),
   description: z.string(),
   location: z.number().nullable(),
+  skills: z.array(z.number()),
+  domains: z.array(z.number()),
 });
 
 type EducationInput = z.infer<typeof schema>;
@@ -279,6 +283,8 @@ function EducationEditor({
         ended: row.ended ?? "",
         description: row.description,
         location: row.location,
+        skills: row.skills,
+        domains: row.domains,
       }
     : {
         field_of_study: "",
@@ -289,6 +295,8 @@ function EducationEditor({
         ended: "",
         description: "",
         location: null,
+        skills: [],
+        domains: [],
       };
 
   const form = useForm({
@@ -407,6 +415,24 @@ function EducationEditor({
           <div className="space-y-1">
             <Label>Location</Label>
             <LocationPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="domains">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Domains</Label>
+            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+          </div>
+        )}
+      </form.Field>
+
+      <form.Field name="skills">
+        {(f) => (
+          <div className="space-y-1">
+            <Label>Skills</Label>
+            <SkillPicker value={f.state.value} onChange={f.handleChange} />
           </div>
         )}
       </form.Field>
