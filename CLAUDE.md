@@ -61,7 +61,7 @@ npm run lint
 
 ## JAC App
 
-Django app at `backend/jac/`. Today: career DB + CV filtering/tailoring pipeline + Markdown rendering + full DRF CRUD at `/api/jac/`. `JobPosting`/`Application`/`CoverLetter`/`FollowUp` models, cover-letter generation, PDF/DOCX export, and the CV import wizard are not yet built (Phases 6 + 10). Phase 3 evolves the career model first: a manual `Skill.manual_years_of_experience` override (the computed property over-counts intermittent skills), a symmetric `Skill.related_skills` M2M, and a `Snippet` model (hand-written prose the generator stitches together) — see roadmap Phase 3a. Phase 3f adds **output localization**: career data is authored in English but applications target corporate Germany, so CV *rendering* gets a target-language variant (filtering already matches cross-language). Deterministic labels (section headings + `gettext_lazy` enums) via Django i18n + a `de` `.po`; free-text prose (`description`, job `title`, `Snippet`) via an LLM `translate_entries` wrapper, glossary-protected (tech terms + proper nouns pass through verbatim), stored in a `CvEntry.translations` JSONField (lazy-cached + editable, not regenerated per run), target language detected from the posting with an override — see roadmap Phase 3f.
+Django app at `backend/jac/`. Today: career DB + CV filtering/tailoring pipeline + Markdown rendering + full DRF CRUD at `/api/jac/`. `JobPosting`/`Application`/`CoverLetter`/`FollowUp` models, cover-letter generation, PDF/DOCX export, and the CV import wizard are not yet built (Phases 6 + 10). Phase 3 evolves the career model first: a manual `Skill.years_of_experience_override` (the computed property over-counts intermittent skills), a symmetric `Skill.related_skills` M2M, and a `ResumeSnippet` model (hand-written prose the generator stitches together) — see roadmap Phase 3a. Phase 3f adds **output localization**: career data is authored in English but applications target corporate Germany, so CV *rendering* gets a target-language variant (filtering already matches cross-language). Deterministic labels (section headings + `gettext_lazy` enums) via Django i18n + a `de` `.po`; free-text prose (`description`, job `title`, `ResumeSnippet`) via an LLM `translate_entries` wrapper, glossary-protected (tech terms + proper nouns pass through verbatim), stored in a `CvEntry.translations` JSONField (lazy-cached + editable, not regenerated per run), target language detected from the posting with an override — see roadmap Phase 3f.
 
 Key files:
 | File | Purpose |
@@ -71,7 +71,7 @@ Key files:
 | [backend/jac/stopwords.py](backend/jac/stopwords.py) | Multi-language stopword sets (strict + loose) used by `extract_keywords` |
 | [backend/jac/llm.py](backend/jac/llm.py) | Prompt wrappers (`extract_job_keywords`, `analyze_job`, `score_entries_for_job`, `score_entries_with_analysis`, `tailor_cv_conversationally`) — imports from `llm_connector` only |
 | [backend/jac/render.py](backend/jac/render.py) | `CvRender.export_md()`. PDF/DOCX still TBD (handwaved as "frontend" but no plan yet) |
-| [backend/jac/serializers.py](backend/jac/serializers.py) | DRF serializers for all 8 career models (incl. `Skill.years_of_experience` computed field — Phase 3 adds a writable `manual_years_of_experience` override since the computed value over-counts intermittent skills); `ScopeDomainsToUserMixin` extending the project-level base |
+| [backend/jac/serializers.py](backend/jac/serializers.py) | DRF serializers for all 8 career models (incl. `Skill.years_of_experience` computed field — Phase 3 adds a writable `years_of_experience_override` since the computed value over-counts intermittent skills); `ScopeDomainsToUserMixin` extending the project-level base |
 | [backend/jac/admin.py](backend/jac/admin.py) | Admin registrations for all career models |
 | [backend/jac/tests.py](backend/jac/tests.py) | Tests covering models, CV pipeline (mocked LLMs), llm wrappers, and rendering |
 | [backend/jac/management/commands/cv_test.py](backend/jac/management/commands/cv_test.py) | Smoke-test CLI: unfiltered → deterministic → ai_filter → agentic_tailor |
@@ -150,6 +150,32 @@ result = cv.ai_tailor_with_fallback(job_text)         # tiered: conversational �
 
 Scored entries get `relevance_score` / `relevance_reason` attached as in-memory attrs. `ai_tailor_with_fallback` returns `{"tier", "selection", "keywords"}` so callers know which rung succeeded.
 
+## Working Style
+
+This is how the project gets built — every phase from 2a onward followed this and the rest should too. The reference artifacts are [.claude/plans/phase-2a-setup-guide.md](.claude/plans/phase-2a-setup-guide.md), [.claude/plans/phase-2b-setup-guide.md](.claude/plans/phase-2b-setup-guide.md), and [.claude/plans/phase-2c-setup-guide.md](.claude/plans/phase-2c-setup-guide.md). When starting new work, write the next one in the same shape before touching code.
+
+**Slice phases small.** A roadmap phase is split into letter-suffixed sub-phases (`2a`, `2b`, `2c`, `2d`) each small enough to finish, verify, and commit on its own. One sub-phase is one setup guide is one commit. Never let a sub-phase sprawl across two — log the overflow as a gap and pull it into the next one.
+
+**Every sub-phase is a written setup guide** at `.claude/plans/phase-<id>-setup-guide.md`, authored *before* the code and kept live as the code lands. It is a hands-on, no-shortcuts walkthrough someone could follow start to finish. Fixed skeleton:
+
+1. **Goal** — one paragraph: what you can *do* at the end, stated as user-visible capability. Name what this sub-phase explicitly does *not* touch.
+2. **Preflight** — concrete checks that the previous sub-phase is committed + green (name the commit hash), the build is clean (`npx tsc -b` → zero output), the suite passes (`python manage.py test` → "Ran N tests … OK"), and the surface you're coding against actually answers (a `curl` with the expected status). If a check fails, stop and fix before proceeding.
+3. **The contract you're coding against** — pin the API/data shapes, status codes, and serializer quirks *first*, before any UI. Point at the live spec mirror (`/api/docs/`) rather than restating it.
+4. **Stack additions** — exact install commands, with a one-line *why each* so no dependency is cargo-culted.
+5. **Shared infra before pages** — write the small reusable helpers/factories/layout chrome first, then build features on top.
+6. **One worked example, end to end** — build the first instance (e.g. `/cv/jobs`) completely, then explicitly "the next five are variations on this skeleton." Order the remaining items along a rising difficulty curve.
+7. **Per-step Verify blocks** — every step ends with a concrete observable check (what to click, what request lands in the Network tab, what the toast says). "Stop and fix before moving on" is the rule, not a suggestion.
+8. **End-to-end verification — the full loop** — a numbered click-through of the whole sub-phase, including persistence (reload / re-login) and multi-user isolation where relevant.
+9. **What you should have at the end** — the resulting file tree, plus the commit checkpoint with its message.
+10. **Known gaps to revisit** — explicitly *don't* fix scope creep in-phase; log each deferral (with the "why it's fine for now") for the named later phase.
+11. **What's next** — one paragraph pointing at the following sub-phase.
+
+**Annotate the non-obvious, skip the obvious.** Wherever a choice could read as arbitrary, a short "two non-obvious choices:" note explains the why (e.g. `shouldFilter={false}` because the server already filtered). Don't narrate boilerplate.
+
+**Commit per sub-phase**, code + its setup guide together, message `Phase <id>: <short summary>`. Re-run the suite right before committing. Keep the Roadmap "Shipped" list and this CLAUDE.md current as each sub-phase lands.
+
+**Defer, don't sprawl.** When something tempting but out-of-scope surfaces mid-build, it goes in the "Known gaps" list with a target phase — never bolted onto the current one.
+
 ## Roadmap
 
 Full plan in [.claude/plans/roadmap-2026-06-02.md](.claude/plans/roadmap-2026-06-02.md) (frontend-first revision). Earlier roadmaps ([2026-06-01](.claude/plans/roadmap-2026-06-01.md), [2026-05-29](.claude/plans/roadmap-2026-05-29.md)) are superseded.
@@ -173,7 +199,7 @@ Full plan in [.claude/plans/roadmap-2026-06-02.md](.claude/plans/roadmap-2026-06
 **Next, in order** (full detail in the roadmap):
 
 - **Phase 2d — LLM connector UI** — `/settings/llm` (CRUD over `LLMConfig` with write-only `api_key`) + `/settings/llm/usage` (read-only `LLMRequestLog` with date filter + aggregate spend).
-- **Phase 3 — BE refactors + career-data model evolution + hardening + first SPA backend** — (a) jac model evolution feeding CV generation: `Skill.manual_years_of_experience` override (the computed `years_of_experience` over-counts intermittent skills — e.g. C/C++ reads 16y from `first_used` when real hands-on is ~2–3 semesters), symmetric `Skill.related_skills` M2M (e.g. Accounting ↔ SevDesk), and a `Snippet` model (hand-written first-person prose the generator stitches with minimal LLM glue, keeping the voice human); (b) refactors from the Phase 2c gap list — `POST /api/jac/<resource>/bulk/`, inline Skill create from picker, explicit `ordering_fields`, multipart/avatar upload, domain "default" badge, filter debounce; (c) pre-deployment hardening — throttles, N+1 audit, security headers/secure cookies, validation, wider reauth coverage; (d) first SPA backend (`PortfolioLink` + `VisitorResponse` + public read API); (e) `celery.py` + trivial task + first Playwright smoke (`/cv/jobs` create→edit→delete); (f) output localization — German-first CV *rendering* (filtering already matches cross-language): deterministic labels (section headings + `gettext_lazy` enums) via Django i18n + `de` `.po`, free-text prose (`description`/job `title`/`Snippet`) via a glossary-protected LLM `translate_entries` wrapper stored in a lazy-cached, editable `CvEntry.translations` JSONField, target language detected from the posting with an override.
+- **Phase 3 — BE refactors + career-data model evolution + hardening + first SPA backend** — (a) jac model evolution feeding CV generation: `Skill.years_of_experience_override` (the computed `years_of_experience` over-counts intermittent skills — e.g. C/C++ reads 16y from `first_used` when real hands-on is ~2–3 semesters), symmetric `Skill.related_skills` M2M (e.g. Accounting ↔ SevDesk), and a `ResumeSnippet` model (hand-written first-person prose the generator stitches with minimal LLM glue, keeping the voice human); (b) refactors from the Phase 2c gap list — `POST /api/jac/<resource>/bulk/`, inline Skill create from picker, explicit `ordering_fields`, multipart/avatar upload, domain "default" badge, filter debounce; (c) pre-deployment hardening — throttles, N+1 audit, security headers/secure cookies, validation, wider reauth coverage; (d) first SPA backend (`PortfolioLink` + `VisitorResponse` + public read API); (e) `celery.py` + trivial task + first Playwright smoke (`/cv/jobs` create→edit→delete); (f) output localization — German-first CV *rendering* (filtering already matches cross-language): deterministic labels (section headings + `gettext_lazy` enums) via Django i18n + `de` `.po`, free-text prose (`description`/job `title`/`Snippet`) via a glossary-protected LLM `translate_entries` wrapper stored in a lazy-cached, editable `CvEntry.translations` JSONField, target language detected from the posting with an override.
 - **Phase 4 — Frontend: first SPA views** — PublicLanding, PersonalizedView (`/for/:slug`, `/t/:token`), portfolio-link admin.
 - **Phase 5 — First deployment** — Dockerfiles, docker-compose, GitHub Actions, Sentry, DB backups, GDPR endpoints.
 - **Phase 6 — BE: CV generation** — `JobPosting` + `Application` + `CoverLetter` + `FollowUp` models; `/api/jac/cv/tailor/` action; cover-letter generation; PDF/DOCX export.

@@ -34,6 +34,7 @@ from jac.models import (
     Language,
     Location,
     Project,
+    ResumeSnippet,
     Skill,
 )
 from jac.serializers import (
@@ -45,6 +46,7 @@ from jac.serializers import (
     LanguageSerializer,
     LocationSerializer,
     ProjectSerializer,
+    ResumeSnippetSerializer,
     SkillSerializer,
 )
 
@@ -87,7 +89,9 @@ class CertificationViewSet(viewsets.ModelViewSet):
     ordering_fields = ["issued_on", "expires_on", "name", "issuer"]
 
     def get_queryset(self):
-        return Certification.objects.filter(user=self.request.user).order_by("-issued_on")
+        return Certification.objects.filter(user=self.request.user).order_by(
+            "-issued_on"
+        )
 
 
 class SkillViewSet(viewsets.ModelViewSet):
@@ -137,7 +141,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
     ordering_fields = ["started", "ended", "name"]
 
     def get_queryset(self):
-        return Project.objects.filter(user=self.request.user).order_by("-started", "name")
+        return Project.objects.filter(user=self.request.user).order_by(
+            "-started", "name"
+        )
 
 
 class LanguageViewSet(viewsets.ModelViewSet):
@@ -162,11 +168,36 @@ class CVEntryListView(APIView):
         context = {"request": request}
         return Response(
             {
-                "skills": SkillSerializer(cv.entries["skills"], many=True, context=context).data,
-                "jobs": JobSerializer(cv.entries["jobs"], many=True, context=context).data,
-                "educations": EducationSerializer(cv.entries["educations"], many=True, context=context).data,
-                "certifications": CertificationSerializer(cv.entries["certifications"], many=True, context=context).data,
-                "projects": ProjectSerializer(cv.entries["projects"], many=True, context=context).data,
-                "languages": LanguageSerializer(cv.entries["languages"], many=True, context=context).data,
+                "skills": SkillSerializer(
+                    cv.entries["skills"], many=True, context=context
+                ).data,
+                "jobs": JobSerializer(
+                    cv.entries["jobs"], many=True, context=context
+                ).data,
+                "educations": EducationSerializer(
+                    cv.entries["educations"], many=True, context=context
+                ).data,
+                "certifications": CertificationSerializer(
+                    cv.entries["certifications"], many=True, context=context
+                ).data,
+                "projects": ProjectSerializer(
+                    cv.entries["projects"], many=True, context=context
+                ).data,
+                "languages": LanguageSerializer(
+                    cv.entries["languages"], many=True, context=context
+                ).data,
             }
+        )
+
+
+class ResumeSnippetViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated, IsOwner]
+    serializer_class = ResumeSnippetSerializer
+    search_fields = ["title", "content"]
+    filterset_fields = ["kind", "is_active", "domains", "skills"]
+    ordering_fields = ["kind", "title", "created_at", "updated_at"]
+
+    def get_queryset(self):
+        return ResumeSnippet.objects.filter(user=self.request.user).order_by(
+            "kind", "title"
         )

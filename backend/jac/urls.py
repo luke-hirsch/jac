@@ -11,14 +11,15 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from jac.views import (
-    CVEntryListView,
     CertificationViewSet,
+    CVEntryListView,
     DomainViewSet,
     EducationViewSet,
     JobViewSet,
     LanguageViewSet,
     LocationViewSet,
     ProjectViewSet,
+    ResumeSnippetViewSet,
     SkillViewSet,
 )
 
@@ -31,6 +32,7 @@ router.register("skills", SkillViewSet, basename="skill")
 router.register("jobs", JobViewSet, basename="job")
 router.register("projects", ProjectViewSet, basename="project")
 router.register("languages", LanguageViewSet, basename="language")
+router.register("resume-snippets", ResumeSnippetViewSet, basename="resume-snippet")
 
 urlpatterns = router.urls + [
     path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),

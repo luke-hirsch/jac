@@ -1,13 +1,15 @@
 from django.contrib import admin
+
 from .models import (
-    Domain,
-    Location,
-    Education,
     Certification,
-    Skill,
+    Domain,
+    Education,
     Job,
-    Project,
     Language,
+    Location,
+    Project,
+    ResumeSnippet,
+    Skill,
 )
 
 
@@ -37,10 +39,10 @@ class CertificationAdmin(admin.ModelAdmin):
 
 @admin.register(Skill)
 class SkillAdmin(admin.ModelAdmin):
-    list_display = ("name", "category", "proficiency")
+    list_display = ("name", "category", "proficiency", "years_of_experience_override")
     list_filter = ("category", "proficiency", "domains")
     search_fields = ("name",)
-    filter_horizontal = ("domains",)
+    filter_horizontal = ("domains", "related_skills")
 
 
 @admin.register(Job)
@@ -64,3 +66,11 @@ class LanguageAdmin(admin.ModelAdmin):
     list_display = ("name", "fluency")
     list_filter = ("fluency",)
     search_fields = ("name",)
+
+
+@admin.register(ResumeSnippet)
+class SnippetAdmin(admin.ModelAdmin):
+    list_display = ("title", "kind", "is_active", "updated_at")
+    list_filter = ("kind", "is_active")
+    search_fields = ("title", "content")
+    filter_horizontal = ("domains", "skills")

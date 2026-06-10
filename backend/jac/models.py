@@ -176,6 +176,8 @@ class Skill(CvEntry):
     )
     domains = models.ManyToManyField(Domain, blank=True)
     first_used = models.DateField(null=True, blank=True)
+    related_skills = models.ManyToManyField("self", blank=True)
+    years_of_experience_override = models.IntegerField(null=True, blank=True)
     certification = models.ForeignKey(
         Certification, on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -191,12 +193,17 @@ class Skill(CvEntry):
           - the earliest `started` among Jobs that include this skill
           - the earliest `started` among Projects that include this skill
 
+        is overridden by the `years_of_experience_override` field
+
         The two related-model dates are precomputed by `SkillManager`, so
         reading this property issues zero extra queries — *provided* the
         instance came from `Skill.objects.…`. A freshly-created Skill (one
         you just `.create()`'d in the same scope) won't carry the annotations
         yet; refetch via `Skill.objects.get(pk=skill.pk)` if you need them.
         """
+        if self.years_of_experience_override is not None:
+            return self.years_of_experience_override
+
         earliest = _min_ignoring_none(
             self.first_used,
             getattr(self, "_earliest_job_started", None),
@@ -204,6 +211,7 @@ class Skill(CvEntry):
         )
         if earliest is None:
             return None
+
         return (timezone.localdate() - earliest).days // 365
 
 
@@ -262,3 +270,32 @@ class Language(CvEntry):
     certification = models.ForeignKey(
         Certification, null=True, blank=True, on_delete=models.SET_NULL
     )
+
+
+class ResumeSnippet(models.Model):
+    class Kind(models.TextChoices):
+        intro = "intro", _("Introduction")
+        achievement = "achievement", _("Achievement")
+        value_statement = "value_statement", _("Value statement")
+        closing = "closing", _("Closing")
+        other = "other", _("Other")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="snippets"
+    )
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    kind = models.CharField(max_length=16, choices=Kind, default=Kind.other)
+    domains = models.ManyToManyField(Domain, blank=True)
+    skills = models.ManyToManyField(Skill, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["kind", "title"]
+
+    def __str__(self) -> str:
+        # get_kind_display is one of Django's dynamically generated
+        # get_FOO_display methods; Pylance can't see it statically.
+        return f"{self.get_kind_display()}: {self.title}"  # type: ignore[attr-defined]

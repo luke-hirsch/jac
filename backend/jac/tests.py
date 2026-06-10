@@ -15,6 +15,7 @@ from jac.models import (
     Language,
     Location,
     Project,
+    ResumeSnippet,
     Skill,
 )
 
@@ -906,3 +907,270 @@ class JobViewSetScopingTests(APITestCase):
     def test_unauthenticated_list_is_403(self):
         r = self.client.get("/api/jac/jobs/")
         self.assertIn(r.status_code, (401, 403))
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a — Skill.years_of_experience_override (model-level)
+# ---------------------------------------------------------------------------
+
+
+class SkillYearsOverrideModelTests(TestCase):
+    """The override is the escape hatch for intermittently-used skills the
+    automatic recogniser over-counts: when set, the property returns it
+    verbatim; when cleared, it falls back to the computed delta.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create(username="override_user")
+
+    def test_property_uses_computed_delta_without_override(self):
+        skill = Skill.objects.create(
+            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
+        )
+        self.assertIsNone(skill.years_of_experience_override)
+        self.assertGreaterEqual(int(skill.years_of_experience), 14)
+
+    def test_override_wins_over_computed(self):
+        skill = Skill.objects.create(
+            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
+        )
+        skill.years_of_experience_override = 2
+        self.assertEqual(skill.years_of_experience, 2)
+
+    def test_clearing_override_falls_back_to_computed(self):
+        skill = Skill.objects.create(
+            user=self.user,
+            name="C/C++",
+            first_used=date(2010, 1, 1),
+            years_of_experience_override=2,
+        )
+        self.assertEqual(skill.years_of_experience, 2)
+        skill.years_of_experience_override = None
+        self.assertGreaterEqual(int(skill.years_of_experience), 14)
+
+    def test_override_of_zero_is_respected(self):
+        # 0 is a legitimate override (and not None), so it must win.
+        skill = Skill.objects.create(
+            user=self.user,
+            name="COBOL",
+            first_used=date(2010, 1, 1),
+            years_of_experience_override=0,
+        )
+        self.assertEqual(skill.years_of_experience, 0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a — Skill API: override round-trip + related_skills
+# ---------------------------------------------------------------------------
+
+
+class SkillOverrideAPITests(APITestCase):
+    """`years_of_experience_override` is writable and `years_of_experience`
+    transparently reflects it; the effective field itself stays read-only.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="skill_api", password="pass")
+        cls.skill = Skill.objects.create(
+            user=cls.user, name="C/C++", first_used=date(2010, 1, 1)
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_patch_override_changes_effective_years(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.skill.pk}/",
+            {"years_of_experience_override": 4},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["years_of_experience_override"], 4)
+        self.assertEqual(r.data["years_of_experience"], 4)
+
+    def test_clearing_override_reverts_to_computed(self):
+        self.skill.years_of_experience_override = 4
+        self.skill.save()
+        r = self.client.patch(
+            f"/api/jac/skills/{self.skill.pk}/",
+            {"years_of_experience_override": None},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.data["years_of_experience_override"])
+        self.assertGreaterEqual(int(r.data["years_of_experience"]), 14)
+
+    def test_years_of_experience_is_read_only(self):
+        # Writing the effective field is silently ignored; the stored value
+        # stays computed.
+        r = self.client.patch(
+            f"/api/jac/skills/{self.skill.pk}/",
+            {"years_of_experience": 99},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertNotEqual(r.data["years_of_experience"], 99)
+        self.assertIsNone(r.data["years_of_experience_override"])
+
+
+class SkillRelatedSkillsAPITests(APITestCase):
+    """The symmetric M2M ties skills together both ways, guards against
+    self-reference, and refuses to point at another user's skill.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="rel_api", password="pass")
+        cls.other = User.objects.create_user(username="rel_other", password="pass")
+        cls.accounting = Skill.objects.create(user=cls.user, name="Accounting")
+        cls.sevdesk = Skill.objects.create(user=cls.user, name="SevDesk")
+        cls.foreign = Skill.objects.create(user=cls.other, name="Foreign")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_relation_is_symmetric(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.accounting.pk}/",
+            {"related_skills": [self.sevdesk.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["related_skills"], [self.sevdesk.pk])
+
+        # Symmetry: SevDesk now lists Accounting without us touching it.
+        r = self.client.get(f"/api/jac/skills/{self.sevdesk.pk}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(self.accounting.pk, r.data["related_skills"])
+
+    def test_self_reference_is_rejected(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.accounting.pk}/",
+            {"related_skills": [self.accounting.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_cannot_relate_to_another_users_skill(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.accounting.pk}/",
+            {"related_skills": [self.foreign.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.accounting.refresh_from_db()
+        self.assertEqual(self.accounting.related_skills.count(), 0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a — ResumeSnippet CRUD + scoping
+# ---------------------------------------------------------------------------
+
+
+class ResumeSnippetAPITests(APITestCase):
+    """Snippets are user-scoped on create, list, and relation fields; `user`
+    is never trusted from the body and choices/ownership are validated.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="snip_user", password="pass")
+        cls.other = User.objects.create_user(username="snip_other", password="pass")
+        cls.domain = Domain.objects.create(user=cls.user, name="Finance")
+        cls.skill = Skill.objects.create(user=cls.user, name="Accounting")
+        cls.foreign_skill = Skill.objects.create(user=cls.other, name="Foreign")
+        cls.foreign_domain = Domain.objects.create(user=cls.other, name="ForeignDom")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_create_sets_user_from_request(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "Opening line",
+                "content": "I build things people rely on.",
+                "kind": "intro",
+                "domains": [self.domain.pk],
+                "skills": [self.skill.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+        snippet = ResumeSnippet.objects.get(pk=r.data["id"])
+        self.assertEqual(snippet.user, self.user)
+
+    def test_user_cannot_be_spoofed_via_body(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "Spoof",
+                "content": "nope",
+                "kind": "other",
+                "user": self.other.pk,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+        snippet = ResumeSnippet.objects.get(pk=r.data["id"])
+        self.assertEqual(snippet.user, self.user)
+
+    def test_list_is_user_scoped(self):
+        ResumeSnippet.objects.create(
+            user=self.other, title="Theirs", content="x", kind="intro"
+        )
+        mine = ResumeSnippet.objects.create(
+            user=self.user, title="Mine", content="y", kind="intro"
+        )
+        r = self.client.get("/api/jac/resume-snippets/")
+        self.assertEqual(r.status_code, 200)
+        ids = [row["id"] for row in r.data["results"]]
+        self.assertIn(mine.pk, ids)
+        self.assertEqual(len(ids), 1)
+
+    def test_kind_filter(self):
+        intro = ResumeSnippet.objects.create(
+            user=self.user, title="i", content="x", kind="intro"
+        )
+        ResumeSnippet.objects.create(
+            user=self.user, title="c", content="y", kind="closing"
+        )
+        r = self.client.get("/api/jac/resume-snippets/?kind=intro")
+        self.assertEqual(r.status_code, 200)
+        ids = [row["id"] for row in r.data["results"]]
+        self.assertEqual(ids, [intro.pk])
+
+    def test_invalid_kind_is_rejected(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {"title": "x", "content": "y", "kind": "not_a_kind"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_cannot_reference_another_users_skill(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "x",
+                "content": "y",
+                "kind": "other",
+                "skills": [self.foreign_skill.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_cannot_reference_another_users_domain(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "x",
+                "content": "y",
+                "kind": "other",
+                "domains": [self.foreign_domain.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)

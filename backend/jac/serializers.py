@@ -10,6 +10,7 @@ from jac.models import (
     Language,
     Location,
     Project,
+    ResumeSnippet,
     Skill,
 )
 
@@ -118,7 +119,7 @@ class CertificationSerializer(serializers.ModelSerializer):
 
 
 class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("certification",)
+    user_scoped_fields = ("certification", "related_skills")
     domain_scoped_fields = ("domains",)
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -148,8 +149,10 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "domains",
             "first_used",
             "certification",
+            "years_of_experience_override",
             "years_of_experience",
             "description",
+            "related_skills",
             "user",
         ]
         read_only_fields = ["id", "years_of_experience"]
@@ -163,6 +166,11 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
 
     def get_years_of_experience(self, obj):
         return obj.years_of_experience
+
+    def validate_related_skills(self, value):
+        if self.instance and any(s.pk == self.instance.pk for s in value):
+            raise serializers.ValidationError("A skill can't relate to itself.")
+        return value
 
 
 class JobSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
@@ -272,3 +280,36 @@ class CvSerializer(serializers.Serializer):
     certifications = CertificationSerializer(many=True)
     projects = ProjectSerializer(many=True)
     languages = LanguageSerializer(many=True)
+
+
+class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+    user_scoped_fields = ("skills",)
+    domain_scoped_fields = ("domains",)
+
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    domains = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Domain.objects.all(),
+        required=False,
+    )
+    skills = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Skill.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = ResumeSnippet
+        fields = [
+            "id",
+            "title",
+            "content",
+            "kind",
+            "domains",
+            "skills",
+            "is_active",
+            "created_at",
+            "updated_at",
+            "user",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
