@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import tempfile
 from datetime import date, timedelta
@@ -1494,3 +1495,33 @@ class CvExportImportRoundTripTests(TestCase):
         # The computed read-only property must not leak into the dump.
         self.assertNotIn("years_of_experience\"", buf.getvalue())
         self.assertIn("years_of_experience_override", buf.getvalue())
+
+    def test_system_default_domain_reused_not_duplicated(self):
+        # A tags a skill with a shared system-default domain.
+        system = User.objects.create_user(username=settings.SYSTEM_USER_USERNAME)
+        sysdom = Domain.objects.create(user=system, name="finance")
+        Skill.objects.get(user=self.a, name="Python").domains.add(sysdom)
+
+        buf = io.StringIO()
+        call_command("cv_export", "--user", str(self.a.pk), stdout=buf)
+        dump = buf.getvalue()
+        data = json.loads(dump)
+        # The shared default is NOT written as one of A's own domains …
+        self.assertNotIn("finance", [d["name"] for d in data["domains"]])
+        # … but the skill still references it by name.
+        py_dump = next(s for s in data["skills"] if s["name"] == "Python")
+        self.assertIn("finance", py_dump["domains"])
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write(dump)
+            path = fh.name
+        try:
+            call_command("cv_import", "--username", "rt_b", "--file", path)
+        finally:
+            os.remove(path)
+
+        # Import reused the existing system default — no user-owned duplicate.
+        self.assertEqual(Domain.objects.filter(name="finance").count(), 1)
+        self.assertFalse(Domain.objects.filter(user=self.b, name="finance").exists())
+        b_py = Skill.objects.get(user=self.b, name="Python")
+        self.assertIn(sysdom, b_py.domains.all())

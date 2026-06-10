@@ -88,17 +88,16 @@ class Command(BaseCommand):
     # ---- sections ---------------------------------------------------------
 
     def _domains(self, user: User) -> list[dict]:
-        # The user's own domains plus any (e.g. system-default) domain attached
-        # to their entries, so every by-name reference resolves on import.
-        ids = set(Domain.objects.filter(user=user).values_list("pk", flat=True))
-        for model in (Job, Project, Skill, ResumeSnippet):
-            ids |= set(
-                model.objects.filter(user=user).values_list("domains__pk", flat=True)
-            )
-        ids.discard(None)
+        # Only the user's *own* domains. System-default domains the user has
+        # tagged onto entries are deliberately excluded: the entry sections
+        # still reference them by name, and on import `_resolve_domains`
+        # resolves those names against the target box's own system defaults
+        # (reusing them) or auto-creates a user-owned fallback when absent —
+        # so exporting them here would just create user-owned duplicates of
+        # names that already exist as shared defaults.
         return [
             {"name": d.name, "description": d.description}
-            for d in Domain.objects.filter(pk__in=ids).order_by("name")
+            for d in Domain.objects.filter(user=user).order_by("name")
         ]
 
     def _locations(self, user: User) -> list[dict]:
