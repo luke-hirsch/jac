@@ -11,18 +11,25 @@ JSON schema (all sections optional):
       "locations":      [{"city": "...", "country": "...", "street": "...", "zip": "..."}],
       "certifications": [{"name", "issuer", "issued_on", "expires_on", "credential_id", "url", "description"}],
       "skills":         [{"name", "proficiency", "category", "first_used", "domains": [...],
-                          "certification": "<cert name>", "description"}],
+                          "certification": "<cert name>", "description",
+                          "years_of_experience_override": <int|null>,
+                          "related_skills": ["<skill name>", ...]}],
       "jobs":           [{"title", "company", "location": "<city>", "job_type", "started", "ended",
                           "url", "description", "skills": [...], "domains": [...]}],
       "projects":       [{"name", "location", "started", "ended", "url", "description",
                           "skills": [...], "domains": [...]}],
       "educations":     [{"institution", "location", "field_of_study", "degree", "grade",
                           "started", "ended", "description"}],
-      "languages":      [{"name", "fluency", "certification": "<cert name>", "description"}]
+      "languages":      [{"name", "fluency", "certification": "<cert name>", "description"}],
+      "resume_snippets":[{"title", "content", "kind", "is_active",
+                          "domains": [...], "skills": [...]}]
     }
 
-References (`location`, `domains`, `skills`, `certification`) are resolved by name against
-items declared earlier in the same file or already present in the DB.
+References (`location`, `domains`, `skills`, `related_skills`, `certification`) are resolved by
+name against items declared earlier in the same file or already present in the DB. Domains and
+locations are scoped to the target user (own + system-default domains); an unresolved name is
+created under the user, so a fresh server need not pre-share the taxonomy. `cv_export` writes
+exactly this shape.
 """
 
 from __future__ import annotations
@@ -44,11 +51,23 @@ from jac.models import (
     Language,
     Location,
     Project,
+    ResumeSnippet,
     Skill,
 )
 
 
-ENTRY_MODELS = (Education, Certification, Skill, Job, Project, Language)
+# Cleared by --replace. Domain/Location are intentionally excluded: they are
+# shared-ish references (system defaults, reusable locations) that other rows
+# may still point at, so wiping them on a re-import would be surprising.
+ENTRY_MODELS = (
+    Education,
+    Certification,
+    Skill,
+    Job,
+    Project,
+    Language,
+    ResumeSnippet,
+)
 
 
 def _parse_date(value: Any) -> date | None:
@@ -104,8 +123,10 @@ class Command(BaseCommand):
                 self._wipe_user_entries(user)
 
             counts: dict[str, int] = {}
-            counts["domains"] = self._import_domains(data.get("domains", []))
-            counts["locations"] = self._import_locations(data.get("locations", []))
+            counts["domains"] = self._import_domains(user, data.get("domains", []))
+            counts["locations"] = self._import_locations(
+                user, data.get("locations", [])
+            )
             counts["certifications"] = self._import_certifications(
                 user, data.get("certifications", [])
             )
@@ -116,6 +137,9 @@ class Command(BaseCommand):
                 user, data.get("educations", [])
             )
             counts["languages"] = self._import_languages(user, data.get("languages", []))
+            counts["resume_snippets"] = self._import_snippets(
+                user, data.get("resume_snippets", [])
+            )
 
             if options["dry_run"]:
                 transaction.set_rollback(True)
@@ -131,20 +155,22 @@ class Command(BaseCommand):
         for model in ENTRY_MODELS:
             model.objects.filter(user=user).delete()
 
-    def _import_domains(self, items: list[dict]) -> int:
+    def _import_domains(self, user: User, items: list[dict]) -> int:
         n = 0
         for item in items:
-            _, created = Domain.objects.update_or_create(
+            _, created = Domain.objects.get_or_create(
+                user=user,
                 name=item["name"],
                 defaults={"description": item.get("description", "")},
             )
             n += int(created)
         return n
 
-    def _import_locations(self, items: list[dict]) -> int:
+    def _import_locations(self, user: User, items: list[dict]) -> int:
         n = 0
         for item in items:
             _, created = Location.objects.get_or_create(
+                user=user,
                 city=item["city"],
                 country=item.get("country"),
                 defaults={
@@ -157,20 +183,21 @@ class Command(BaseCommand):
             n += int(created)
         return n
 
-    def _resolve_location(self, name: str | None) -> Location | None:
+    def _resolve_location(self, user: User, name: str | None) -> Location | None:
         if not name:
             return None
-        loc = Location.objects.filter(city=name).first()
-        if not loc:
-            raise CommandError(f"Unknown location: {name!r}")
+        # Scoped to the user; auto-create on a miss so a fresh server need not
+        # be pre-seeded with the same locations.
+        loc, _ = Location.objects.get_or_create(user=user, city=name)
         return loc
 
-    def _resolve_domains(self, names: list[str]) -> list[Domain]:
+    def _resolve_domains(self, user: User, names: list[str]) -> list[Domain]:
         out = []
         for n in names or []:
-            domain = Domain.objects.filter(name=n).first()
+            # Own domains + system defaults; auto-create under the user on miss.
+            domain = Domain.objects.for_user(user).filter(name=n).first()
             if not domain:
-                raise CommandError(f"Unknown domain: {n!r}")
+                domain, _ = Domain.objects.get_or_create(user=user, name=n)
             out.append(domain)
         return out
 
@@ -206,6 +233,8 @@ class Command(BaseCommand):
         return len(items)
 
     def _import_skills(self, user: User, items: list[dict]) -> int:
+        # Two passes: create every skill (so related_skills can reference one
+        # defined later in the file), then wire the symmetric relations.
         for item in items:
             skill = Skill.objects.create(
                 user=user,
@@ -213,12 +242,19 @@ class Command(BaseCommand):
                 proficiency=item.get("proficiency", Skill.Proficiency_Choices.intermediate),
                 category=item.get("category", Skill.Category.technical),
                 first_used=_parse_date(item.get("first_used")),
+                years_of_experience_override=item.get("years_of_experience_override"),
                 certification=self._resolve_certification(user, item.get("certification")),
                 description=item.get("description", ""),
             )
-            domains = self._resolve_domains(item.get("domains", []))
+            domains = self._resolve_domains(user, item.get("domains", []))
             if domains:
                 skill.domains.set(domains)
+        for item in items:
+            related = self._resolve_skills(user, item.get("related_skills", []))
+            if related:
+                Skill.objects.get(user=user, name=item["name"]).related_skills.set(
+                    related
+                )
         return len(items)
 
     def _import_jobs(self, user: User, items: list[dict]) -> int:
@@ -227,7 +263,7 @@ class Command(BaseCommand):
                 user=user,
                 title=item["title"],
                 company=item["company"],
-                location=self._resolve_location(item.get("location")),
+                location=self._resolve_location(user, item.get("location")),
                 job_type=item.get("job_type", Job.job_type_choices.full_time),
                 started=_parse_date(item["started"]),
                 ended=_parse_date(item.get("ended")),
@@ -237,7 +273,7 @@ class Command(BaseCommand):
             skills = self._resolve_skills(user, item.get("skills", []))
             if skills:
                 job.skills.set(skills)
-            domains = self._resolve_domains(item.get("domains", []))
+            domains = self._resolve_domains(user, item.get("domains", []))
             if domains:
                 job.domains.set(domains)
         return len(items)
@@ -247,7 +283,7 @@ class Command(BaseCommand):
             project = Project.objects.create(
                 user=user,
                 name=item["name"],
-                location=self._resolve_location(item.get("location")),
+                location=self._resolve_location(user, item.get("location")),
                 started=_parse_date(item.get("started")),
                 ended=_parse_date(item.get("ended")),
                 url=item.get("url", ""),
@@ -256,7 +292,7 @@ class Command(BaseCommand):
             skills = self._resolve_skills(user, item.get("skills", []))
             if skills:
                 project.skills.set(skills)
-            domains = self._resolve_domains(item.get("domains", []))
+            domains = self._resolve_domains(user, item.get("domains", []))
             if domains:
                 project.domains.set(domains)
         return len(items)
@@ -266,7 +302,7 @@ class Command(BaseCommand):
             Education.objects.create(
                 user=user,
                 institution=item["institution"],
-                location=self._resolve_location(item.get("location")),
+                location=self._resolve_location(user, item.get("location")),
                 field_of_study=item.get("field_of_study", ""),
                 degree=item.get("degree"),
                 grade=item.get("grade"),
@@ -285,4 +321,21 @@ class Command(BaseCommand):
                 certification=self._resolve_certification(user, item.get("certification")),
                 description=item.get("description", ""),
             )
+        return len(items)
+
+    def _import_snippets(self, user: User, items: list[dict]) -> int:
+        for item in items:
+            snippet = ResumeSnippet.objects.create(
+                user=user,
+                title=item["title"],
+                content=item.get("content", ""),
+                kind=item.get("kind", ResumeSnippet.Kind.other),
+                is_active=item.get("is_active", True),
+            )
+            domains = self._resolve_domains(user, item.get("domains", []))
+            if domains:
+                snippet.domains.set(domains)
+            skills = self._resolve_skills(user, item.get("skills", []))
+            if skills:
+                snippet.skills.set(skills)
         return len(items)
