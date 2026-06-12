@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   useQuery,
   useMutation,
@@ -5,7 +6,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { fetchPage, type ListParams } from "./paginated";
+import { fetchPage, fetchAll, type ListParams } from "./paginated";
 
 /* ---------- shared row types ---------- */
 
@@ -140,6 +141,53 @@ export function useList<T>(key: ResourceKey, params: ListParams = {}) {
   return useQuery({
     queryKey: listKey(key, params),
     queryFn: () => fetchPage<T>(R[key].url, params),
+    placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * `useList` plus owned page state. Resets to page 1 whenever the non-page
+ * params (search/ordering/filters) change — otherwise narrowing a filter while
+ * on a high page leaves DRF answering 404 for an out-of-range page.
+ *
+ * The reset is applied during render (not in an effect) so the *current* render
+ * already queries page 1; the stale page never fires a request that would 404.
+ */
+export function usePagedList<T>(key: ResourceKey, params: ListParams = {}) {
+  const [page, setPage] = useState(1);
+  const sig = JSON.stringify({
+    search: params.search ?? "",
+    ordering: params.ordering ?? "",
+    filters: params.filters ?? {},
+  });
+  // "Adjusting state during render" (React docs): when the filter signature
+  // changes we snap back to page 1 *in this render* so the query never fires
+  // for a now-out-of-range page.
+  const [prevSig, setPrevSig] = useState(sig);
+  let effectivePage = page;
+  if (prevSig !== sig) {
+    setPrevSig(sig);
+    effectivePage = 1;
+    if (page !== 1) setPage(1);
+  }
+  const query = useList<T>(key, { ...params, page: effectivePage });
+  return { ...query, page: effectivePage, setPage };
+}
+
+/**
+ * Fetches the whole (filtered) resource across all pages — for views that can't
+ * paginate, like the skills bubble cloud. `enabled` lets callers skip the fetch
+ * until the view is actually shown.
+ */
+export function useFullList<T>(
+  key: ResourceKey,
+  params: Omit<ListParams, "page"> = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["jac", key, "all", params],
+    queryFn: () => fetchAll<T>(R[key].url, params),
+    enabled: options.enabled ?? true,
     placeholderData: (prev) => prev,
   });
 }

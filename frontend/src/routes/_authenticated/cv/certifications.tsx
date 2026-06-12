@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  usePagedList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -35,7 +35,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { DomainFilter } from "@/components/cv/domain-filter";
 import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
@@ -67,13 +69,15 @@ export const Route = createFileRoute("/_authenticated/cv/certifications")({
 function CertificationsPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search);
+  const [domain, setDomain] = useState<number | "">("");
 
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<CertificationRow | null>(null);
   const [open, setOpen] = useState(false);
 
-  const list = useList<CertificationRow>("certifications", {
+  const list = usePagedList<CertificationRow>("certifications", {
     search: debouncedSearch,
+    filters: { domains: domain || undefined },
   });
 
   const destroy = useDestroy("certifications");
@@ -116,6 +120,7 @@ function CertificationsPage() {
       description="Professional certifications and credentials."
       search={search}
       onSearchChange={setSearch}
+      filters={<DomainFilter value={domain} onChange={setDomain} />}
       table={
         <>
           <BulkBar
@@ -186,6 +191,13 @@ function CertificationsPage() {
             </Table>
           </div>
         </>
+      }
+      pagination={
+        <Pagination
+          page={list.page}
+          count={list.data?.count ?? 0}
+          onPageChange={list.setPage}
+        />
       }
       editor={(row, close) => <CertificationEditor row={row} onClose={close} />}
       open={open}
@@ -424,7 +436,11 @@ function CertificationEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Skills it evidences</Label>
-            <SkillPicker value={f.state.value} onChange={f.handleChange} />
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              autoAddPrerequisites
+            />
           </div>
         )}
       </form.Field>

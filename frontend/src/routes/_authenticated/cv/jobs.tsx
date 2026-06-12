@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  usePagedList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -43,7 +43,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { DomainFilter } from "@/components/cv/domain-filter";
 import { LocationPicker } from "@/components/cv/location-picker";
 import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
@@ -84,13 +86,14 @@ function JobsPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search);
   const [jobType, setJobType] = useState<JobRow["job_type"] | "">("");
+  const [domain, setDomain] = useState<number | "">("");
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<JobRow | null>(null);
   const [open, setOpen] = useState(false);
 
-  const list = useList<JobRow>("jobs", {
+  const list = usePagedList<JobRow>("jobs", {
     search: debouncedSearch,
-    filters: jobType ? { job_type: jobType } : undefined,
+    filters: { job_type: jobType || undefined, domains: domain || undefined },
   });
 
   const destroy = useDestroy("jobs");
@@ -135,24 +138,27 @@ function JobsPage() {
       search={search}
       onSearchChange={setSearch}
       filters={
-        <Select
-          value={jobType || "all"}
-          onValueChange={(v) =>
-            setJobType(v === "all" ? "" : (v as JobRow["job_type"]))
-          }
-        >
-          <SelectTrigger className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            {JOB_TYPES.map((t) => (
-              <SelectItem key={t.value} value={t.value}>
-                {t.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <>
+          <Select
+            value={jobType || "all"}
+            onValueChange={(v) =>
+              setJobType(v === "all" ? "" : (v as JobRow["job_type"]))
+            }
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All types</SelectItem>
+              {JOB_TYPES.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DomainFilter value={domain} onChange={setDomain} />
+        </>
       }
       table={
         <>
@@ -234,6 +240,13 @@ function JobsPage() {
             </Table>
           </div>
         </>
+      }
+      pagination={
+        <Pagination
+          page={list.page}
+          count={list.data?.count ?? 0}
+          onPageChange={list.setPage}
+        />
       }
       editor={(row, close) => <JobEditor row={row} onClose={close} />}
       open={open}
@@ -496,7 +509,11 @@ function JobEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Skills</Label>
-            <SkillPicker value={f.state.value} onChange={f.handleChange} />
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              autoAddPrerequisites
+            />
           </div>
         )}
       </form.Field>

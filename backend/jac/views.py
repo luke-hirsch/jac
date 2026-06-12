@@ -153,6 +153,7 @@ class EducationViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = EducationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["institution", "degree", "field_of_study"]
+    filterset_fields = ["domains"]
     ordering_fields = [
         "started",
         "ended",
@@ -170,6 +171,7 @@ class CertificationViewSet(BulkActionMixin, viewsets.ModelViewSet):
     serializer_class = CertificationSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name", "issuer"]
+    filterset_fields = ["domains"]
     ordering_fields = [
         "issued_on",
         "expires_on",

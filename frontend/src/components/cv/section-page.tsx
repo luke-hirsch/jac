@@ -16,6 +16,7 @@ export function SectionPage<EditorRow>({
   onSearchChange,
   filters,
   table,
+  pagination,
   editor,
   open,
   editing,
@@ -28,6 +29,7 @@ export function SectionPage<EditorRow>({
   onSearchChange: (v: string) => void;
   filters?: ReactNode;
   table: ReactNode;
+  pagination?: ReactNode;
   editor: (row: EditorRow | null, close: () => void) => ReactNode;
   open: boolean;
   editing: EditorRow | null;
@@ -55,6 +57,7 @@ export function SectionPage<EditorRow>({
         {filters}
       </div>
       {table}
+      {pagination}
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="w-full data-[side=right]:sm:max-w-2xl data-[side=right]:lg:max-w-3xl overflow-y-auto">
           <SheetHeader>

@@ -1454,6 +1454,49 @@ class DomainIsDefaultAPITests(APITestCase):
 # ---------------------------------------------------------------------------
 
 
+class DomainFilterAPITests(APITestCase):
+    """`?domains=<id>` narrows list endpoints to entries carrying that domain —
+    including Education and Certification, which gained the filter in 3a-bis.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="df_user", password="pass")
+        cls.backend = Domain.objects.create(user=cls.user, name="Backend")
+        cls.design = Domain.objects.create(user=cls.user, name="Design")
+
+        edu_b = Education.objects.create(
+            user=cls.user, institution="TU", started=date(2015, 1, 1)
+        )
+        edu_b.domains.add(cls.backend)
+        edu_d = Education.objects.create(
+            user=cls.user, institution="Arts", started=date(2016, 1, 1)
+        )
+        edu_d.domains.add(cls.design)
+
+        cert_b = Certification.objects.create(
+            user=cls.user, name="AWS", issuer="Amazon"
+        )
+        cert_b.domains.add(cls.backend)
+        cert_d = Certification.objects.create(
+            user=cls.user, name="Figma", issuer="Figma"
+        )
+        cert_d.domains.add(cls.design)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_education_filtered_by_domain(self):
+        r = self.client.get(f"/api/jac/education/?domains={self.backend.pk}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([e["institution"] for e in r.data["results"]], ["TU"])
+
+    def test_certification_filtered_by_domain(self):
+        r = self.client.get(f"/api/jac/certifications/?domains={self.backend.pk}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([c["name"] for c in r.data["results"]], ["AWS"])
+
+
 class CvExportImportRoundTripTests(TestCase):
     """`cv_export` of user A, imported into a fresh user B, reproduces the CV —
     including related_skills symmetry, the years override, certification +

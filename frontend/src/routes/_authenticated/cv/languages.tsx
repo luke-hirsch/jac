@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  usePagedList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -42,6 +42,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
 const FLUENCY_LEVELS: { value: LanguageRow["fluency"]; label: string }[] = [
@@ -80,7 +81,7 @@ function LanguagesPage() {
   const [editing, setEditing] = useState<LanguageRow | null>(null);
   const [open, setOpen] = useState(false);
 
-  const list = useList<LanguageRow>("languages", {
+  const list = usePagedList<LanguageRow>("languages", {
     search: debouncedSearch,
     filters: fluencyLevel ? { fluency: fluencyLevel } : undefined,
   });
@@ -213,6 +214,13 @@ function LanguagesPage() {
             </Table>
           </div>
         </>
+      }
+      pagination={
+        <Pagination
+          page={list.page}
+          count={list.data?.count ?? 0}
+          onPageChange={list.setPage}
+        />
       }
       editor={(row, close) => <LanguageEditor row={row} onClose={close} />}
       open={open}

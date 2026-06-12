@@ -211,7 +211,9 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 50,
+    # 100 keeps every realistic CV section on a single page; the frontend still
+    # renders page nav past this (kept in sync with PAGE_SIZE in paginated.ts).
+    "PAGE_SIZE": 100,
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",

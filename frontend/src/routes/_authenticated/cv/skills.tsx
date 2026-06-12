@@ -9,9 +9,18 @@ import {
   type RowSelectionState,
 } from "@tanstack/react-table";
 import { toast } from "sonner";
-import { ArrowDown, ArrowDownUp, ArrowUp, Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  ArrowDown,
+  ArrowDownUp,
+  ArrowUp,
+  CircleDot,
+  Pencil,
+  Table2,
+  Trash2,
+} from "lucide-react";
+import {
+  usePagedList,
+  useFullList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -43,9 +52,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { DomainFilter } from "@/components/cv/domain-filter";
 import { SkillPicker } from "@/components/cv/skill-picker";
 import { CertificationPicker } from "@/components/cv/certification-picker";
+import { SkillBubbles } from "@/components/cv/skill-bubbles";
 
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
@@ -91,6 +103,7 @@ function SkillPage() {
     "",
   );
   const [category, setCategory] = useState<SkillRow["category"] | "">("");
+  const [domain, setDomain] = useState<number | "">("");
   // "" = default (name), "experience_since" = most experience first,
   // "-experience_since" = least first.
   const [expSort, setExpSort] = useState<
@@ -99,12 +112,28 @@ function SkillPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<SkillRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"table" | "bubbles">("table");
 
-  const list = useList<SkillRow>("skills", {
+  const filters = { proficiency, category, domains: domain || undefined };
+
+  const list = usePagedList<SkillRow>("skills", {
     search: debouncedSearch,
-    filters: { proficiency, category },
+    filters,
     ordering: expSort || undefined,
   });
+
+  // The bubble cloud needs the whole filtered set (no paging); only fetched
+  // while that view is active.
+  const cloud = useFullList<SkillRow>(
+    "skills",
+    { search: debouncedSearch, filters },
+    { enabled: view === "bubbles" },
+  );
+
+  const openEditor = (row: SkillRow) => {
+    setEditing(row);
+    setOpen(true);
+  };
 
   const cycleExpSort = () =>
     setExpSort((o) =>
@@ -161,7 +190,26 @@ function SkillPage() {
       onSearchChange={setSearch}
       filters={
         <>
-          {" "}
+          <div className="inline-flex rounded-md border p-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant={view === "table" ? "secondary" : "ghost"}
+              className="gap-1.5"
+              onClick={() => setView("table")}
+            >
+              <Table2 className="size-4" /> Table
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={view === "bubbles" ? "secondary" : "ghost"}
+              className="gap-1.5"
+              onClick={() => setView("bubbles")}
+            >
+              <CircleDot className="size-4" /> Bubbles
+            </Button>
+          </div>
           <Select
             value={proficiency || "all"}
             onValueChange={(v) =>
@@ -197,10 +245,18 @@ function SkillPage() {
                 </SelectItem>
               ))}
             </SelectContent>
-          </Select>{" "}
+          </Select>
+          <DomainFilter value={domain} onChange={setDomain} />{" "}
         </>
       }
       table={
+        view === "bubbles" ? (
+          <SkillBubbles
+            skills={cloud.data ?? []}
+            loading={cloud.isLoading}
+            onSelect={openEditor}
+          />
+        ) : (
         <>
           <BulkBar
             count={selectedIds.length}
@@ -280,6 +336,16 @@ function SkillPage() {
             </Table>
           </div>
         </>
+        )
+      }
+      pagination={
+        view === "table" ? (
+          <Pagination
+            page={list.page}
+            count={list.data?.count ?? 0}
+            onPageChange={list.setPage}
+          />
+        ) : undefined
       }
       editor={(row, close) => <SkillEditor row={row} onClose={close} />}
       open={open}

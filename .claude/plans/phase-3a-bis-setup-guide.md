@@ -55,6 +55,9 @@ source job by **title**, a snippet names its project by **name**).
     `ScopeRelatedToUserMixin` (handles `many=True` via `child_relation`) — no per-field code.
 - **[admin.py](../../backend/jac/admin.py)** — `filter_horizontal` for the new M2Ms;
   `autocomplete_fields` for the new FKs (relies on the target admins' `search_fields`).
+- **[views.py](../../backend/jac/views.py)** — added `domains` to `filterset_fields` on
+  `EducationViewSet` + `CertificationViewSet` (skills/jobs/projects already had it), so every
+  domain-carrying list endpoint supports `?domains=<id>`.
 - **[cv_export.py](../../backend/jac/management/commands/cv_export.py)** — emit `builds_on`,
   education/cert `skills`+`domains`, project/snippet source `job` (by title), snippet `project` (by
   name). `enables` is **not** exported (it's the inverse of other rows' `builds_on`).
@@ -71,7 +74,17 @@ source job by **title**, a snippet names its project by **name**).
   `ProjectRow += job`.
 - **[components/cv/job-picker.tsx](../../frontend/src/components/cv/job-picker.tsx)** — new single-FK
   picker over jobs (labelled `title — company`), modelled on `CertificationPicker`. The existing
-  `SkillPicker` (multi, `excludeId`) and `DomainPicker` (multi, inline-create) are reused as-is.
+  `DomainPicker` (multi, inline-create) is reused as-is.
+- **[components/cv/domain-filter.tsx](../../frontend/src/components/cv/domain-filter.tsx)** — new
+  single-select domain combobox ("All domains" default) for the list toolbars; wired into the
+  `filters` slot of all five domain-carrying section pages (skills/jobs/projects/education/certs),
+  driving `?domains=<id>`. Jobs combines it with the existing `job_type` Select.
+- **[components/cv/skill-picker.tsx](../../frontend/src/components/cv/skill-picker.tsx)** — gained an
+  opt-in `autoAddPrerequisites` prop: adding a skill pulls in its transitive `builds_on` closure
+  (tag Django → Python; DRF → Django + Python), add-only (never cascades on remove), cycle-guarded,
+  using the base list it already fetches (no extra query) + a one-line toast. Enabled on the four
+  *tag-skills-onto-an-entry* pickers (jobs/projects/education/certs); deliberately **off** for the
+  graph-authoring `builds_on`/`related_skills` fields, where auto-injection would fight the user.
 - **Editors:** `skills.tsx` (+ "Builds on" `SkillPicker`, beside the existing "Related skills"),
   `education.tsx` (+ Domains + Skills), `certifications.tsx` (+ Domains + "Skills it evidences"),
   `projects.tsx` (+ "Done at (job)" `JobPicker`). Each extends the Zod schema + **both** initial

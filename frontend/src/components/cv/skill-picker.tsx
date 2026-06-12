@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
+import { toast } from "sonner";
 import { useList, type SkillRow } from "@/lib/queries/jac";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,15 +27,24 @@ import {
  * it out of the options. Inline "create new skill" is intentionally absent: a
  * skill needs name + proficiency + category, which is more than a combobox
  * should ask for — create skills on `/cv/skills`.
+ *
+ * `autoAddPrerequisites` pulls in a skill's transitive `builds_on` chain when you
+ * add it (tag Django → Python comes along; DRF → Django + Python). Add-only: it
+ * never removes prerequisites, since once they're in we can't tell auto-added
+ * from deliberate. Enable it where you *tag* skills onto an entry (jobs/projects/
+ * education/certs); leave it off where you author the graph itself (`builds_on`,
+ * `related_skills`).
  */
 export function SkillPicker({
   value,
   onChange,
   excludeId,
+  autoAddPrerequisites = false,
 }: {
   value: number[];
   onChange: (next: number[]) => void;
   excludeId?: number;
+  autoAddPrerequisites?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -47,10 +57,53 @@ export function SkillPicker({
     value.includes(r.id),
   );
 
+  // id → SkillRow over every row we've seen (base list + current search), so the
+  // prerequisite walk and the toast can resolve builds_on / names without a fetch.
+  const skillById = useMemo(() => {
+    const m = new Map<number, SkillRow>();
+    for (const r of selectedList.data?.results ?? []) m.set(r.id, r);
+    for (const r of options.data?.results ?? []) m.set(r.id, r);
+    return m;
+  }, [selectedList.data, options.data]);
+
+  // Transitive builds_on closure of `startId`, cycle-guarded (the backend doesn't
+  // forbid builds_on cycles). Limited to skills present in `skillById` — a
+  // prerequisite off page 1 of an unsearched 50-row list won't resolve.
+  function prerequisitesOf(startId: number): number[] {
+    const out = new Set<number>();
+    const stack = [startId];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const pre of skillById.get(cur)?.builds_on ?? []) {
+        if (pre !== excludeId && !out.has(pre)) {
+          out.add(pre);
+          stack.push(pre);
+        }
+      }
+    }
+    return [...out];
+  }
+
   function toggle(id: number) {
-    onChange(
-      value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
-    );
+    if (value.includes(id)) {
+      onChange(value.filter((v) => v !== id)); // remove: never cascades
+      return;
+    }
+    if (!autoAddPrerequisites) {
+      onChange([...value, id]);
+      return;
+    }
+    const prereqs = prerequisitesOf(id);
+    const next = [...new Set([...value, id, ...prereqs])];
+    onChange(next);
+    const added = prereqs.filter((p) => !value.includes(p));
+    if (added.length) {
+      const names = added
+        .map((p) => skillById.get(p)?.name)
+        .filter(Boolean)
+        .join(", ");
+      toast(`Also added prerequisite${added.length > 1 ? "s" : ""}: ${names}`);
+    }
   }
 
   return (

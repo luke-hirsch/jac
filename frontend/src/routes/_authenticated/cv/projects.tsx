@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  usePagedList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -36,7 +36,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { DomainFilter } from "@/components/cv/domain-filter";
 import { LocationPicker } from "@/components/cv/location-picker";
 import { SkillPicker } from "@/components/cv/skill-picker";
 import { JobPicker } from "@/components/cv/job-picker";
@@ -70,12 +72,14 @@ export const Route = createFileRoute("/_authenticated/cv/projects")({
 function ProjectPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search);
+  const [domain, setDomain] = useState<number | "">("");
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<ProjectRow | null>(null);
   const [open, setOpen] = useState(false);
 
-  const list = useList<ProjectRow>("projects", {
+  const list = usePagedList<ProjectRow>("projects", {
     search: debouncedSearch,
+    filters: { domains: domain || undefined },
   });
 
   const destroy = useDestroy("projects");
@@ -119,6 +123,7 @@ function ProjectPage() {
       description="Project history. Started date is required."
       search={search}
       onSearchChange={setSearch}
+      filters={<DomainFilter value={domain} onChange={setDomain} />}
       table={
         <>
           <BulkBar
@@ -199,6 +204,13 @@ function ProjectPage() {
             </Table>
           </div>
         </>
+      }
+      pagination={
+        <Pagination
+          page={list.page}
+          count={list.data?.count ?? 0}
+          onPageChange={list.setPage}
+        />
       }
       editor={(row, close) => <ProjectEditor row={row} onClose={close} />}
       open={open}
@@ -427,7 +439,11 @@ function ProjectEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Skills</Label>
-            <SkillPicker value={f.state.value} onChange={f.handleChange} />
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              autoAddPrerequisites
+            />
           </div>
         )}
       </form.Field>

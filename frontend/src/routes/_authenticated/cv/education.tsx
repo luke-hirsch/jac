@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import {
-  useList,
+  usePagedList,
   useCreate,
   useUpdate,
   useDestroy,
@@ -34,8 +34,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SectionPage } from "@/components/cv/section-page";
+import { Pagination } from "@/components/cv/pagination";
 import { LocationPicker } from "@/components/cv/location-picker";
 import { DomainPicker } from "@/components/cv/domain-picker";
+import { DomainFilter } from "@/components/cv/domain-filter";
 import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
@@ -66,13 +68,15 @@ export const Route = createFileRoute("/_authenticated/cv/education")({
 function EducationPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search);
+  const [domain, setDomain] = useState<number | "">("");
 
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<EducationRow | null>(null);
   const [open, setOpen] = useState(false);
 
-  const list = useList<EducationRow>("education", {
+  const list = usePagedList<EducationRow>("education", {
     search: debouncedSearch,
+    filters: { domains: domain || undefined },
   });
 
   const destroy = useDestroy("education");
@@ -116,6 +120,7 @@ function EducationPage() {
       description="Educational background and qualifications."
       search={search}
       onSearchChange={setSearch}
+      filters={<DomainFilter value={domain} onChange={setDomain} />}
       table={
         <>
           <BulkBar
@@ -186,6 +191,13 @@ function EducationPage() {
             </Table>
           </div>
         </>
+      }
+      pagination={
+        <Pagination
+          page={list.page}
+          count={list.data?.count ?? 0}
+          onPageChange={list.setPage}
+        />
       }
       editor={(row, close) => <EducationEditor row={row} onClose={close} />}
       open={open}
@@ -432,7 +444,11 @@ function EducationEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Skills</Label>
-            <SkillPicker value={f.state.value} onChange={f.handleChange} />
+            <SkillPicker
+              value={f.state.value}
+              onChange={f.handleChange}
+              autoAddPrerequisites
+            />
           </div>
         )}
       </form.Field>
