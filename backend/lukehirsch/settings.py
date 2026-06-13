@@ -176,8 +176,13 @@ LLM = {
         "provider": "custom",  # Ollama / any OpenAI-compat server
         "url": os.getenv("OLLAMA_URL", "http://localhost:11434/v1"),
         "model": "qwen3.5:0.8b",
-        "timeout": 120,
+        "timeout": 300,  # SLMs are slow; the old 120 timed out mid-generation
         "think": False,
+        # Pipeline capability hint (consumed by get_alias_strength, stripped
+        # from the HTTP payload by the custom adapter): route this small model
+        # straight to the keyword rung. No JSON-mode — the wire format is the
+        # line protocol in jac/llm.py, which JSON-mode would fight.
+        "strength": "light",
     },
 }
 

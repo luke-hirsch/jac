@@ -599,77 +599,105 @@ class CV:
         threshold: float = 0.25,
         language: str | None = None,
     ) -> dict:
-        """Tier the tailoring pipeline so the user's LLM is used to its limit.
+        """Tier the tailoring pipeline to the model's capability.
 
-        Each rung's prompt style is matched to a model capability tier. We fall
-        through on any exception (timeout, parse error, context overflow,
-        hallucinated ids that fail id-validation) or on an empty result:
+        The ladder is chosen by the alias's `strength` hint (see
+        llm_connector.conf.get_alias_strength):
 
-          1. ai_conversational_tailor — loose prompt, selection contract (reasoning model)
-          2. ai_filter_entries        — strict rubric, per-entry scoring  (mid-tier LLM)
-          3. ai_keyword_filter        — LLM keyword extraction + det. match (SLM)
-          4. deterministic_filter     — pure keyword extraction (internal loose retry)
-          5. unfiltered               — restore the original snapshot
+          strong   : conversational -> filter -> keyword -> deterministic
+          standard : filter -> keyword -> deterministic
+          light    : keyword -> deterministic        (cheap output a SLM can do)
 
-        Each failed tier restores the pre-call snapshot so partial mutations
-        don't leak into the next attempt. Returns:
+        Routing weak models straight to the keyword rung stops them burning
+        minutes failing the heavy per-entry-scoring tiers they can't do. Each
+        rung falls through on any exception (timeout, parse error, context
+        overflow, hallucinated ids that fail id-validation) or an empty result,
+        restoring the pre-call snapshot so partial mutations don't leak. Every
+        ladder ends in an `unfiltered` fallthrough. Returns:
           {"tier":      <which tier won>,
-           "selection": [{id, reason}, ...] | None,   # tier 1 only
-           "keywords":  [str, ...] | None}            # tiers 3 / 4 only
+           "selection": [{id, reason}, ...] | None,   # conversational only
+           "keywords":  [str, ...] | None}            # keyword / deterministic only
         """
+        from llm_connector.conf import get_alias_strength
+
         snapshot = {k: list(v) for k, v in self.entries.items()}
 
         def restore() -> None:
             self.entries = {k: list(v) for k, v in snapshot.items()}
 
-        try:
-            selection = self.ai_conversational_tailor(job_text, llm=llm)
-            if any(self.entries.values()):
-                return {
-                    "tier": "conversational",
-                    "selection": selection,
-                    "keywords": None,
-                }
-        except Exception:
-            logger.warning(
-                "ai_tailor_with_fallback: ai_conversational_tailor failed",
-                exc_info=True,
-            )
-        restore()
+        def tier_conversational():
+            try:
+                selection = self.ai_conversational_tailor(job_text, llm=llm)
+                if any(self.entries.values()):
+                    return {
+                        "tier": "conversational",
+                        "selection": selection,
+                        "keywords": None,
+                    }
+            except Exception:
+                logger.warning(
+                    "ai_tailor_with_fallback: ai_conversational_tailor failed",
+                    exc_info=True,
+                )
+            restore()
+            return None
 
-        try:
-            self.ai_filter_entries(job_text, threshold=threshold, llm=llm)
-            if any(self.entries.values()):
-                return {"tier": "filter", "selection": None, "keywords": None}
-        except Exception:
-            logger.warning(
-                "ai_tailor_with_fallback: ai_filter_entries failed", exc_info=True
-            )
-        restore()
+        def tier_filter():
+            try:
+                self.ai_filter_entries(job_text, threshold=threshold, llm=llm)
+                if any(self.entries.values()):
+                    return {"tier": "filter", "selection": None, "keywords": None}
+            except Exception:
+                logger.warning(
+                    "ai_tailor_with_fallback: ai_filter_entries failed", exc_info=True
+                )
+            restore()
+            return None
 
-        try:
-            keywords = self.ai_keyword_filter(job_text, llm=llm)
-            if any(self.entries.values()):
-                return {"tier": "keyword", "selection": None, "keywords": keywords}
-        except Exception:
-            logger.warning(
-                "ai_tailor_with_fallback: ai_keyword_filter failed", exc_info=True
-            )
-        restore()
+        def tier_keyword():
+            try:
+                keywords = self.ai_keyword_filter(job_text, llm=llm)
+                if any(self.entries.values()):
+                    return {"tier": "keyword", "selection": None, "keywords": keywords}
+            except Exception:
+                logger.warning(
+                    "ai_tailor_with_fallback: ai_keyword_filter failed", exc_info=True
+                )
+            restore()
+            return None
 
-        try:
-            keywords = self.deterministic_filter(job_text, language=language)
-            if any(self.entries.values()):
-                return {
-                    "tier": "deterministic",
-                    "selection": None,
-                    "keywords": keywords,
-                }
-        except Exception:
-            logger.warning(
-                "ai_tailor_with_fallback: deterministic_filter failed", exc_info=True
-            )
-        restore()
+        def tier_deterministic():
+            try:
+                keywords = self.deterministic_filter(job_text, language=language)
+                if any(self.entries.values()):
+                    return {
+                        "tier": "deterministic",
+                        "selection": None,
+                        "keywords": keywords,
+                    }
+            except Exception:
+                logger.warning(
+                    "ai_tailor_with_fallback: deterministic_filter failed",
+                    exc_info=True,
+                )
+            restore()
+            return None
+
+        ladders = {
+            "strong": [tier_conversational, tier_filter, tier_keyword, tier_deterministic],
+            "standard": [tier_filter, tier_keyword, tier_deterministic],
+            "light": [tier_keyword, tier_deterministic],
+        }
+        strength = get_alias_strength(llm, user=self.user)
+        ladder = ladders.get(strength, ladders["strong"])
+        logger.debug(
+            "ai_tailor_with_fallback: strength=%s (%d tiers)", strength, len(ladder)
+        )
+
+        for tier in ladder:
+            result = tier()
+            if result is not None:
+                return result
 
         logger.info(
             "ai_tailor_with_fallback: every tier filtered too strictly — returning unfiltered CV"

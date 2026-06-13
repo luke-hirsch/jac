@@ -11,7 +11,12 @@ import llm_connector
 from llm_connector import complete, get_client, stream
 from llm_connector.base import LLMAdapter
 from llm_connector.client import LLMClient, _normalise_messages
-from llm_connector.conf import get_alias_config, get_llm_settings, logging_enabled
+from llm_connector.conf import (
+    get_alias_config,
+    get_alias_strength,
+    get_llm_settings,
+    logging_enabled,
+)
 from llm_connector.crypto import _fernet, decrypt, encrypt
 from llm_connector.models import LLMConfig, LLMRequestLog
 from llm_connector.registry import _registry, get_adapter_class, register
@@ -95,6 +100,27 @@ class ConfTests(TestCase):
     def test_alias_without_provider_raises(self):
         with self.assertRaises(ImproperlyConfigured):
             get_alias_config("broken")
+
+    @override_settings(
+        LLM={"default": {"provider": "fake", "model": "fake-1", "strength": "light"}}
+    )
+    def test_get_alias_strength_reads_config(self):
+        self.assertEqual(get_alias_strength("default"), "light")
+
+    @override_settings(LLM=FAKE_LLM)
+    def test_get_alias_strength_defaults_to_strong_when_unset(self):
+        self.assertEqual(get_alias_strength("default"), "strong")
+
+    @override_settings(
+        LLM={"default": {"provider": "fake", "model": "fake-1", "strength": "bogus"}}
+    )
+    def test_get_alias_strength_rejects_unknown_value(self):
+        self.assertEqual(get_alias_strength("default"), "strong")
+
+    @override_settings(LLM=FAKE_LLM)
+    def test_get_alias_strength_missing_alias_is_strong(self):
+        # A broken/missing config must not crash the pipeline — default strong.
+        self.assertEqual(get_alias_strength("nope"), "strong")
 
     @override_settings(LLM_LOGGING=True)
     def test_logging_enabled_true(self):

@@ -39,7 +39,15 @@ class CustomHTTPAdapter(LLMAdapter):
         self._timeout = config.get("timeout", 120)
         # Any unrecognised config keys are forwarded verbatim to the API payload.
         # Use this for provider-specific flags, e.g. think: false for Qwen3 models.
-        _known = {"provider", "url", "model", "api_key", "max_tokens", "timeout"}
+        _known = {
+            "provider",
+            "url",
+            "model",
+            "api_key",
+            "max_tokens",
+            "timeout",
+            "strength",  # pipeline-only capability hint; not an API param
+        }
         self._extra_params = {k: v for k, v in config.items() if k not in _known}
 
     def _headers(self) -> dict:

@@ -1,26 +1,180 @@
-"""JAC-specific LLM prompt wrappers. All calls go through llm_connector."""
+"""JAC-specific LLM prompt wrappers. All calls go through llm_connector.
 
-import json
+The wire format is deliberately **line-oriented plain text, never JSON**. Small
+local models mangle JSON envelopes (trailing commas, stray braces, unterminated
+strings); a line protocol can't hit those failure modes. Each output row is
+self-contained and id-first, so a mangled row is independently skippable and a
+garbled reason never costs us the pick. The pipeline only ever needs the entry's
+opaque `type:pk` id echoed back — it re-hydrates everything else from the DB — so
+there is nothing JSON-shaped to carry.
+"""
+
 import re
 
 from llm_connector import complete
 
 
-_JSON_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+# A line that is just a code fence (``` or ```lang) — models sometimes wrap
+# plain-text output in one. Stripped wherever it appears, not only at the edges.
+_FENCE_LINE = re.compile(r"^```[A-Za-z0-9]*$")
+# Leading bullet / numbered-list marker on a line.
+_LIST_MARKER = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
 
 
-def _parse_json(raw: str, context: str):
-    """Strip optional ```json fences and parse. Raise with the raw response on failure."""
-    stripped = raw.strip()
-    match = _JSON_FENCE.match(stripped)
-    if match:
-        stripped = match.group(1)
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"{context}: LLM returned invalid JSON. Raw response:\n{raw}"
-        ) from exc
+def _clean_lines(raw: str) -> list[str]:
+    """Split a raw completion into non-empty, stripped lines, dropping fence lines.
+    No other normalisation — callers handle markers / delimiters themselves."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or _FENCE_LINE.match(s):
+            continue
+        out.append(s)
+    return out
+
+
+def _strip_marker(line: str) -> str:
+    """Drop a leading `- ` / `* ` / `1. ` list marker, if any."""
+    return _LIST_MARKER.sub("", line).strip()
+
+
+def _parse_keyword_lines(raw: str) -> list[str]:
+    """One keyword per line → ordered, de-duplicated list. Surface form preserved
+    (downstream does substring matching, so casing/affixes matter)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in _clean_lines(raw):
+        kw = _strip_marker(line)
+        if kw and kw not in seen:
+            seen.add(kw)
+            out.append(kw)
+    return out
+
+
+def _parse_scored_lines(raw: str) -> list[dict]:
+    """`id | score | reason` rows → [{"id", "score", "reason"}, ...].
+
+    id-first and tolerant: a row with a junk/absent score still yields the pick
+    (score defaults 0.0), and a reason may itself contain `|`. Rows with no `|`
+    or an empty id are skipped — that drops any stray prose the model emits."""
+    out: list[dict] = []
+    for line in _clean_lines(raw):
+        line = _strip_marker(line)
+        if "|" not in line:
+            continue
+        parts = line.split("|", 2)
+        sid = parts[0].strip()
+        if not sid:
+            continue
+        try:
+            score = float(parts[1].strip())
+        except (IndexError, ValueError):
+            score = 0.0
+        reason = parts[2].strip() if len(parts) > 2 else ""
+        out.append({"id": sid, "score": score, "reason": reason})
+    return out
+
+
+def _parse_selection_lines(raw: str) -> list[dict]:
+    """`id | reason` rows → [{"id", "reason"}, ...] in order. A bare id with no
+    `|` is accepted (reason ""); rows with an empty id are skipped."""
+    out: list[dict] = []
+    for line in _clean_lines(raw):
+        line = _strip_marker(line)
+        parts = line.split("|", 1)
+        sid = parts[0].strip()
+        if not sid:
+            continue
+        reason = parts[1].strip() if len(parts) > 1 else ""
+        out.append({"id": sid, "reason": reason})
+    return out
+
+
+# analyze_job's labeled-block contract. Header keyword -> result key.
+_ANALYSIS_HEADERS = {
+    "ROLE": "role_title",
+    "SENIORITY": "seniority",
+    "MUST_HAVE": "must_have",
+    "NICE_TO_HAVE": "nice_to_have",
+    "DOMAINS": "domains",
+    "SOFT_SKILLS": "soft_skills",
+    "COMPANY_SIGNALS": "company_signals",
+    "SUMMARY": "summary",
+}
+_ANALYSIS_SCALARS = {"role_title", "seniority", "summary"}
+
+
+def _empty_analysis() -> dict:
+    return {
+        "role_title": "",
+        "seniority": "",
+        "must_have": [],
+        "nice_to_have": [],
+        "domains": [],
+        "soft_skills": [],
+        "company_signals": [],
+        "summary": "",
+    }
+
+
+def _parse_analysis_block(raw: str) -> dict:
+    """Parse the analyze_job labeled block into a dict. Tolerant: unknown lines
+    are ignored, every key is always present (scalars '', lists []). List headers
+    accept inline comma items and/or following `- item` bullet lines."""
+    result = _empty_analysis()
+    current_list: str | None = None
+    for line in _clean_lines(raw):
+        header, sep, rest = line.partition(":")
+        key = (
+            _ANALYSIS_HEADERS.get(header.strip().upper().replace(" ", "_"))
+            if sep
+            else None
+        )
+        if key:
+            if key in _ANALYSIS_SCALARS:
+                result[key] = rest.strip()
+                current_list = None
+            else:
+                current_list = key
+                inline = rest.strip()
+                if inline:
+                    result[key].extend(
+                        p.strip() for p in inline.split(",") if p.strip()
+                    )
+            continue
+        if current_list:
+            item = _strip_marker(line)
+            if item:
+                result[current_list].append(item)
+    return result
+
+
+def _entries_block(entries: list[dict]) -> str:
+    """Render entries as compact `id | text` lines (not JSON): ~30-40% fewer
+    tokens and easier for small models to read. The id leads each line so the
+    model can echo it verbatim in its output."""
+    return "\n".join(f"{e.get('id')} | {e.get('text', '')}" for e in entries)
+
+
+def _analysis_block(analysis: dict) -> str:
+    """Render an analysis dict as the labeled block — the inverse of
+    _parse_analysis_block — so we feed the next prompt plain text, not JSON."""
+    lines = [
+        f"ROLE: {analysis.get('role_title', '')}",
+        f"SENIORITY: {analysis.get('seniority', '')}",
+    ]
+    for key, header in (
+        ("must_have", "MUST_HAVE"),
+        ("nice_to_have", "NICE_TO_HAVE"),
+        ("domains", "DOMAINS"),
+        ("soft_skills", "SOFT_SKILLS"),
+        ("company_signals", "COMPANY_SIGNALS"),
+    ):
+        lines.append(f"{header}:")
+        for item in analysis.get(key, []) or []:
+            lines.append(f"- {item}")
+    lines.append(f"SUMMARY: {analysis.get('summary', '')}")
+    return "\n".join(lines)
 
 
 # ---------- Non-agentic primitives (single LLM call each) ----------
@@ -34,7 +188,7 @@ def extract_job_keywords(job_text: str, llm: str = "default", user=None) -> list
     """
     system = (
         "You extract a broad set of keywords from a job posting for substring "
-        "matching against a CV. Return ONE JSON array of short strings.\n"
+        "matching against a CV. Return them ONE PER LINE.\n"
         "\n"
         "RULES:\n"
         "1. LANGUAGE: Return keywords in the SAME LANGUAGE as the posting. "
@@ -68,9 +222,10 @@ def extract_job_keywords(job_text: str, llm: str = "default", user=None) -> list
         "'Stakeholder', 'Coordination', 'Vertraulichkeit'.\n"
         "       * sales / customer-success: also include 'Pipeline', 'CRM', "
         "'Account', 'Onboarding', 'Renewal'.\n"
-        "4. NO duplicates, no stopwords, no sentences, no prose, no markdown.\n"
+        "4. NO duplicates, no stopwords, no sentences, no prose, no markdown, "
+        "no numbering, no bullets, no JSON.\n"
         "\n"
-        "Output: a single JSON array of strings. Nothing else."
+        "Output: one keyword or short phrase per line. Nothing else."
     )
     raw = complete(
         messages=[
@@ -80,10 +235,7 @@ def extract_job_keywords(job_text: str, llm: str = "default", user=None) -> list
         alias=llm,
         user=user,
     )
-    parsed = _parse_json(raw, context="extract_job_keywords")
-    if not isinstance(parsed, list):
-        raise ValueError(f"extract_job_keywords: expected list, got {type(parsed)}")
-    return [str(k) for k in parsed]
+    return _parse_keyword_lines(raw)
 
 
 def score_entries_for_job(
@@ -100,8 +252,12 @@ def score_entries_for_job(
     system = (
         "You score CV entries by relevance to a job posting.\n"
         "\n"
-        "For each entry return: id (echo verbatim), score (float 0.0–1.0), "
-        "reason (one short sentence).\n"
+        "OUTPUT FORMAT: one line per entry, exactly:\n"
+        "    id | score | reason\n"
+        "where id is the entry id echoed VERBATIM, score is a float 0.0–1.0, "
+        "and reason is one short sentence. Separate the three fields with ' | '. "
+        "One entry per line, same order as the input. No header line, no JSON, "
+        "no markdown, no bullets, no blank lines.\n"
         "\n"
         "SCORING RUBRIC (use the full range — do not cluster at the bottom). "
         "The role may be technical, creative, administrative, operational, "
@@ -126,12 +282,12 @@ def score_entries_for_job(
         "and belongs in the 0.5–0.7 band. The posting and CV may be in "
         "different languages — match on meaning, not surface tokens.\n"
         "\n"
-        "Return a JSON array with one object per input entry, in the same order. "
-        "No prose, no markdown."
+        "Return one `id | score | reason` line per input entry, in the same "
+        "order. No prose around the lines, no JSON, no markdown."
     )
     user_msg = (
         f"JOB POSTING:\n{job_text}\n\n"
-        f"CV ENTRIES (JSON):\n{json.dumps(entries, ensure_ascii=False)}"
+        f"CV ENTRIES (one per line, `id | summary`):\n{_entries_block(entries)}"
     )
     raw = complete(
         messages=[
@@ -141,24 +297,31 @@ def score_entries_for_job(
         alias=llm,
         user=user,
     )
-    parsed = _parse_json(raw, context="score_entries_for_job")
-    if not isinstance(parsed, list):
-        raise ValueError(f"score_entries_for_job: expected list, got {type(parsed)}")
-    return parsed
+    return _parse_scored_lines(raw)
 
 
 def analyze_job(job_text: str, llm: str = "default", user=None) -> dict:
     """Structured analysis of a job posting."""
     system = (
-        "You analyze job postings. Return a single JSON object with these keys: "
-        "role_title (string), seniority (one of: junior, mid, senior, lead, principal), "
-        "must_have (array of strings — hard requirements), "
-        "nice_to_have (array of strings), "
-        "domains (array of strings — industry/business domains), "
-        "soft_skills (array of strings), "
-        "company_signals (array of strings — culture/values hints), "
-        "summary (string, 2-3 sentences). "
-        "No prose, no markdown."
+        "You analyze job postings. Return a LABELED PLAIN-TEXT BLOCK with these "
+        "lines and nothing else (no JSON, no markdown):\n"
+        "ROLE: <role title>\n"
+        "SENIORITY: <one of: junior, mid, senior, lead, principal>\n"
+        "MUST_HAVE:\n"
+        "- <hard requirement>\n"
+        "(one '- item' line per hard requirement)\n"
+        "NICE_TO_HAVE:\n"
+        "- <nice to have>\n"
+        "DOMAINS:\n"
+        "- <industry/business domain>\n"
+        "SOFT_SKILLS:\n"
+        "- <soft skill>\n"
+        "COMPANY_SIGNALS:\n"
+        "- <culture/values hint>\n"
+        "SUMMARY: <2-3 sentences>\n"
+        "\n"
+        "Keep the header keywords exactly as shown. Put each list item on its "
+        "own '- ' line. No JSON, no markdown fences, no extra commentary."
     )
     raw = complete(
         messages=[
@@ -168,10 +331,7 @@ def analyze_job(job_text: str, llm: str = "default", user=None) -> dict:
         alias=llm,
         user=user,
     )
-    parsed = _parse_json(raw, context="analyze_job")
-    if not isinstance(parsed, dict):
-        raise ValueError(f"analyze_job: expected object, got {type(parsed)}")
-    return parsed
+    return _parse_analysis_block(raw)
 
 
 def score_entries_with_analysis(
@@ -188,10 +348,14 @@ def score_entries_with_analysis(
         "seniority, domains), and a list of CV entries (skills, jobs, "
         "education, certifications, projects, languages).\n"
         "\n"
-        "For each entry return: id (echo verbatim), score (float 0.0–1.0), "
-        "reason (one sentence citing what the entry contributes — a "
+        "OUTPUT FORMAT: one line per entry, exactly:\n"
+        "    id | score | reason\n"
+        "where id is the entry id echoed VERBATIM, score is a float 0.0–1.0, "
+        "and reason is one sentence citing what the entry contributes — a "
         "requirement it addresses directly OR a transferable signal it "
-        "provides).\n"
+        "provides. Separate the three fields with ' | '. One entry per line, "
+        "same order as the input. No header line, no JSON, no markdown, no "
+        "bullets, no blank lines.\n"
         "\n"
         "SCORING RUBRIC (use the full range — do not cluster at the bottom). "
         "The role may be technical, creative, administrative, operational, "
@@ -242,13 +406,13 @@ def score_entries_with_analysis(
         "- The job posting and CV may be in different languages. Match on "
         "meaning, not surface tokens.\n"
         "\n"
-        "Return a JSON array with one object per input entry, in the same "
-        "order. No prose, no markdown."
+        "Return one `id | score | reason` line per input entry, in the same "
+        "order. No prose around the lines, no JSON, no markdown."
     )
     user_msg = (
         f"JOB POSTING:\n{job_text}\n\n"
-        f"JOB ANALYSIS:\n{json.dumps(analysis, ensure_ascii=False)}\n\n"
-        f"CV ENTRIES (JSON):\n{json.dumps(entries, ensure_ascii=False)}"
+        f"JOB ANALYSIS:\n{_analysis_block(analysis)}\n\n"
+        f"CV ENTRIES (one per line, `id | summary`):\n{_entries_block(entries)}"
     )
     raw = complete(
         messages=[
@@ -258,12 +422,7 @@ def score_entries_with_analysis(
         alias=llm,
         user=user,
     )
-    parsed = _parse_json(raw, context="score_entries_with_analysis")
-    if not isinstance(parsed, list):
-        raise ValueError(
-            f"score_entries_with_analysis: expected list, got {type(parsed)}"
-        )
-    return parsed
+    return _parse_scored_lines(raw)
 
 
 # ---------- Reasoning-grade prompt (loose, selection contract) ----------
@@ -295,9 +454,10 @@ def tailor_cv_conversationally(
         "You are helping a candidate tailor their CV to a specific job posting. "
         "You will see two things:\n"
         "  1. The job posting.\n"
-        "  2. A JSON list of every entry in the candidate's career database "
-        "(skills, jobs, education, certifications, projects, languages), each "
-        "with an opaque id and a short text summary.\n"
+        "  2. A list of every entry in the candidate's career database "
+        "(skills, jobs, education, certifications, projects, languages), one "
+        "per line as `id | summary`, each with an opaque id and a short text "
+        "summary.\n"
         "\n"
         "Decide which entries actually belong on the CV for THIS posting. "
         "The role may be technical, creative, administrative, operational, "
@@ -309,14 +469,16 @@ def tailor_cv_conversationally(
         "exposure. Drop entries that would be noise. Order what you keep so "
         "the most compelling recommendation comes first.\n"
         "\n"
-        "Return a single JSON array. Each item: "
-        "{\"id\": \"<echo the input id verbatim>\", "
-        "\"reason\": \"<one short sentence on why this entry strengthens the application>\"}. "
-        "No scores, no prose around the array, no markdown fences."
+        "OUTPUT FORMAT: one line per entry you keep, exactly:\n"
+        "    id | reason\n"
+        "where id is the input id echoed VERBATIM and reason is one short "
+        "sentence on why this entry strengthens the application. Separate the "
+        "two fields with ' | '. Most compelling first. No scores, no JSON, no "
+        "markdown, no bullets, no prose around the lines."
     )
     user_msg = (
         f"JOB POSTING:\n{job_text}\n\n"
-        f"CAREER DATABASE (JSON):\n{json.dumps(entries, ensure_ascii=False)}"
+        f"CAREER DATABASE (one per line, `id | summary`):\n{_entries_block(entries)}"
     )
     raw = complete(
         messages=[
@@ -326,18 +488,12 @@ def tailor_cv_conversationally(
         alias=llm,
         user=user,
     )
-    parsed = _parse_json(raw, context="tailor_cv_conversationally")
-    if not isinstance(parsed, list):
-        raise ValueError(
-            f"tailor_cv_conversationally: expected list, got {type(parsed)}"
-        )
+    parsed = _parse_selection_lines(raw)
 
     valid_ids = {e["id"] for e in entries if isinstance(e, dict) and "id" in e}
     cleaned: list[dict] = []
     seen: set[str] = set()
     for item in parsed:
-        if not isinstance(item, dict):
-            continue
         sid = item.get("id")
         if not isinstance(sid, str) or sid not in valid_ids or sid in seen:
             continue

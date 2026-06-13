@@ -70,5 +70,25 @@ def get_alias_config(alias: str = "default", user=None) -> dict:
     return cfg.to_config_dict()
 
 
+_STRENGTHS = {"light", "standard", "strong"}
+
+
+def get_alias_strength(alias: str = "default", user=None) -> str:
+    """Pipeline capability hint for an alias: 'light' | 'standard' | 'strong'.
+
+    Read from the resolved config dict (LLMConfig.extra for per-user rows, the
+    settings.LLM dict for the default). Defaults to 'strong' when unset, which
+    preserves the full ladder for any alias you don't explicitly tag — so the
+    paid configs and existing tests keep their current behaviour with no change.
+    Weak local models get opted *down* to 'light'.
+    """
+    try:
+        config = get_alias_config(alias, user=user)
+    except Exception:  # noqa: BLE001 — missing/broken config -> safe default
+        return "strong"
+    strength = config.get("strength", "strong")
+    return strength if strength in _STRENGTHS else "strong"
+
+
 def logging_enabled() -> bool:
     return bool(getattr(settings, "LLM_LOGGING", False))

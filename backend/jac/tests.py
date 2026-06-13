@@ -595,6 +595,10 @@ class CVAIMethodsTests(TestCase):
 # ---------------------------------------------------------------------------
 
 
+# Pin the full ladder regardless of the default config's `strength` (now
+# "light") — these tests exercise fall-through from the top. The light/standard
+# ladders are covered by CVTailorStrengthTests below.
+@patch("llm_connector.conf.get_alias_strength", return_value="strong")
 class CVTailorWithFallbackTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -614,7 +618,7 @@ class CVTailorWithFallbackTests(TestCase):
         )
 
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_tier1_conversational_happy_path(self, mock_tailor):
+    def test_tier1_conversational_happy_path(self, mock_tailor, mock_strength):
         mock_tailor.return_value = [
             {"id": f"skill:{self.skill_py.pk}", "reason": "direct"},
             {"id": f"job:{self.job.pk}", "reason": "direct"},
@@ -629,7 +633,9 @@ class CVTailorWithFallbackTests(TestCase):
 
     @patch("jac.cv.jac_llm.score_entries_for_job")
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_tier1_failure_falls_through_to_filter(self, mock_tailor, mock_score):
+    def test_tier1_failure_falls_through_to_filter(
+        self, mock_tailor, mock_score, mock_strength
+    ):
         mock_tailor.side_effect = TimeoutError("model timed out")
         mock_score.return_value = [
             {"id": f"skill:{self.skill_py.pk}", "score": 0.9},
@@ -647,7 +653,9 @@ class CVTailorWithFallbackTests(TestCase):
     @patch("jac.cv.jac_llm.extract_job_keywords")
     @patch("jac.cv.jac_llm.score_entries_for_job")
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_falls_through_to_keyword_tier(self, mock_tailor, mock_score, mock_extract):
+    def test_falls_through_to_keyword_tier(
+        self, mock_tailor, mock_score, mock_extract, mock_strength
+    ):
         mock_tailor.side_effect = RuntimeError("boom")
         mock_score.side_effect = RuntimeError("boom")
         mock_extract.return_value = ["python"]
@@ -660,7 +668,7 @@ class CVTailorWithFallbackTests(TestCase):
     @patch("jac.cv.jac_llm.score_entries_for_job")
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
     def test_falls_through_to_deterministic_tier(
-        self, mock_tailor, mock_score, mock_extract
+        self, mock_tailor, mock_score, mock_extract, mock_strength
     ):
         mock_tailor.side_effect = RuntimeError("boom")
         mock_score.side_effect = RuntimeError("boom")
@@ -679,7 +687,7 @@ class CVTailorWithFallbackTests(TestCase):
     @patch("jac.cv.jac_llm.score_entries_for_job")
     @patch("jac.cv.jac_llm.tailor_cv_conversationally")
     def test_all_tiers_fail_returns_unfiltered_snapshot(
-        self, mock_tailor, mock_score, mock_extract
+        self, mock_tailor, mock_score, mock_extract, mock_strength
     ):
         mock_tailor.side_effect = RuntimeError("boom")
         mock_score.side_effect = RuntimeError("boom")
@@ -695,117 +703,186 @@ class CVTailorWithFallbackTests(TestCase):
         self.assertEqual(before_counts, after_counts)
 
 
+class CVTailorStrengthTests(TestCase):
+    """The `strength` hint picks the ladder: weak models skip the heavy tiers."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="lara")
+        cls.skill_py = Skill.objects.create(
+            user=cls.user, name="Python", description="Backend automation."
+        )
+        cls.job = Job.objects.create(
+            user=cls.user,
+            title="Backend Engineer",
+            company="Acme",
+            started=date(2022, 1, 1),
+            description="Python services.",
+        )
+
+    @patch("llm_connector.conf.get_alias_strength", return_value="light")
+    @patch("jac.cv.jac_llm.extract_job_keywords", return_value=["python"])
+    @patch("jac.cv.jac_llm.score_entries_for_job")
+    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
+    def test_light_strength_routes_straight_to_keyword(
+        self, mock_tailor, mock_score, mock_extract, mock_strength
+    ):
+        cv = CV(user_pk=self.user.pk)
+        result = cv.ai_tailor_with_fallback("python backend engineer")
+        self.assertEqual(result["tier"], "keyword")
+        # Light ladder = [keyword, deterministic]: the expensive tiers never run.
+        mock_tailor.assert_not_called()
+        mock_score.assert_not_called()
+
+    @patch("llm_connector.conf.get_alias_strength", return_value="standard")
+    @patch("jac.cv.jac_llm.score_entries_for_job")
+    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
+    def test_standard_strength_skips_conversational(
+        self, mock_tailor, mock_score, mock_strength
+    ):
+        mock_score.return_value = [
+            {"id": f"skill:{self.skill_py.pk}", "score": 0.9},
+            {"id": f"job:{self.job.pk}", "score": 0.8},
+        ]
+        cv = CV(user_pk=self.user.pk)
+        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
+            result = cv.ai_tailor_with_fallback("posting", threshold=0.4)
+        self.assertEqual(result["tier"], "filter")
+        # Standard ladder = [filter, keyword, deterministic]: no conversational.
+        mock_tailor.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
-# jac.llm wrappers — JSON parsing + mocked complete()
+# jac.llm wrappers — line-protocol parsing + mocked complete()
 # ---------------------------------------------------------------------------
 
 
-class ParseJsonTests(TestCase):
-    def test_plain_json_parses(self):
-        self.assertEqual(jac_llm._parse_json('{"a": 1}', "ctx"), {"a": 1})
+class LineParserTests(TestCase):
+    def test_keyword_lines_dedupe_and_strip_markers(self):
+        raw = "- Python\nDjango\n1. REST\nPython"
+        self.assertEqual(
+            jac_llm._parse_keyword_lines(raw), ["Python", "Django", "REST"]
+        )
 
-    def test_strips_json_fence(self):
-        raw = '```json\n{"a": 1}\n```'
-        self.assertEqual(jac_llm._parse_json(raw, "ctx"), {"a": 1})
+    def test_keyword_lines_strip_code_fence(self):
+        raw = "```\nPython\nDjango\n```"
+        self.assertEqual(jac_llm._parse_keyword_lines(raw), ["Python", "Django"])
 
-    def test_strips_bare_fence(self):
-        raw = "```\n[1, 2, 3]\n```"
-        self.assertEqual(jac_llm._parse_json(raw, "ctx"), [1, 2, 3])
+    def test_scored_lines_parse_and_skip_garbage(self):
+        # A junk line with no '|' between two good rows is dropped, not fatal.
+        raw = "skill:1 | 0.9 | direct\nGARBAGE NO PIPE\njob:2 | 0.5 | transferable"
+        self.assertEqual(
+            jac_llm._parse_scored_lines(raw),
+            [
+                {"id": "skill:1", "score": 0.9, "reason": "direct"},
+                {"id": "job:2", "score": 0.5, "reason": "transferable"},
+            ],
+        )
 
-    def test_invalid_json_raises_with_context(self):
-        with self.assertRaises(ValueError) as cm:
-            jac_llm._parse_json("not json", "my-context")
-        self.assertIn("my-context", str(cm.exception))
+    def test_scored_lines_default_score_and_pipe_in_reason(self):
+        # Non-numeric score -> 0.0; a '|' inside the reason is preserved.
+        raw = "skill:1 | notanumber | a | b"
+        self.assertEqual(
+            jac_llm._parse_scored_lines(raw),
+            [{"id": "skill:1", "score": 0.0, "reason": "a | b"}],
+        )
+
+    def test_selection_lines_bare_id_and_reason(self):
+        raw = "skill:1 | core skill\njob:2"
+        self.assertEqual(
+            jac_llm._parse_selection_lines(raw),
+            [
+                {"id": "skill:1", "reason": "core skill"},
+                {"id": "job:2", "reason": ""},
+            ],
+        )
+
+    def test_analysis_block_parses_headers_and_bullets(self):
+        raw = (
+            "ROLE: Backend Engineer\n"
+            "SENIORITY: mid\n"
+            "MUST_HAVE:\n- Python\n- Django\n"
+            "DOMAINS: fintech, payments\n"
+            "SUMMARY: Builds services. Ships fast."
+        )
+        out = jac_llm._parse_analysis_block(raw)
+        self.assertEqual(out["role_title"], "Backend Engineer")
+        self.assertEqual(out["seniority"], "mid")
+        self.assertEqual(out["must_have"], ["Python", "Django"])
+        self.assertEqual(out["domains"], ["fintech", "payments"])
+        self.assertEqual(out["summary"], "Builds services. Ships fast.")
+        # Every key is always present, even when the model omits a section.
+        self.assertEqual(out["nice_to_have"], [])
 
 
 class LLMWrappersTests(TestCase):
     @patch("jac.llm.complete")
-    def test_extract_job_keywords_parses_array(self, mock_complete):
-        mock_complete.return_value = '["Python", "Django"]'
+    def test_extract_job_keywords_parses_lines(self, mock_complete):
+        mock_complete.return_value = "Python\nDjango"
         out = jac_llm.extract_job_keywords("posting")
         self.assertEqual(out, ["Python", "Django"])
 
     @patch("jac.llm.complete")
     def test_extract_job_keywords_uses_default_alias(self, mock_complete):
-        mock_complete.return_value = "[]"
+        mock_complete.return_value = ""
         jac_llm.extract_job_keywords("posting")
         self.assertEqual(mock_complete.call_args.kwargs["alias"], "default")
 
     @patch("jac.llm.complete")
     def test_extract_job_keywords_forwards_user(self, mock_complete):
-        mock_complete.return_value = "[]"
+        mock_complete.return_value = ""
         jac_llm.extract_job_keywords("posting", user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
 
     @patch("jac.llm.complete")
     def test_score_entries_for_job_forwards_user(self, mock_complete):
-        mock_complete.return_value = "[]"
+        mock_complete.return_value = ""
         jac_llm.score_entries_for_job("posting", [], user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
 
     @patch("jac.llm.complete")
     def test_analyze_job_forwards_user(self, mock_complete):
-        mock_complete.return_value = "{}"
+        mock_complete.return_value = ""
         jac_llm.analyze_job("posting", user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
 
     @patch("jac.llm.complete")
     def test_score_entries_with_analysis_forwards_user(self, mock_complete):
-        mock_complete.return_value = "[]"
+        mock_complete.return_value = ""
         jac_llm.score_entries_with_analysis("posting", {}, [], user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
 
     @patch("jac.llm.complete")
-    def test_extract_job_keywords_rejects_non_list(self, mock_complete):
-        mock_complete.return_value = '{"not": "a list"}'
-        with self.assertRaises(ValueError):
-            jac_llm.extract_job_keywords("posting")
-
-    @patch("jac.llm.complete")
-    def test_extract_job_keywords_coerces_items_to_str(self, mock_complete):
-        mock_complete.return_value = "[1, 2, 3]"
+    def test_extract_job_keywords_returns_surface_form_per_line(self, mock_complete):
+        mock_complete.return_value = "1\n2\n3"
         self.assertEqual(jac_llm.extract_job_keywords("posting"), ["1", "2", "3"])
 
     @patch("jac.llm.complete")
     def test_score_entries_for_job_returns_parsed(self, mock_complete):
-        mock_complete.return_value = '[{"id": "skill:1", "score": 0.9}]'
+        mock_complete.return_value = "skill:1 | 0.9 | strong fit"
         out = jac_llm.score_entries_for_job(
             "posting", [{"id": "skill:1", "type": "skill", "text": "x"}]
         )
-        self.assertEqual(out, [{"id": "skill:1", "score": 0.9}])
-
-    @patch("jac.llm.complete")
-    def test_score_entries_for_job_rejects_non_list(self, mock_complete):
-        mock_complete.return_value = '{"oops": true}'
-        with self.assertRaises(ValueError):
-            jac_llm.score_entries_for_job("posting", [])
+        self.assertEqual(out, [{"id": "skill:1", "score": 0.9, "reason": "strong fit"}])
 
     @patch("jac.llm.complete")
     def test_analyze_job_returns_dict(self, mock_complete):
-        mock_complete.return_value = '{"role_title": "Engineer"}'
+        mock_complete.return_value = "ROLE: Engineer\nSENIORITY: mid"
         out = jac_llm.analyze_job("posting")
-        self.assertEqual(out, {"role_title": "Engineer"})
-
-    @patch("jac.llm.complete")
-    def test_analyze_job_rejects_non_dict(self, mock_complete):
-        mock_complete.return_value = "[]"
-        with self.assertRaises(ValueError):
-            jac_llm.analyze_job("posting")
+        self.assertEqual(out["role_title"], "Engineer")
+        self.assertEqual(out["seniority"], "mid")
 
     @patch("jac.llm.complete")
     def test_score_entries_with_analysis_returns_parsed(self, mock_complete):
-        mock_complete.return_value = '[{"id": "job:1", "score": 0.7}]'
+        mock_complete.return_value = "job:1 | 0.7 | direct"
         out = jac_llm.score_entries_with_analysis(
             "posting", {"must_have": ["x"]}, [{"id": "job:1"}]
         )
-        self.assertEqual(out, [{"id": "job:1", "score": 0.7}])
+        self.assertEqual(out, [{"id": "job:1", "score": 0.7, "reason": "direct"}])
 
     @patch("jac.llm.complete")
     def test_tailor_cv_conversationally_returns_ranked_selection(self, mock_complete):
-        mock_complete.return_value = (
-            '[{"id": "skill:1", "reason": "core"}, '
-            ' {"id": "job:2", "reason": "direct"}]'
-        )
+        mock_complete.return_value = "skill:1 | core\njob:2 | direct"
         entries = [
             {"id": "skill:1", "type": "skill", "text": "Python"},
             {"id": "job:2", "type": "job", "text": "Backend Engineer at Acme"},
@@ -818,9 +895,7 @@ class LLMWrappersTests(TestCase):
     @patch("jac.llm.complete")
     def test_tailor_cv_conversationally_drops_hallucinated_ids(self, mock_complete):
         mock_complete.return_value = (
-            '[{"id": "skill:1", "reason": "real"}, '
-            ' {"id": "skill:999", "reason": "made up"}, '
-            ' {"id": "job:2", "reason": "real"}]'
+            "skill:1 | real\nskill:999 | made up\njob:2 | real"
         )
         entries = [
             {"id": "skill:1", "type": "skill", "text": "Python"},
@@ -832,7 +907,7 @@ class LLMWrappersTests(TestCase):
 
     @patch("jac.llm.complete")
     def test_tailor_cv_conversationally_raises_when_too_few_valid(self, mock_complete):
-        mock_complete.return_value = '[{"id": "skill:999", "reason": "made up"}]'
+        mock_complete.return_value = "skill:999 | made up"
         entries = [
             {"id": "skill:1", "type": "skill", "text": "Python"},
             {"id": "job:2", "type": "job", "text": "Backend"},
@@ -841,16 +916,19 @@ class LLMWrappersTests(TestCase):
             jac_llm.tailor_cv_conversationally("posting", entries)
 
     @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_rejects_non_list(self, mock_complete):
-        mock_complete.return_value = '{"not": "a list"}'
+    def test_tailor_cv_conversationally_raises_on_prose(self, mock_complete):
+        # Prose with no valid ids yields < 2 picks after id-validation -> raise.
+        mock_complete.return_value = "I cannot help with this request."
+        entries = [
+            {"id": "skill:1", "type": "skill", "text": "Python"},
+            {"id": "job:2", "type": "job", "text": "Backend"},
+        ]
         with self.assertRaises(ValueError):
-            jac_llm.tailor_cv_conversationally("posting", [])
+            jac_llm.tailor_cv_conversationally("posting", entries)
 
     @patch("jac.llm.complete")
     def test_tailor_cv_conversationally_forwards_user(self, mock_complete):
-        mock_complete.return_value = (
-            '[{"id": "a", "reason": "x"}, {"id": "b", "reason": "y"}]'
-        )
+        mock_complete.return_value = "a | x\nb | y"
         entries = [{"id": "a"}, {"id": "b"}]
         jac_llm.tailor_cv_conversationally("posting", entries, user=42)
         self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
