@@ -26,8 +26,6 @@ from django.core.exceptions import ImproperlyConfigured
 from ..base import LLMAdapter
 from ..registry import register
 
-# Config keys the adapter consumes directly; everything else is forwarded
-# verbatim at the top level of the request (rare — most extras belong in options).
 _KNOWN = {
     "provider",
     "url",
