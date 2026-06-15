@@ -7,9 +7,11 @@ _registry: dict[str, type[LLMAdapter]] = {}
 
 def register(name: str):
     """Class decorator that registers an LLMAdapter subclass under `name`."""
+
     def decorator(cls: type[LLMAdapter]):
         _registry[name] = cls
         return cls
+
     return decorator
 
 
@@ -40,7 +42,9 @@ def _load_builtin(provider: str):
         "openai": "llm_connector.providers.openai",
         "google": "llm_connector.providers.google",
         "custom": "llm_connector.providers.custom",
+        "ollama": "llm_connector.providers.ollama",
     }
     if provider in builtin:
         import importlib
+
         importlib.import_module(builtin[provider])

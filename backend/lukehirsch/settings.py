@@ -14,8 +14,9 @@ ALLOWED_HOSTS = [os.getenv("ALLOWED_HOST", "localhost")]
 SITE_ID = 1
 
 SESSION_COOKIE_SECURE = not DEBUG
-SESSION_COOKIE_HTTPONLY = True  # default, explicit is nice
+SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
+
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = "Lax"
 
@@ -35,7 +36,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # sites framework (required by allauth)
     "django.contrib.sites",
     # allauth
     "allauth",
@@ -173,18 +173,16 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 LLM = {
     "default": {
-        "provider": "custom",  # Ollama / any OpenAI-compat server
-        "url": os.getenv("OLLAMA_URL", "http://localhost:11434/v1"),
-        "model": "qwen3.5:0.8b",
-        "timeout": 300,  # SLMs are slow; the old 120 timed out mid-generation
-        "think": False,
-        # Pipeline capability hint (consumed by get_alias_strength, stripped
-        # from the HTTP payload by the custom adapter): route this small model
-        # straight to the keyword rung. No JSON-mode — the wire format is the
-        # line protocol in jac/llm.py, which JSON-mode would fight.
-        "strength": "light",
-    },
+        "provider": os.getenv("LLM_DEFAULT_PROVIDER", "ollama"),
+        "url": os.getenv("LLM_URL", "http://localhost:11434/v1"),
+        "model": os.getenv("LLM_MODEL", "llama3.2:1b"),
+        "embed_model": os.getenv("LLM_EMBED_MODEL", "wen3-embedding:0.6b"),
+        "timeout": os.getenv("LLM_TIMEOUT", 300),
+        "think": os.getenv("LLM_THINKING", False),
+        "strength": os.getenv("LLM_STRENGTH", "light"),
+    }
 }
+
 
 LLM_LOGGING = True
 
@@ -209,15 +207,10 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
     ],
-    # Default is AllowAny so the public spa (portfolio link) endpoints can be
-    # reached without auth. Every other viewset must set permission_classes
-    # explicitly — see e.g. jac.views.
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    # 100 keeps every realistic CV section on a single page; the frontend still
-    # renders page nav past this (kept in sync with PAGE_SIZE in paginated.ts).
     "PAGE_SIZE": 100,
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -239,30 +232,18 @@ ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_EMAIL_VERIFICATION_BY_CODE_ENABLED = True
-
-# Per-address harassment cap on password-reset requests. allauth's default
-# (20/m/ip,5/m/key) only blocks bursts; we add hour + day windows on the
-# email key so an attacker can't drip emails at a victim's address by
-# rotating IPs. Legit "I forgot my password" usage stays untouched —
-# nobody requests >5 resets per day for themselves.
 ACCOUNT_RATE_LIMITS = {
     "reset_password": "20/m/ip,5/m/key,3/h/key,5/d/key",
 }
 
-# Custom adapter dedupes 'account already exists' mails per address; the default
-# signup rate limit is IP-only and lets an attacker spam a victim by rotating IPs.
+# Custom adapter dedupes 'account already exists' mails per address;
 ACCOUNT_ADAPTER = "lukehirsch.adapter.HarassmentResistantAccountAdapter"
 
-# allauth headless — JSON API only, no template views
+# allauth headless
 HEADLESS_ONLY = True
 HEADLESS_FRONTEND_URLS = {
-    # password-reset email link points at React; React calls POST /_allauth/browser/v1/auth/password/reset
     "account_reset_password_from_key": FRONTEND_URL + "/auth/reset-password/{key}",
-    # used in the "no account found, sign up here" email allauth sends when a
-    # password-reset is requested for an unknown address (enumeration prevention)
     "account_signup": FRONTEND_URL + "/auth/signup",
-    # used in the "account already exists" email allauth sends when signup
-    # collides with an existing address
     "account_reset_password": FRONTEND_URL + "/auth/request-reset",
 }
 

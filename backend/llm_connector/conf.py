@@ -1,4 +1,5 @@
 import logging
+import re
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -26,9 +27,7 @@ def _settings_config(alias: str) -> dict:
         )
     config = llm[alias]
     if "provider" not in config:
-        raise ImproperlyConfigured(
-            f"LLM alias '{alias}' is missing a 'provider' key."
-        )
+        raise ImproperlyConfigured(f"LLM alias '{alias}' is missing a 'provider' key.")
     return config
 
 
@@ -64,30 +63,57 @@ def get_alias_config(alias: str = "default", user=None) -> dict:
     except LLMConfig.DoesNotExist:
         logger.warning(
             "No LLMConfig for user=%s alias=%r — falling back to settings.LLM[%r].",
-            getattr(user, "pk", user), alias, FALLBACK_ALIAS,
+            getattr(user, "pk", user),
+            alias,
+            FALLBACK_ALIAS,
         )
         return _global_fallback()
     return cfg.to_config_dict()
 
 
 _STRENGTHS = {"light", "standard", "strong"}
+# Parameter-size token in a model id, e.g. "0.8b" in "qwen3.5:0.8b" or "70b".
+_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b")
+# Cloud model names without a size token that still signal a small/fast tier.
+_SMALL_NAME_HINTS = ("haiku", "mini", "nano", "lite", "flash")
+
+
+def _autodetect_strength(provider: str, model: str) -> str:
+    """Best-effort capability guess from a model id, for aliases with no explicit
+    `strength`. Conservative: anything we can't positively identify as small ->
+    'strong' (the full ladder), so paid configs and existing tests keep their
+    behaviour. Only models we recognise as small get opted down.
+    """
+    name = (model or "").lower()
+    sizes = [float(m) for m in _SIZE_RE.findall(name)]
+    if sizes:
+        size = max(sizes)
+        if size <= 3:
+            return "light"
+        if size <= 14:
+            return "standard"
+        return "strong"
+    if any(hint in name for hint in _SMALL_NAME_HINTS):
+        return "standard"
+    return "strong"
 
 
 def get_alias_strength(alias: str = "default", user=None) -> str:
     """Pipeline capability hint for an alias: 'light' | 'standard' | 'strong'.
 
-    Read from the resolved config dict (LLMConfig.extra for per-user rows, the
-    settings.LLM dict for the default). Defaults to 'strong' when unset, which
-    preserves the full ladder for any alias you don't explicitly tag — so the
-    paid configs and existing tests keep their current behaviour with no change.
-    Weak local models get opted *down* to 'light'.
+    An explicit, valid `strength` in the resolved config (LLMConfig.extra for
+    per-user rows, the settings.LLM dict for the default) always wins. Otherwise
+    auto-detect from the model id. Unknown -> 'strong' (full ladder), preserving
+    prior behaviour for anything we don't recognise.
     """
     try:
         config = get_alias_config(alias, user=user)
     except Exception:  # noqa: BLE001 — missing/broken config -> safe default
         return "strong"
-    strength = config.get("strength", "strong")
-    return strength if strength in _STRENGTHS else "strong"
+    strength = config.get("strength")
+    if strength in _STRENGTHS:
+        return strength
+    return _autodetect_strength(config.get("provider", ""), config.get("model", ""))
 
 
 def logging_enabled() -> bool:

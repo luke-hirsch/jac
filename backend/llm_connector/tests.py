@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from io import StringIO
 from unittest.mock import MagicMock, patch
@@ -78,6 +79,32 @@ class NormaliseMessagesTests(TestCase):
 
 
 class ConfTests(TestCase):
+    @override_settings(LLM={"default": {"provider": "custom", "model": "qwen3.5:0.8b"}})
+    def test_get_alias_strength_autodetects_small_local_as_light(self):
+        self.assertEqual(get_alias_strength("default"), "light")
+
+    @override_settings(LLM={"default": {"provider": "openai", "model": "gpt-4o-mini"}})
+    def test_get_alias_strength_autodetects_mini_as_standard(self):
+        self.assertEqual(get_alias_strength("default"), "standard")
+
+    @override_settings(
+        LLM={"default": {"provider": "anthropic", "model": "claude-opus-4-8"}}
+    )
+    def test_get_alias_strength_autodetects_large_as_strong(self):
+        self.assertEqual(get_alias_strength("default"), "strong")
+
+    @override_settings(
+        LLM={
+            "default": {
+                "provider": "custom",
+                "model": "qwen3.5:0.8b",
+                "strength": "strong",
+            }
+        }
+    )
+    def test_get_alias_strength_explicit_overrides_autodetect(self):
+        self.assertEqual(get_alias_strength("default"), "strong")
+
     @override_settings()
     def test_missing_llm_setting_raises(self):
         from django.conf import settings as dj_settings
@@ -715,7 +742,9 @@ class LLMConfigViewSetScopingTests(APITestCase):
     def test_patch_other_users_config_is_404(self):
         self.client.force_login(self.bob)
         r = self.client.patch(
-            f"/api/llm/configs/{self.alice_config.pk}/", {"model": "gpt-3.5"}, format="json"
+            f"/api/llm/configs/{self.alice_config.pk}/",
+            {"model": "gpt-3.5"},
+            format="json",
         )
         self.assertEqual(r.status_code, 404)
 
@@ -759,3 +788,88 @@ class LLMRequestLogViewSetScopingTests(APITestCase):
         self.client.force_login(self.bob)
         r = self.client.get(f"/api/llm/request-logs/{self.alice_log.pk}/")
         self.assertEqual(r.status_code, 404)
+
+
+class OllamaAdapterTests(TestCase):
+    """Native /api/chat adapter — the key win over /v1 is honouring `think`."""
+
+    def _adapter(self, **over):
+        from llm_connector.providers.ollama import OllamaAdapter
+
+        cfg = {"url": "http://localhost:11434/v1", "model": "qwen3.5:0.8b", **over}
+        return OllamaAdapter(cfg)
+
+    @staticmethod
+    def _fake_resp(body):
+        resp = MagicMock()
+        resp.__enter__.return_value = resp
+        resp.read.return_value = json.dumps(body).encode("utf-8")
+        return resp
+
+    def _capture_request(self, adapter, body, method="complete", **call_kwargs):
+        import llm_connector.providers.ollama as mod
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return self._fake_resp(body)
+
+        with patch.object(mod.request, "urlopen", fake_urlopen):
+            out = getattr(adapter, method)(
+                [{"role": "user", "content": "hi"}]
+                if method == "complete"
+                else ["a", "b"],
+                **call_kwargs,
+            )
+        return out, captured
+
+    def test_endpoint_strips_v1_and_targets_api_chat(self):
+        adapter = self._adapter()
+        out, cap = self._capture_request(adapter, {"message": {"content": "hello"}})
+        self.assertTrue(cap["url"].endswith("/api/chat"))
+        self.assertNotIn("/v1", cap["url"])
+        self.assertEqual(out, "hello")
+
+    def test_think_false_sent_top_level(self):
+        adapter = self._adapter(think=False)
+        _, cap = self._capture_request(adapter, {"message": {"content": "x"}})
+        self.assertIs(cap["payload"]["think"], False)
+
+    def test_think_omitted_when_unset(self):
+        adapter = self._adapter()
+        _, cap = self._capture_request(adapter, {"message": {"content": "x"}})
+        self.assertNotIn("think", cap["payload"])
+
+    def test_max_tokens_maps_to_options_num_predict(self):
+        adapter = self._adapter(max_tokens=256)
+        _, cap = self._capture_request(adapter, {"message": {"content": "x"}})
+        self.assertEqual(cap["payload"]["options"]["num_predict"], 256)
+
+    def test_missing_url_raises(self):
+        from llm_connector.providers.ollama import OllamaAdapter
+
+        with self.assertRaises(ImproperlyConfigured):
+            OllamaAdapter({"model": "x"})
+
+    def test_embed_uses_embed_model_and_endpoint(self):
+        adapter = self._adapter(embed_model="qwen3-embedding:0.6b")
+        out, cap = self._capture_request(
+            adapter, {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}, method="embed"
+        )
+        self.assertTrue(cap["url"].endswith("/api/embed"))
+        self.assertEqual(cap["payload"]["model"], "qwen3-embedding:0.6b")
+        self.assertEqual(cap["payload"]["input"], ["a", "b"])
+        self.assertEqual(out, [[0.1, 0.2], [0.3, 0.4]])
+
+    def test_embed_empty_inputs_skips_request(self):
+        adapter = self._adapter(embed_model="qwen3-embedding:0.6b")
+        self.assertEqual(adapter.embed([]), [])
+
+    def test_registered_as_ollama_provider(self):
+        from llm_connector.providers.ollama import OllamaAdapter
+        from llm_connector.registry import get_adapter_class
+
+        self.assertIs(get_adapter_class("ollama"), OllamaAdapter)

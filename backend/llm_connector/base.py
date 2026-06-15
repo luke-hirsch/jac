@@ -29,3 +29,12 @@ class LLMAdapter(ABC):
         Returns (None, None) by default; providers that expose usage data override this.
         """
         return None, None
+
+    def embed(self, inputs: list[str]) -> list[list[float]]:
+        """Return an embedding vector for each input string.
+
+        Optional capability — only providers with an embedding endpoint
+        implement it (today: the native Ollama adapter). Raises
+        NotImplementedError otherwise.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support embeddings.")

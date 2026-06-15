@@ -19,6 +19,7 @@ class LLMConfig(models.Model):
         openai = "openai", "OpenAI"
         google = "google", "Google"
         custom = "custom", "Custom (OpenAI-compatible HTTP)"
+        ollama = "ollama", "Ollama (native /api/chat)"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -34,8 +35,8 @@ class LLMConfig(models.Model):
     extra = models.JSONField(
         default=dict,
         blank=True,
-        help_text='Provider-specific extras forwarded to the adapter, e.g. '
-                  '{"reasoning_effort": "medium"} or {"think": false}.',
+        help_text="Provider-specific extras forwarded to the adapter, e.g. "
+        '{"reasoning_effort": "medium"} or {"think": false}.',
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

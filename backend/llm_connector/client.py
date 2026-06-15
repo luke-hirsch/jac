@@ -127,3 +127,11 @@ class LLMClient:
             )
         except Exception:
             pass
+
+    def embed(self, inputs: list[str]) -> list[list[float]]:
+        """Return an embedding vector per input string via the provider adapter.
+
+        Not logged: embeddings are high-volume and carry no completion text worth
+        auditing. Raises NotImplementedError for providers without an embed endpoint.
+        """
+        return self._adapter.embed(inputs)

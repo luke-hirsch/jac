@@ -41,3 +41,16 @@ def stream(
     return get_client(alias, user=user).stream(
         prompt=prompt, messages=messages, **kwargs
     )
+
+
+def embed(
+    inputs: list[str],
+    *,
+    alias: str = "default",
+    user=None,
+) -> list[list[float]]:
+    """Return an embedding vector per input string for the given alias.
+
+    Only providers with an embedding endpoint support this (today: Ollama).
+    """
+    return get_client(alias, user=user).embed(inputs)
