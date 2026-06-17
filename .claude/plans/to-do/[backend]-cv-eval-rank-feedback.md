@@ -1,3 +1,51 @@
+# [backend] cv_eval — per-entry rank feedback + one-page target colour grading
+
+## Context / goal
+
+Roadmap item **1 (CV ladder)** support tooling. The new `CVFilter` selection layer in
+`backend/jac/cv.py` works — a first `cv_eval` run picks entries that align with each posting's
+fit. The next thing that helps tune the pipeline is seeing **how entries rank**, not just *which*
+were kept, and a quick read on whether each section is the right *length* for a one-page CV.
+
+This change extends the `cv_eval` management command to:
+
+1. Report, per posting, the **rank + relevance score** of every kept entry (terminal + a durable
+   `<slug>.ranks.md` artifact alongside the existing `<slug>.cv.md`).
+2. Define an **assumed one-page target count per section** (`x` jobs, `y` certs, `z` skills, …).
+3. **Colour-grade** each section's kept-count against its target in the terminal: green on target,
+   fading to **red** as it undershoots and **blue** as it overshoots. A well-tuned run shows only
+   greenish cells — red/blue flag sections that are too short or too long.
+
+Scope is **`cv_eval` only**. `cv.py`, `render.py`, `llm_prompts.py` are untouched — the rank data
+comes from the `relevance_score` attribute `CV.apply_selection` already sets on each kept instance
+(`backend/jac/cv.py:285`), and entry labels are reused from `CvRender._format_entry`
+(`backend/jac/render.py:67`).
+
+## Affected files
+
+| path | change |
+| --- | --- |
+| `backend/jac/management/commands/cv_eval.py` | rewrite: target constants, colour helpers, rank capture, new per-posting terminal block, `<slug>.ranks.md` writer, `--show-ranks` flag, target row in `findings.md` |
+| `backend/jac/tests.py` | add a `CvEvalGradingTests` class (pure helper tests) + extend the existing `cv_eval` smoke test |
+
+## Design notes
+
+- **Targets** live in a module constant `_ONE_PAGE_TARGET`. These are *assumptions* to tune later
+  when the render/format phase firms up — keep them in one obvious place.
+- **Colour** uses 24-bit truecolor ANSI (`\033[38;2;R;G;Bm`). It is only emitted when stdout is a
+  TTY **and** `--no-color` was not passed (Django's `BaseCommand` already provides `--no-color`,
+  so we reuse `opts["no_color"]` rather than add a flag). Under tests (`stdout=StringIO`) `isatty`
+  is False, so output stays plain.
+- The gradient normalises the deviation against the target (floored at 3) so a small target like
+  `educations=2` doesn't snap to full red on a single-entry miss.
+- `findings.md` is Markdown — it can't carry colour — so it gains a plain `_target_` reference row;
+  the colour lives in the live terminal. The durable per-entry ranks go to `<slug>.ranks.md`.
+
+## The code
+
+### `backend/jac/management/commands/cv_eval.py` (full replacement)
+
+```python
 """Batch-evaluate the CV pipeline over a corpus of job postings.
 
 Runs CV.filter_cv(grade) + apply_selection over a directory of postings and writes a comparable
@@ -184,9 +232,7 @@ class Command(BaseCommand):
         if opts["compare"]:
             self._compare(opts["compare"], rows, write)
 
-    def _evaluate(
-        self, user_pk, job_text, slug, grade, out_dir, write, color, show_ranks
-    ):
+    def _evaluate(self, user_pk, job_text, slug, grade, out_dir, write, color, show_ranks):
         cv = CV(user_pk=user_pk)
         t0 = time.monotonic()
         try:
@@ -244,11 +290,11 @@ class Command(BaseCommand):
             count = row["counts"][section]
             target = _ONE_PAGE_TARGET.get(section, 0)
             entries = row["ranks"][section]
-            cell = _colorize(
-                f"{count:>2}/{target:<2}", _grade_rgb(count, target), color
-            )
+            cell = _colorize(f"{count:>2}/{target:<2}", _grade_rgb(count, target), color)
             scores = [e["score"] for e in entries if e["score"] is not None]
-            rng = f"scores {max(scores):.3f}→{min(scores):.3f}" if scores else "—"
+            rng = (
+                f"scores {max(scores):.3f}→{min(scores):.3f}" if scores else "—"
+            )
             write(f"    {section:<14}{cell}  {rng}")
             if show_ranks:
                 for e in entries:
@@ -326,3 +372,152 @@ class Command(BaseCommand):
                 f"  {r['posting']:<28} total {p['total']}→{r['total']} ({d_total:+d})  "
                 f"time {d_time:+.1f}s{grade}"
             )
+```
+
+### What changed vs the current file
+
+- New module constants `_ONE_PAGE_TARGET`, `_C_GREEN/_RED/_BLUE`; new pure helpers `_lerp`,
+  `_grade_rgb`, `_colorize`.
+- `handle`: compute `color`; print the targets line; add `--show-ranks`; pass `color` +
+  `show_ranks` into `_evaluate`; store `targets` in `meta`.
+- `_evaluate`: capture `ranks` per section from the kept instances; write `<slug>.ranks.md`; call
+  the new `_print_posting` instead of the single summary line; the error path now also returns an
+  empty `ranks` map.
+- New `_print_posting` (colour-graded count/target + score range, optional per-entry list) and
+  `_write_ranks` (durable per-posting rank file).
+- `_write_findings`: add the `_target_` reference row.
+- `_compare` is unchanged (still reads `total`/`elapsed_s`/`grade` — the new `ranks`/`counts`
+  fields don't affect it).
+
+## Tests
+
+AI writes these; you run them. Add to `backend/jac/tests.py`. The first class is pure-function and
+needs no DB; the smoke-test additions reuse the existing `_keep_all` patch + `CVCommandSmokeTests`
+fixtures.
+
+Add the imports near the top of `tests.py` (extend the existing `from jac...` imports — these are
+new symbols):
+
+```python
+from jac.management.commands.cv_eval import (
+    _C_BLUE,
+    _C_GREEN,
+    _C_RED,
+    _ONE_PAGE_TARGET,
+    _colorize,
+    _grade_rgb,
+)
+```
+
+New test class (place it next to `CVCommandSmokeTests`):
+
+```python
+class CvEvalGradingTests(TestCase):
+    """Pure colour-grading + label helpers — no DB, no embedding."""
+
+    def test_on_target_is_green(self):
+        self.assertEqual(_grade_rgb(4, 4), _C_GREEN)
+
+    def test_zero_target_is_green(self):
+        # A section with no defined target should not be flagged.
+        self.assertEqual(_grade_rgb(3, 0), _C_GREEN)
+
+    def test_full_undershoot_is_red(self):
+        # count 0, target 4 -> deviation == max(target, 3) -> frac 1.0 -> full red.
+        self.assertEqual(_grade_rgb(0, 4), _C_RED)
+
+    def test_full_overshoot_is_blue(self):
+        self.assertEqual(_grade_rgb(8, 4), _C_BLUE)
+
+    def test_mild_miss_is_between_green_and_endpoint(self):
+        rgb = _grade_rgb(3, 4)  # undershoot by 1 on target 4 -> frac 0.25 toward red
+        self.assertNotIn(rgb, (_C_GREEN, _C_RED))
+        # Greener than full red: more green channel than the red anchor.
+        self.assertGreater(rgb[1], _C_RED[1])
+
+    def test_colorize_disabled_is_plain(self):
+        self.assertEqual(_colorize("12/10", _C_RED, enabled=False), "12/10")
+
+    def test_colorize_enabled_wraps_ansi(self):
+        out = _colorize("x", _C_GREEN, enabled=True)
+        self.assertTrue(out.startswith("\033[38;2;"))
+        self.assertTrue(out.endswith("\033[0m"))
+        self.assertIn("x", out)
+
+    def test_targets_cover_all_sections(self):
+        for section in ("skills", "jobs", "educations", "certifications", "projects", "languages"):
+            self.assertIn(section, _ONE_PAGE_TARGET)
+```
+
+Extend the existing `cv_eval` smoke test (replace `test_cv_eval_writes_findings` in
+`CVCommandSmokeTests` with this — it adds the new-artifact assertions):
+
+```python
+    @patch("jac.cv.CV.filter_cv", new=_keep_all)
+    def test_cv_eval_writes_findings_and_ranks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = Path(tmp) / "posting.md"
+            job.write_text("Senior Python engineer")
+            call_command(
+                "cv_eval",
+                "--user",
+                str(self.user.pk),
+                "--job-file",
+                str(job),
+                "--out-dir",
+                tmp,
+                stdout=io.StringIO(),
+            )
+            self.assertTrue((Path(tmp) / "findings.json").exists())
+            self.assertTrue((Path(tmp) / "findings.md").exists())
+            # New: per-posting ranks artifact + target reference row in findings.
+            self.assertTrue((Path(tmp) / "posting.ranks.md").exists())
+            self.assertIn("_target_", (Path(tmp) / "findings.md").read_text())
+            ranks_md = (Path(tmp) / "posting.ranks.md").read_text()
+            self.assertIn("## skills", ranks_md)
+            # _keep_all scores every entry 1.0, so the kept skill shows its score.
+            self.assertIn("1.0000", ranks_md)
+```
+
+## Verification
+
+1. **Run the unit tests** (these don't need Ollama):
+
+   ```bash
+   cd backend && python manage.py test jac.tests.CvEvalGradingTests jac.tests.CVCommandSmokeTests -v 2
+   ```
+
+   Expect all green. The grading tests assert the green/red/blue endpoints; the smoke test asserts
+   `posting.ranks.md`, the `_target_` row, and a `1.0000` score line.
+
+2. **Real run against a posting** (needs the Ollama embedding model up, as before):
+
+   ```bash
+   cd backend && python manage.py cv_eval --user 1 --job-file ../data/test_job.md --show-ranks
+   ```
+
+   What "done" looks like in the terminal:
+   - A `one-page targets: skills=10 jobs=4 …` line under the header.
+   - Per posting, a block with one line per section like `jobs        3/4   scores 0.581→0.224`,
+     where the `3/4` is **colour-graded**: green when it matches the target, reddish when short,
+     bluish when over. With `--show-ranks`, each kept entry is listed beneath as
+     `1. 0.5810  Senior Engineer — Acme`.
+   - Tune `_ONE_PAGE_TARGET` until a good posting shows mostly green cells.
+
+3. **Check the artifacts** in the new `data/eval/<timestamp>/` dir:
+   - `<slug>.ranks.md` — ranked entries with scores per section (review like you did `<slug>.cv.md`).
+   - `findings.md` — the count table now has a `_target_` row to eyeball each posting against.
+
+4. **Colour off** (piping/redirecting, or `--no-color`) must emit plain text — confirm no `\033[`
+   escapes land in a redirected file:
+
+   ```bash
+   cd backend && python manage.py cv_eval --user 1 --job-file ../data/test_job.md --no-color | cat
+   ```
+
+## After
+
+When this lands, run `/update-claude` to move this guide to `.claude/plans/done/` and note the
+eval-tooling state. No CLAUDE.md roadmap item is completed by this (it's tooling for item 1), so
+the roadmap text shouldn't need changes.
+```

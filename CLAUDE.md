@@ -44,11 +44,15 @@ shipped:
   `Certification`, `Language`, `ResumeSnippet`), full CRUD API + serializers, frontend CRUD UI.
 - `llm_connector`: multi-provider connector, per-user configs, native Ollama provider with `embed()`.
 
+- jac CV pipeline (`backend/jac/cv.py`): `CV` loads/flattens career entries (each carries a `refs`
+  edge list); `CVFilter` is a **scoring-agnostic** selection layer — directional tier propagation
+  over the edges + per-section *absolute floor + min-keep* drop. The `light` rung (`Embed`,
+  `llm_prompts.py`) is the working embedding-rank floor. `cv_test` / `cv_eval` management commands
+  exercise the grade ladder offline (fake-score injection in tests).
+
 active skeleton (the thing under construction):
-- `backend/jac/cv.py` — `CV` loads/filters a user's career entries and flattens them for scoring;
-  the `light` / `standard` / `strong` tailoring ladder is wired but the rungs are stubbed.
-  `Embed` (`llm_prompts.py`) is the working embedding-rank floor; `Instruct` / `Conversational`
-  are stubs.
+- `standard` (`Instruct`) and `strong` (`Conversational`) rungs in `llm_prompts.py` are stubs;
+  `CVFilter._standard_scores` / `_strong_scores` return `{}` and fall back to `light`.
 
 # roadmap
 
@@ -56,11 +60,12 @@ active skeleton (the thing under construction):
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/update-claude` edits this section after a coding phase.
 
-1. **fix & optimise the CV class** (`backend/jac/cv.py`) — rank/filter career entries by fit to a
-   job posting via the AI ladder:
-   - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries. *(working floor)*
-   - `standard`: LLM ranks entries — clean instruction approach, fits smaller models.
-   - `strong`: LLM ranks entries — conversational approach, for bigger models.
+1. **CV ladder — remaining rungs** (`backend/jac/cv.py`, `llm_prompts.py`). The relationship-aware
+   selection layer + `light` floor are *done*; what's left is the two LLM scorers (both just feed
+   `{id: score}` into the shared `CVFilter` selection):
+   - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries. *(done)*
+   - `standard`: `Instruct` LLM ranks entries — clean instruction approach, fits smaller models.
+   - `strong`: `Conversational` LLM ranks entries — conversational approach, for bigger models.
 2. **cover-letter generation** — a class that writes a cover letter for a job, using
    `ResumeSnippet` boilerplate stitched by the LLM (writer model: `llama3.2:1b`) to avoid AI slop.
 3. **frontend render** of the tailored CV + cover letter.
