@@ -51,6 +51,8 @@ import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 const JOB_TYPES: { value: JobRow["job_type"]; label: string }[] = [
   { value: "ft", label: "Full-time" },
   { value: "pt", label: "Part-time" },
@@ -74,6 +76,7 @@ const schema = z.object({
   location: z.number().nullable(),
   domains: z.array(z.number()),
   skills: z.array(z.number()),
+  favourite: z.boolean(),
 });
 
 type JobInput = z.infer<typeof schema>;
@@ -90,10 +93,12 @@ function JobsPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<JobRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [favFirst, setFavFirst] = useState(false);
 
   const list = usePagedList<JobRow>("jobs", {
     search: debouncedSearch,
     filters: { job_type: jobType || undefined, domains: domain || undefined },
+    ordering: favFirst ? "-favourite,-started" : undefined,
   });
 
   const destroy = useDestroy("jobs");
@@ -103,6 +108,8 @@ function JobsPage() {
   const columns = useMemo(
     () =>
       buildColumns({
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
         onEdit: (row) => {
           setEditing(row);
           setOpen(true);
@@ -115,7 +122,7 @@ function JobsPage() {
           });
         },
       }),
-    [destroy],
+    [destroy, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -266,6 +273,8 @@ function JobsPage() {
 const col = createColumnHelper<JobRow>();
 
 function buildColumns(opts: {
+  favFirst: boolean;
+  onToggleFav: () => void;
   onEdit: (r: JobRow) => void;
   onDelete: (r: JobRow) => void;
 }) {
@@ -288,6 +297,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<JobRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("title", { header: "Title" }),
     col.accessor("company", { header: "Company" }),
@@ -352,6 +365,7 @@ function JobEditor({
         location: row.location,
         domains: row.domains,
         skills: row.skills,
+        favourite: row.favourite,
       }
     : {
         title: "",
@@ -364,6 +378,7 @@ function JobEditor({
         location: null,
         domains: [],
         skills: [],
+        favourite: false,
       };
 
   const form = useForm({
@@ -535,6 +550,16 @@ function JobEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 4 jobs)."
+          />
         )}
       </form.Field>
 

@@ -4,8 +4,8 @@
 
 Roadmap item **1 (CV ladder)** support tooling. The new `CVFilter` selection layer in
 `backend/jac/cv.py` works — a first `cv_eval` run picks entries that align with each posting's
-fit. The next thing that helps tune the pipeline is seeing **how entries rank**, not just *which*
-were kept, and a quick read on whether each section is the right *length* for a one-page CV.
+fit. The next thing that helps tune the pipeline is seeing **how entries rank**, not just _which_
+were kept, and a quick read on whether each section is the right _length_ for a one-page CV.
 
 This change extends the `cv_eval` management command to:
 
@@ -23,14 +23,14 @@ comes from the `relevance_score` attribute `CV.apply_selection` already sets on 
 
 ## Affected files
 
-| path | change |
-| --- | --- |
+| path                                         | change                                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend/jac/management/commands/cv_eval.py` | rewrite: target constants, colour helpers, rank capture, new per-posting terminal block, `<slug>.ranks.md` writer, `--show-ranks` flag, target row in `findings.md` |
-| `backend/jac/tests.py` | add a `CvEvalGradingTests` class (pure helper tests) + extend the existing `cv_eval` smoke test |
+| `backend/jac/tests.py`                       | add a `CvEvalGradingTests` class (pure helper tests) + extend the existing `cv_eval` smoke test                                                                     |
 
 ## Design notes
 
-- **Targets** live in a module constant `_ONE_PAGE_TARGET`. These are *assumptions* to tune later
+- **Targets** live in a module constant `_ONE_PAGE_TARGET`. These are _assumptions_ to tune later
   when the render/format phase firms up — keep them in one obvious place.
 - **Colour** uses 24-bit truecolor ANSI (`\033[38;2;R;G;Bm`). It is only emitted when stdout is a
   TTY **and** `--no-color` was not passed (Django's `BaseCommand` already provides `--no-color`,
@@ -332,7 +332,7 @@ class Command(BaseCommand):
             f"{t['certifications']} | {t['projects']} | {t['languages']} |  |"
         )
         lines = [
-            f"# CV eval — {meta['timestamp']}",
+    f"# CV eval — {meta['timestamp']}",
             "",
             header,
             "",
@@ -520,4 +520,7 @@ Extend the existing `cv_eval` smoke test (replace `test_cv_eval_writes_findings`
 When this lands, run `/update-claude` to move this guide to `.claude/plans/done/` and note the
 eval-tooling state. No CLAUDE.md roadmap item is completed by this (it's tooling for item 1), so
 the roadmap text shouldn't need changes.
+
+```
+
 ```

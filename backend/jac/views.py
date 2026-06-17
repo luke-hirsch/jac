@@ -159,6 +159,7 @@ class EducationViewSet(BulkActionMixin, viewsets.ModelViewSet):
         "ended",
         "institution",
         "field_of_study",
+        "favourite",
         "created_at",
         "updated_at",
     ]
@@ -177,6 +178,7 @@ class CertificationViewSet(BulkActionMixin, viewsets.ModelViewSet):
         "expires_on",
         "name",
         "issuer",
+        "favourite",
         "created_at",
         "updated_at",
     ]
@@ -197,6 +199,7 @@ class SkillViewSet(BulkActionMixin, viewsets.ModelViewSet):
         "first_used",
         "proficiency",
         "experience_since",
+        "favourite",
         "created_at",
         "updated_at",
     ]
@@ -226,6 +229,7 @@ class JobViewSet(BulkActionMixin, viewsets.ModelViewSet):
         "ended",
         "title",
         "company",
+        "favourite",
         "created_at",
         "updated_at",
     ]
@@ -239,7 +243,14 @@ class ProjectViewSet(BulkActionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["domains"]
-    ordering_fields = ["started", "ended", "name", "created_at", "updated_at"]
+    ordering_fields = [
+        "started",
+        "ended",
+        "name",
+        "favourite",
+        "created_at",
+        "updated_at",
+    ]
 
     def get_queryset(self):
         return Project.objects.filter(user=self.request.user).order_by(
@@ -252,7 +263,7 @@ class LanguageViewSet(BulkActionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
     filterset_fields = ["fluency"]
-    ordering_fields = ["name", "fluency", "created_at", "updated_at"]
+    ordering_fields = ["name", "fluency", "favourite", "created_at", "updated_at"]
 
     def get_queryset(self):
         return Language.objects.filter(user=self.request.user).order_by("name")

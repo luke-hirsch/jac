@@ -45,6 +45,8 @@ import { JobPicker } from "@/components/cv/job-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 
 const schema = z.object({
   name: z.string().min(1).max(200),
@@ -62,6 +64,7 @@ const schema = z.object({
   job: z.number().nullable(),
   skills: z.array(z.number()),
   domains: z.array(z.number()),
+  favourite: z.boolean(),
 });
 type ProjectInput = z.infer<typeof schema>;
 
@@ -76,10 +79,12 @@ function ProjectPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<ProjectRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [favFirst, setFavFirst] = useState(false);
 
   const list = usePagedList<ProjectRow>("projects", {
     search: debouncedSearch,
     filters: { domains: domain || undefined },
+    ordering: favFirst ? "-favourite,-started,name" : undefined,
   });
 
   const destroy = useDestroy("projects");
@@ -89,6 +94,8 @@ function ProjectPage() {
   const columns = useMemo(
     () =>
       buildColumns({
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
         onEdit: (row) => {
           setEditing(row);
           setOpen(true);
@@ -101,7 +108,7 @@ function ProjectPage() {
           });
         },
       }),
-    [destroy],
+    [destroy, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -230,6 +237,8 @@ function ProjectPage() {
 const col = createColumnHelper<ProjectRow>();
 
 function buildColumns(opts: {
+  favFirst: boolean;
+  onToggleFav: () => void;
   onEdit: (r: ProjectRow) => void;
   onDelete: (r: ProjectRow) => void;
 }) {
@@ -252,6 +261,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<ProjectRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("name", { header: "Name" }),
 
@@ -307,6 +320,7 @@ function ProjectEditor({
         job: row.job,
         domains: row.domains,
         skills: row.skills,
+        favourite: row.favourite,
       }
     : {
         name: "",
@@ -318,6 +332,7 @@ function ProjectEditor({
         job: null,
         domains: [],
         skills: [],
+        favourite: false,
       };
 
   const form = useForm({
@@ -465,6 +480,16 @@ function ProjectEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 3 projects)."
+          />
         )}
       </form.Field>
 

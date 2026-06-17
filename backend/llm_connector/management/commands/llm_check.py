@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from llm_connector.client import LLMClient
-from llm_connector.conf import get_llm_settings
+from llm_connector.conf import get_alias_strength, get_llm_settings
 from llm_connector.models import LLMConfig
 
 
@@ -38,11 +38,23 @@ class Command(BaseCommand):
             start = time.monotonic()
             client.complete("Respond with exactly one word: pong")
             latency = int((time.monotonic() - start) * 1000)
-            return {"alias": alias, "provider": provider, "model": model, "latency": latency}
+            return {
+                "alias": alias,
+                "provider": provider,
+                "model": model,
+                "latency": latency,
+            }
         except Exception as exc:
-            return {"alias": alias, "provider": provider, "model": model, "error": str(exc)}
+            return {
+                "alias": alias,
+                "provider": provider,
+                "model": model,
+                "error": str(exc),
+            }
 
-    def _resolve_targets(self, requested_aliases, user) -> tuple[list[tuple[str, str, str]], list[str]]:
+    def _resolve_targets(
+        self, requested_aliases, user
+    ) -> tuple[list[tuple[str, str, str]], list[str]]:
         """Returns (targets, missing) where targets is [(alias, provider, model), ...]."""
         if user is not None:
             available = {
@@ -60,7 +72,8 @@ class Command(BaseCommand):
         aliases = requested_aliases or list(llm)
         targets = [
             (a, llm[a].get("provider", "?"), llm[a].get("model", "?"))
-            for a in aliases if a in llm
+            for a in aliases
+            if a in llm
         ]
         missing = [a for a in aliases if a not in llm]
         return targets, missing
@@ -81,12 +94,17 @@ class Command(BaseCommand):
             return
 
         scope = f"user={user}" if user else "settings.LLM"
-        self.stdout.write(f"Checking {len(targets)} alias(es) in parallel [{scope}]...\n")
+        self.stdout.write(
+            f"Checking {len(targets)} alias(es) in parallel [{scope}]...\n"
+        )
 
         for alias in missing:
             self.stdout.write(
-                f"  [{alias}] " + self.style.WARNING(
-                    "not configured for this user" if user else "not found in settings.LLM"
+                f"  [{alias}] "
+                + self.style.WARNING(
+                    "not configured for this user"
+                    if user
+                    else "not found in settings.LLM"
                 )
             )
 
@@ -105,14 +123,17 @@ class Command(BaseCommand):
             if alias not in results:
                 continue
             r = results[alias]
+            strength = get_alias_strength(alias, user=user)
             self.stdout.write(f"  [{alias}] ", ending="")
             if "error" in r:
                 self.stdout.write(
                     self.style.ERROR("FAIL")
-                    + f"  provider={r['provider']}  model={r['model']}  error={r['error']}"
+                    + f"  provider={r['provider']}  model={r['model']}"
+                    + f"  strength={strength}  error={r['error']}"
                 )
             else:
                 self.stdout.write(
                     self.style.SUCCESS("OK")
-                    + f"  provider={r['provider']}  model={r['model']}  latency={r['latency']}ms"
+                    + f"  provider={r['provider']}  model={r['model']}"
+                    + f"  strength={strength}  latency={r['latency']}ms"
                 )

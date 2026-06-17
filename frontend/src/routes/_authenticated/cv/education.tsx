@@ -42,6 +42,8 @@ import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 
 const schema = z.object({
   institution: z.string().min(1).max(200),
@@ -57,6 +59,7 @@ const schema = z.object({
   location: z.number().nullable(),
   skills: z.array(z.number()),
   domains: z.array(z.number()),
+  favourite: z.boolean(),
 });
 
 type EducationInput = z.infer<typeof schema>;
@@ -73,10 +76,12 @@ function EducationPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<EducationRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [favFirst, setFavFirst] = useState(false);
 
   const list = usePagedList<EducationRow>("education", {
     search: debouncedSearch,
     filters: { domains: domain || undefined },
+    ordering: favFirst ? "-favourite,-started" : undefined,
   });
 
   const destroy = useDestroy("education");
@@ -85,6 +90,8 @@ function EducationPage() {
   const columns = useMemo(
     () =>
       buildColumns({
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
         onEdit: (row) => {
           setEditing(row);
           setOpen(true);
@@ -98,7 +105,7 @@ function EducationPage() {
           });
         },
       }),
-    [destroy],
+    [destroy, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -217,6 +224,8 @@ function EducationPage() {
 const col = createColumnHelper<EducationRow>();
 
 function buildColumns(opts: {
+  favFirst: boolean;
+  onToggleFav: () => void;
   onEdit: (r: EducationRow) => void;
   onDelete: (r: EducationRow) => void;
 }) {
@@ -239,6 +248,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<EducationRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("field_of_study", { header: "Field of Study" }),
     col.accessor("institution", { header: "Institution" }),
@@ -297,6 +310,7 @@ function EducationEditor({
         location: row.location,
         skills: row.skills,
         domains: row.domains,
+        favourite: row.favourite,
       }
     : {
         field_of_study: "",
@@ -309,6 +323,7 @@ function EducationEditor({
         location: null,
         skills: [],
         domains: [],
+        favourite: false,
       };
 
   const form = useForm({
@@ -470,6 +485,16 @@ function EducationEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 2 educations)."
+          />
         )}
       </form.Field>
 

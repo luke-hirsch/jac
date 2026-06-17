@@ -60,7 +60,12 @@ class CvRender:
             entries = self.cv.entries.get(key) or []
             if not entries:
                 continue
-            items = [self._format_entry(key, e) for e in entries]
+            items = []
+            for e in entries:
+                heading, body = self._format_entry(key, e)
+                if getattr(e, "favourite", False):
+                    heading = f"★ {heading}"
+                items.append((heading, body))
             out.append((title, items))
         return out
 

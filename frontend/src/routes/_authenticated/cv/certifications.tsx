@@ -42,6 +42,8 @@ import { SkillPicker } from "@/components/cv/skill-picker";
 import { OptionalDateField } from "@/components/cv/optional-date-field";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 
 const schema = z.object({
   name: z.string().min(1).max(200),
@@ -59,6 +61,7 @@ const schema = z.object({
   description: z.string(),
   skills: z.array(z.number()),
   domains: z.array(z.number()),
+  favourite: z.boolean(),
 });
 type CertificationInput = z.infer<typeof schema>;
 
@@ -74,10 +77,12 @@ function CertificationsPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<CertificationRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [favFirst, setFavFirst] = useState(false);
 
   const list = usePagedList<CertificationRow>("certifications", {
     search: debouncedSearch,
     filters: { domains: domain || undefined },
+    ordering: favFirst ? "-favourite,-issued_on" : undefined,
   });
 
   const destroy = useDestroy("certifications");
@@ -86,6 +91,8 @@ function CertificationsPage() {
   const columns = useMemo(
     () =>
       buildColumns({
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
         onEdit: (row) => {
           setEditing(row);
           setOpen(true);
@@ -98,7 +105,7 @@ function CertificationsPage() {
           });
         },
       }),
-    [destroy],
+    [destroy, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -217,6 +224,8 @@ function CertificationsPage() {
 const col = createColumnHelper<CertificationRow>();
 
 function buildColumns(opts: {
+  favFirst: boolean;
+  onToggleFav: () => void;
   onEdit: (r: CertificationRow) => void;
   onDelete: (r: CertificationRow) => void;
 }) {
@@ -239,6 +248,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<CertificationRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("name", { header: "Name" }),
     col.accessor("issuer", { header: "Issuer" }),
@@ -295,6 +308,7 @@ function CertificationEditor({
         description: row.description,
         skills: row.skills,
         domains: row.domains,
+        favourite: row.favourite,
       }
     : {
         name: "",
@@ -306,6 +320,7 @@ function CertificationEditor({
         description: "",
         skills: [],
         domains: [],
+        favourite: false,
       };
 
   const form = useForm({
@@ -462,6 +477,16 @@ function CertificationEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 3 certifications)."
+          />
         )}
       </form.Field>
 

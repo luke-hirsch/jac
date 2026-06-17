@@ -45,6 +45,8 @@ import { SectionPage } from "@/components/cv/section-page";
 import { Pagination } from "@/components/cv/pagination";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 const FLUENCY_LEVELS: { value: LanguageRow["fluency"]; label: string }[] = [
   { value: "native", label: "Native" },
   { value: "fluent", label: "Fluent" },
@@ -63,6 +65,7 @@ const schema = z.object({
     "basic",
   ]),
   description: z.string(),
+  favourite: z.boolean(),
 });
 
 type LanguageInput = z.infer<typeof schema>;
@@ -80,10 +83,12 @@ function LanguagesPage() {
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<LanguageRow | null>(null);
   const [open, setOpen] = useState(false);
+  const [favFirst, setFavFirst] = useState(false);
 
   const list = usePagedList<LanguageRow>("languages", {
     search: debouncedSearch,
     filters: fluencyLevel ? { fluency: fluencyLevel } : undefined,
+    ordering: favFirst ? "-favourite,name" : undefined,
   });
 
   const destroy = useDestroy("languages");
@@ -92,6 +97,8 @@ function LanguagesPage() {
   const columns = useMemo(
     () =>
       buildColumns({
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
         onEdit: (row) => {
           setEditing(row);
           setOpen(true);
@@ -104,7 +111,7 @@ function LanguagesPage() {
           });
         },
       }),
-    [destroy],
+    [destroy, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -240,6 +247,8 @@ function LanguagesPage() {
 const col = createColumnHelper<LanguageRow>();
 
 function buildColumns(opts: {
+  favFirst: boolean;
+  onToggleFav: () => void;
   onEdit: (r: LanguageRow) => void;
   onDelete: (r: LanguageRow) => void;
 }) {
@@ -262,6 +271,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<LanguageRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("name", { header: "Name" }),
     col.accessor("fluency", {
@@ -314,11 +327,13 @@ function LanguageEditor({
         name: row.name,
         fluency: row.fluency,
         description: row.description,
+        favourite: row.favourite,
       }
     : {
         name: "",
         fluency: "basic",
         description: "",
+        favourite: false,
       };
 
   const form = useForm({
@@ -402,6 +417,16 @@ function LanguageEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 3 languages)."
+          />
         )}
       </form.Field>
 

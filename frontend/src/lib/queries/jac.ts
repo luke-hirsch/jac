@@ -39,6 +39,7 @@ export type EducationRow = {
   location: number | null;
   skills: number[];
   domains: number[];
+  favourite: boolean;
 };
 
 export type CertificationRow = {
@@ -52,6 +53,7 @@ export type CertificationRow = {
   description: string;
   skills: number[];
   domains: number[];
+  favourite: boolean;
 };
 
 export type SkillRow = {
@@ -70,6 +72,7 @@ export type SkillRow = {
   years_of_experience: number | null;
   years_of_experience_override: number | null;
   description: string;
+  favourite: boolean;
 };
 
 export type JobRow = {
@@ -84,6 +87,7 @@ export type JobRow = {
   ended: string | null;
   url: string;
   description: string;
+  favourite: boolean;
 };
 
 export type ProjectRow = {
@@ -97,6 +101,7 @@ export type ProjectRow = {
   ended: string | null;
   url: string;
   description: string;
+  favourite: boolean;
 };
 
 export type LanguageRow = {
@@ -104,6 +109,7 @@ export type LanguageRow = {
   name: string;
   fluency: "native" | "fluent" | "professional" | "conversational" | "basic";
   description: string;
+  favourite: boolean;
 };
 
 // factory

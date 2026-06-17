@@ -61,6 +61,8 @@ import { SkillBubbles } from "@/components/cv/skill-bubbles";
 
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { FavouriteField } from "@/components/cv/favourite-field";
+import { favouriteColumn } from "@/components/cv/favourite-column";
 const PROFICIENCY: { value: SkillRow["proficiency"]; label: string }[] = [
   { value: "beginner", label: "Beginner" },
   { value: "intermediate", label: "Intermediate" },
@@ -88,6 +90,7 @@ const schema = z.object({
   certification: z.number().nullable(),
   years_of_experience_override: z.number().int().min(0).nullable(),
   description: z.string(),
+  favourite: z.boolean(),
 });
 
 type SkillInput = z.infer<typeof schema>;
@@ -109,6 +112,7 @@ function SkillPage() {
   const [expSort, setExpSort] = useState<
     "" | "experience_since" | "-experience_since"
   >("");
+  const [favFirst, setFavFirst] = useState(false);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<SkillRow | null>(null);
   const [open, setOpen] = useState(false);
@@ -119,7 +123,11 @@ function SkillPage() {
   const list = usePagedList<SkillRow>("skills", {
     search: debouncedSearch,
     filters,
-    ordering: expSort || undefined,
+    // Favourites-first prepends `-favourite`, keeping the active (or default name) sort
+    // as the secondary key.
+    ordering: favFirst
+      ? `-favourite,${expSort || "name"}`
+      : expSort || undefined,
   });
 
   // The bubble cloud needs the whole filtered set (no paging); only fetched
@@ -164,9 +172,11 @@ function SkillPage() {
         },
         expSort,
         onToggleExpSort: cycleExpSort,
+        favFirst,
+        onToggleFav: () => setFavFirst((v) => !v),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [destroy, expSort],
+    [destroy, expSort, favFirst],
   );
 
   const rows = list.data?.results ?? [];
@@ -369,6 +379,8 @@ function buildColumns(opts: {
   onDelete: (r: SkillRow) => void;
   expSort: "" | "experience_since" | "-experience_since";
   onToggleExpSort: () => void;
+  favFirst: boolean;
+  onToggleFav: () => void;
 }) {
   return [
     col.display({
@@ -389,6 +401,10 @@ function buildColumns(opts: {
           onCheckedChange={(v) => row.toggleSelected(!!v)}
         />
       ),
+    }),
+    favouriteColumn<SkillRow>({
+      active: opts.favFirst,
+      onToggle: opts.onToggleFav,
     }),
     col.accessor("name", { header: "Name" }),
 
@@ -478,6 +494,7 @@ function SkillEditor({
         certification: row.certification,
         years_of_experience_override: row.years_of_experience_override,
         description: row.description,
+        favourite: row.favourite,
       }
     : {
         name: "",
@@ -490,6 +507,7 @@ function SkillEditor({
         certification: null,
         years_of_experience_override: null,
         description: "",
+        favourite: false,
       };
 
   const form = useForm({
@@ -694,6 +712,16 @@ function SkillEditor({
               </div>
             </div>
           </div>
+        )}
+      </form.Field>
+
+      <form.Field name="favourite">
+        {(f) => (
+          <FavouriteField
+            checked={f.state.value}
+            onChange={f.handleChange}
+            hint="Pinned entries get a small ranking boost (max 10 skills)."
+          />
         )}
       </form.Field>
 

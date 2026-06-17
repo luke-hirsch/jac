@@ -159,7 +159,13 @@ class CV:
             if s.certification_id:
                 refs.append(f"certification:{s.certification_id}")
             out.append(
-                {"id": f"skill:{s.pk}", "type": "skill", "text": text, "refs": refs}
+                {
+                    "id": f"skill:{s.pk}",
+                    "type": "skill",
+                    "text": text,
+                    "refs": refs,
+                    "favourite": s.favourite,
+                }
             )
 
         for j in self.entries["jobs"]:
@@ -172,7 +178,15 @@ class CV:
                 text += f" — {j.description[:300]}"
             refs = [f"skill:{sk.pk}" for sk in j.skills.all()]
             refs += [f"project:{p.pk}" for p in j.projects.all()]
-            out.append({"id": f"job:{j.pk}", "type": "job", "text": text, "refs": refs})
+            out.append(
+                {
+                    "id": f"job:{j.pk}",
+                    "type": "job",
+                    "text": text,
+                    "refs": refs,
+                    "favourite": j.favourite,
+                }
+            )
 
         for e in self.entries["educations"]:
             window = f"{e.started or '?'}–{e.ended or 'present'}"
@@ -191,6 +205,7 @@ class CV:
                     "type": "education",
                     "text": text,
                     "refs": refs,
+                    "favourite": e.favourite,
                 }
             )
 
@@ -207,6 +222,7 @@ class CV:
                     "type": "certification",
                     "text": text,
                     "refs": refs,
+                    "favourite": c.favourite,
                 }
             )
 
@@ -222,7 +238,13 @@ class CV:
             if p.job_id:
                 refs.append(f"job:{p.job_id}")
             out.append(
-                {"id": f"project:{p.pk}", "type": "project", "text": text, "refs": refs}
+                {
+                    "id": f"project:{p.pk}",
+                    "type": "project",
+                    "text": text,
+                    "refs": refs,
+                    "favourite": p.favourite,
+                }
             )
 
         for la in self.entries["languages"]:
@@ -235,6 +257,7 @@ class CV:
                     "type": "language",
                     "text": f"{la.name} ({la.fluency})",
                     "refs": refs,
+                    "favourite": la.favourite,
                 }
             )
 
@@ -305,6 +328,12 @@ class CVFilter:
     }
     # Damping applied to an anchor's score when it lifts a lower-tier neighbour.
     _ANCHOR_W = 0.85
+
+    # Additive nudge for user-flagged favourites, applied to the effective score after
+    # propagation. Kept below the smallest non-zero section floor (education's 0.15) so a
+    # favourite the scorer rates ~0 still can't cross its drop threshold — favourites tilt
+    # close calls, they don't resurrect irrelevant entries.
+    _FAVOURITE_BONUS = 0.05
 
     # Per-section drop rule. `drop_below`: absolute effective-score floor (cosine-scaled).
     # `min_keep`: always keep at least this many top-ranked, even below the floor;
@@ -390,6 +419,13 @@ class CVFilter:
             return self._group_all()
 
         eff = self._propagate(base)
+
+        # Favourite nudge: small, post-propagation, so it tilts close calls without
+        # lifting a ~0-scored entry over its section floor (see _FAVOURITE_BONUS).
+        for e in self.entries:
+            if e.get("favourite"):
+                eid = e["id"]
+                eff[eid] = eff.get(eid, 0.0) + self._FAVOURITE_BONUS
 
         by_section: dict[str, list[dict]] = {}
         for e in self.entries:

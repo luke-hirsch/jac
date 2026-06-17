@@ -16,6 +16,34 @@ from jac.models import (
 )
 
 
+class FavouriteLimitMixin:
+    """Enforces `CvEntry.FAVOURITE_LIMIT` at the API boundary.
+
+    DRF never calls `Model.full_clean()`, so the model's `clean()` cap wouldn't fire on
+    create/update through the API. This re-checks the same per-type favourite count here.
+    Mix in *before* the ModelSerializer base so `super().validate` chains correctly.
+    """
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        model = self.Meta.model
+        limit = getattr(model, "FAVOURITE_LIMIT", None)
+        favourite = attrs.get("favourite", getattr(self.instance, "favourite", False))
+        if favourite and limit is not None:
+            user = attrs.get("user") or getattr(self.instance, "user", None)
+            exclude_pk = self.instance.pk if self.instance else None
+            if model.favourite_count(user, exclude_pk=exclude_pk) >= limit:
+                raise serializers.ValidationError(
+                    {
+                        "favourite": (
+                            f"You can mark at most {limit} "
+                            f"{model._meta.verbose_name_plural} as favourite."
+                        )
+                    }
+                )
+        return attrs
+
+
 class ScopeDomainsToUserMixin(ScopeRelatedToUserMixin):
     """Adds `domain_scoped_fields` on top of the user-scoped base mixin.
 
@@ -77,7 +105,9 @@ class LocationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class EducationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+class EducationSerializer(
+    FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("location", "skills")
     domain_scoped_fields = ("domains",)
 
@@ -112,12 +142,15 @@ class EducationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "location",
             "skills",
             "domains",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id"]
 
 
-class CertificationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+class CertificationSerializer(
+    FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("skills",)
     domain_scoped_fields = ("domains",)
 
@@ -146,12 +179,15 @@ class CertificationSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
             "description",
             "skills",
             "domains",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id"]
 
 
-class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+class SkillSerializer(
+    FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("certification", "related_skills", "builds_on")
     domain_scoped_fields = ("domains",)
 
@@ -197,6 +233,7 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "related_skills",
             "builds_on",
             "enables",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id", "years_of_experience", "enables"]
@@ -222,7 +259,9 @@ class SkillSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
         return value
 
 
-class JobSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+class JobSerializer(
+    FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("location", "skills")
     domain_scoped_fields = ("domains",)
 
@@ -258,12 +297,15 @@ class JobSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "ended",
             "url",
             "description",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id"]
 
 
-class ProjectSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
+class ProjectSerializer(
+    FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("location", "skills", "job")
     domain_scoped_fields = ("domains",)
 
@@ -303,12 +345,13 @@ class ProjectSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
             "ended",
             "url",
             "description",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id"]
 
 
-class LanguageSerializer(serializers.ModelSerializer):
+class LanguageSerializer(FavouriteLimitMixin, serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
 
     class Meta:
@@ -318,6 +361,7 @@ class LanguageSerializer(serializers.ModelSerializer):
             "name",
             "fluency",
             "description",
+            "favourite",
             "user",
         ]
         read_only_fields = ["id"]

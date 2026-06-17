@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import OuterRef, Q, Subquery, UniqueConstraint
 from django.utils import timezone
@@ -105,12 +106,18 @@ class CvEntry(models.Model):
     Subclasses add their own domain-specific fields.
     """
 
+    # Max entries of this concrete type a user may flag as `favourite`. Favourites get a
+    # small ranking nudge in the CV pipeline (see `CVFilter._FAVOURITE_BONUS` in cv.py); the
+    # cap keeps that influence deliberate. Override per subclass; None = unlimited.
+    FAVOURITE_LIMIT: int | None = None
+
     class Meta:
         abstract = True
 
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, related_name="%(class)s_entries"
     )
+    favourite = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
         "auth.User",
@@ -122,9 +129,43 @@ class CvEntry(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     description = models.TextField(blank=True)
 
+    @classmethod
+    def favourite_count(cls, user, exclude_pk=None) -> int:
+        """How many of `user`'s entries of this type are flagged favourite.
+
+        `exclude_pk` drops the row being edited so an update doesn't count itself.
+        """
+        qs = cls._default_manager.filter(user=user, favourite=True)
+        if exclude_pk is not None:
+            qs = qs.exclude(pk=exclude_pk)
+        return qs.count()
+
+    def clean(self):
+        """Enforce the per-type favourite cap. The API enforces the same rule via
+        `FavouriteLimitMixin` (DRF doesn't call `full_clean`); this keeps admin/forms honest.
+        """
+        super().clean()
+        if (
+            self.favourite
+            and self.FAVOURITE_LIMIT is not None
+            and self.user_id is not None
+            and self.favourite_count(self.user_id, exclude_pk=self.pk)
+            >= self.FAVOURITE_LIMIT
+        ):
+            raise ValidationError(
+                {
+                    "favourite": (
+                        f"You can mark at most {self.FAVOURITE_LIMIT} "
+                        f"{self._meta.verbose_name_plural} as favourite."
+                    )
+                }
+            )
+
 
 class Education(CvEntry):
     """Degree or formal study period."""
+
+    FAVOURITE_LIMIT = 2
 
     location = models.ForeignKey(
         Location, on_delete=models.SET_NULL, null=True, blank=True
@@ -142,6 +183,8 @@ class Education(CvEntry):
 class Certification(CvEntry):
     """Externally issued credential (certificate, licence, course completion)."""
 
+    FAVOURITE_LIMIT = 3
+
     name = models.CharField(max_length=200)
     issuer = models.CharField(max_length=200)
     issued_on = models.DateField(null=True, blank=True)
@@ -154,6 +197,8 @@ class Certification(CvEntry):
 
 class Skill(CvEntry):
     """A single technical, soft, or domain skill with a self-assessed proficiency."""
+
+    FAVOURITE_LIMIT = 10
 
     class Proficiency_Choices(models.TextChoices):
         beginner = "beginner", _("Beginner")
@@ -228,6 +273,8 @@ class Skill(CvEntry):
 class Job(CvEntry):
     """Employment or contract position."""
 
+    FAVOURITE_LIMIT = 4
+
     class job_type_choices(models.TextChoices):
         full_time = "ft", _("Full-time")
         part_time = "pt", _("Part-time")
@@ -254,6 +301,8 @@ class Job(CvEntry):
 class Project(CvEntry):
     """Personal or professional project, side project, or open-source contribution."""
 
+    FAVOURITE_LIMIT = 3
+
     name = models.CharField(max_length=200)
     skills = models.ManyToManyField(Skill, blank=True)
     domains = models.ManyToManyField(Domain, blank=True)
@@ -274,6 +323,8 @@ class Project(CvEntry):
 
 class Language(CvEntry):
     """A spoken or written language with self-assessed fluency."""
+
+    FAVOURITE_LIMIT = 3
 
     class Fluency(models.TextChoices):
         native = "native", _("Native")

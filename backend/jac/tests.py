@@ -13,6 +13,8 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+
 from jac.cv import CV, CVFilter
 from jac.models import (
     Certification,
@@ -1233,6 +1235,170 @@ class CVApplySelectionTests(TestCase):
         cv = CV(user_pk=self.user.pk)
         cv.apply_selection({"skill": [{"id": "skill:999999", "score": 1.0}]})
         self.assertEqual(cv.entries["skills"], [])
+
+
+class FavouriteLimitModelTests(TestCase):
+    """CvEntry.clean() enforces the per-type favourite cap (Education limit = 2)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="favmodel")
+
+    def _edu(self, favourite, institution):
+        return Education.objects.create(
+            user=self.user,
+            institution=institution,
+            started=date(2020, 1, 1),
+            favourite=favourite,
+        )
+
+    def test_clean_blocks_over_limit(self):
+        self._edu(True, "A")
+        self._edu(True, "B")  # at the limit of 2
+        extra = Education(
+            user=self.user,
+            institution="C",
+            started=date(2020, 1, 1),
+            favourite=True,
+        )
+        with self.assertRaises(DjangoValidationError):
+            extra.clean()
+
+    def test_clean_allows_within_limit(self):
+        self._edu(True, "A")
+        ok = Education(
+            user=self.user,
+            institution="B",
+            started=date(2020, 1, 1),
+            favourite=True,
+        )
+        ok.clean()  # second favourite is still within the limit -> no raise
+
+    def test_clean_excludes_self_on_update(self):
+        edu = self._edu(True, "A")
+        self._edu(True, "B")
+        edu.description = "edited"
+        edu.clean()  # re-saving an existing favourite must not count itself out
+
+    def test_non_favourite_unconstrained(self):
+        for i in range(5):
+            self._edu(False, f"U{i}")  # no cap on non-favourites
+
+
+class FavouriteLimitAPITests(APITestCase):
+    """The API enforces the same cap via FavouriteLimitMixin (Job limit = 4)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="favapi", password="pass")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        for i in range(4):
+            Job.objects.create(
+                user=self.user,
+                title=f"J{i}",
+                company="Acme",
+                started=date(2022, 1, 1),
+                favourite=True,
+            )
+
+    def test_create_over_limit_rejected(self):
+        r = self.client.post(
+            "/api/jac/jobs/",
+            {
+                "title": "Over",
+                "company": "Acme",
+                "started": "2022-01-01",
+                "favourite": True,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("favourite", r.data)
+
+    def test_create_non_favourite_allowed(self):
+        r = self.client.post(
+            "/api/jac/jobs/",
+            {
+                "title": "Plain",
+                "company": "Acme",
+                "started": "2022-01-01",
+                "favourite": False,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+
+
+class FavouriteOrderingAPITests(APITestCase):
+    """`ordering=-favourite,...` floats flagged entries to the top (the table star sort)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="favorder", password="pass")
+        Job.objects.create(
+            user=cls.user, title="Plain", company="Acme", started=date(2024, 1, 1)
+        )
+        Job.objects.create(
+            user=cls.user,
+            title="Pinned",
+            company="Acme",
+            started=date(2019, 1, 1),
+            favourite=True,
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_favourites_first(self):
+        r = self.client.get("/api/jac/jobs/?ordering=-favourite,-started")
+        self.assertEqual(r.status_code, 200)
+        titles = [row["title"] for row in r.data["results"]]
+        # Pinned floats above the more-recent Plain job despite the -started secondary.
+        self.assertEqual(titles[0], "Pinned")
+
+
+class CVFavouriteBonusTests(TestCase):
+    """CVFilter applies a small post-propagation nudge to favourites."""
+
+    def _filter(self, entries):
+        return CVFilter(job_post_text="x", entries=entries, grade="light")
+
+    def test_bonus_added_and_reranks(self):
+        entries = [
+            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": True},
+            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
+        ]
+        out = self._filter(entries)._select({"job:1": 0.40, "job:2": 0.40})
+        scores = {e["id"]: e["score"] for e in out["job"]}
+        self.assertAlmostEqual(scores["job:1"], 0.45, places=4)
+        self.assertAlmostEqual(scores["job:2"], 0.40, places=4)
+        # tie broken in the favourite's favour.
+        self.assertEqual(out["job"][0]["id"], "job:1")
+
+    def _edus(self, fav_score):
+        # Two strong educations + one favourite at `fav_score`; education floor 0.15,
+        # min_keep 2 (already satisfied by the two strong ones).
+        return [
+            {"id": "education:1", "type": "education", "text": "", "refs": [], "favourite": False},
+            {"id": "education:2", "type": "education", "text": "", "refs": [], "favourite": False},
+            {"id": "education:3", "type": "education", "text": "", "refs": [], "favourite": True},
+        ], {"education:1": 0.9, "education:2": 0.9, "education:3": fav_score}
+
+    def test_bonus_cannot_resurrect_zero_scored_favourite(self):
+        entries, base = self._edus(0.0)
+        out = self._filter(entries)._select(base)
+        kept = {e["id"] for e in out["education"]}
+        # 0.0 + 0.05 = 0.05 < 0.15 floor -> stays dropped.
+        self.assertNotIn("education:3", kept)
+
+    def test_bonus_lifts_borderline_favourite(self):
+        entries, base = self._edus(0.12)
+        out = self._filter(entries)._select(base)
+        kept = {e["id"] for e in out["education"]}
+        # 0.12 + 0.05 = 0.17 >= 0.15 floor -> crosses.
+        self.assertIn("education:3", kept)
 
 
 def _keep_all(self, job_post_text, grade=None):
