@@ -13,7 +13,7 @@ from datetime import date
 # from typing import Any
 from django.db.models import Q
 
-from jac.llm_prompts import Conversational, Embed, Instruct
+from jac.llm_prompts import Embed
 from jac.models import Certification, Education, Job, Language, Project, Skill
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class CV:
     def _get_jobs(self) -> list[Job]:
         qs = (
             Job.objects.filter(user=self.user)
-            .prefetch_related("skills", "domains")
+            .prefetch_related("skills", "domains", "projects")
             .select_related("location")
         )
         if self.domains:
@@ -101,7 +101,11 @@ class CV:
         return list(qs.distinct().order_by("-started"))
 
     def _get_educations(self) -> list[Education]:
-        qs = Education.objects.filter(user=self.user).select_related("location")
+        qs = (
+            Education.objects.filter(user=self.user)
+            .prefetch_related("skills")
+            .select_related("location")
+        )
         if self.started:
             qs = qs.filter(Q(ended__gte=self.started) | Q(ended__isnull=True))
         if self.ended:
@@ -109,7 +113,11 @@ class CV:
         return list(qs.order_by("-started"))
 
     def _get_certifications(self) -> list[Certification]:
-        return list(Certification.objects.filter(user=self.user).order_by("-issued_on"))
+        return list(
+            Certification.objects.filter(user=self.user)
+            .prefetch_related("skills")
+            .order_by("-issued_on")
+        )
 
     def _get_projects(self) -> list[Project]:
         qs = (
@@ -133,7 +141,11 @@ class CV:
         )
 
     def _flatten_entries(self) -> list[dict]:
-        """Flatten self.entries into [{id, type, text}, ...] for LLM scoring."""
+        """Flatten self.entries into [{id, type, text, refs}, ...] for LLM scoring.
+
+        `refs` holds the ids of related entries (via FK / M2M) that are also present in this
+        flattened set. The selection layer uses them to propagate relevance across the graph.
+        """
         out: list[dict] = []
 
         for s in self.entries["skills"]:
@@ -143,7 +155,12 @@ class CV:
                 text += f" | domains: {domains}"
             if s.description:
                 text += f" — {s.description[:200]}"
-            out.append({"id": f"skill:{s.pk}", "type": "skill", "text": text})
+            refs = []
+            if s.certification_id:
+                refs.append(f"certification:{s.certification_id}")
+            out.append(
+                {"id": f"skill:{s.pk}", "type": "skill", "text": text, "refs": refs}
+            )
 
         for j in self.entries["jobs"]:
             window = f"{j.started or '?'}–{j.ended or 'present'}"
@@ -153,7 +170,9 @@ class CV:
                 text += f" | skills: {skills}"
             if j.description:
                 text += f" — {j.description[:300]}"
-            out.append({"id": f"job:{j.pk}", "type": "job", "text": text})
+            refs = [f"skill:{sk.pk}" for sk in j.skills.all()]
+            refs += [f"project:{p.pk}" for p in j.projects.all()]
+            out.append({"id": f"job:{j.pk}", "type": "job", "text": text, "refs": refs})
 
         for e in self.entries["educations"]:
             window = f"{e.started or '?'}–{e.ended or 'present'}"
@@ -165,7 +184,15 @@ class CV:
             )
             if e.description:
                 text += f" — {e.description[:200]}"
-            out.append({"id": f"education:{e.pk}", "type": "education", "text": text})
+            refs = [f"skill:{sk.pk}" for sk in e.skills.all()]
+            out.append(
+                {
+                    "id": f"education:{e.pk}",
+                    "type": "education",
+                    "text": text,
+                    "refs": refs,
+                }
+            )
 
         for c in self.entries["certifications"]:
             text = f"{c.name} — {c.issuer}"
@@ -173,8 +200,14 @@ class CV:
                 text += f" ({c.issued_on})"
             if c.description:
                 text += f" — {c.description[:200]}"
+            refs = [f"skill:{sk.pk}" for sk in c.skills.all()]
             out.append(
-                {"id": f"certification:{c.pk}", "type": "certification", "text": text}
+                {
+                    "id": f"certification:{c.pk}",
+                    "type": "certification",
+                    "text": text,
+                    "refs": refs,
+                }
             )
 
         for p in self.entries["projects"]:
@@ -185,16 +218,31 @@ class CV:
                 text += f" | skills: {skills}"
             if p.description:
                 text += f" — {p.description[:300]}"
-            out.append({"id": f"project:{p.pk}", "type": "project", "text": text})
+            refs = [f"skill:{sk.pk}" for sk in p.skills.all()]
+            if p.job_id:
+                refs.append(f"job:{p.job_id}")
+            out.append(
+                {"id": f"project:{p.pk}", "type": "project", "text": text, "refs": refs}
+            )
 
         for la in self.entries["languages"]:
+            refs = []
+            if la.certification_id:
+                refs.append(f"certification:{la.certification_id}")
             out.append(
                 {
                     "id": f"language:{la.pk}",
                     "type": "language",
                     "text": f"{la.name} ({la.fluency})",
+                    "refs": refs,
                 }
             )
+
+        # Prune refs to ids that actually exist in this set (domain/date/proficiency
+        # filters may have dropped a referenced entry) and drop self-references.
+        valid = {e["id"] for e in out}
+        for e in out:
+            e["refs"] = [r for r in e["refs"] if r in valid and r != e["id"]]
 
         return out
 
@@ -210,8 +258,66 @@ class CV:
         )
         return cv_filter.output()
 
+    def apply_selection(self, selection: dict) -> None:
+        """Prune self.entries to the entries chosen by CVFilter, in ranked order.
+
+        `selection` is CVFilter.output(): {type: [{id, score, ...}, ...]} where `type` is the
+        singular entry type ("job", "skill", …) and each list is already ranked descending.
+
+        Each surviving model instance gets a `relevance_score` attribute for downstream rendering
+        / inspection. Sections absent from `selection` are emptied. self.entries section keys are
+        the plural form ("jobs", "skills", …); the flat ids are "<singular>:<pk>".
+        """
+        by_id = {
+            f"{section[:-1]}:{obj.pk}": obj
+            for section, items in self.entries.items()
+            for obj in items
+        }
+        pruned = {section: [] for section in self.entries}
+        for ftype, chosen in selection.items():
+            section = f"{ftype}s"
+            if section not in pruned:
+                continue
+            for item in chosen:
+                obj = by_id.get(item.get("id"))
+                if obj is None:
+                    continue
+                obj.relevance_score = item.get("score")
+                pruned[section].append(obj)
+        self.entries = pruned
+
 
 class CVFilter:
+    """Turns per-entry relevance scores into a ranked, weakly-filtered CV.
+
+    Scoring is pluggable (embeddings / instruct LLM / conversational LLM); everything below the
+    score map — directional propagation over entry edges, then per-section drop — is shared.
+    """
+
+    # Tier: a node is lifted only by neighbours of a strictly lower tier number.
+    _TIER = {
+        "job": 0,
+        "project": 0,
+        "education": 0,
+        "skill": 1,
+        "certification": 2,
+        "language": 3,
+    }
+    # Damping applied to an anchor's score when it lifts a lower-tier neighbour.
+    _ANCHOR_W = 0.85
+
+    # Per-section drop rule. `drop_below`: absolute effective-score floor (cosine-scaled).
+    # `min_keep`: always keep at least this many top-ranked, even below the floor;
+    # None = never drop any; 0 = no floor guarantee (section may empty out if irrelevant).
+    _SECTION_POLICY = {
+        "job": {"drop_below": 0.20, "min_keep": 3},
+        "education": {"drop_below": 0.15, "min_keep": 2},
+        "skill": {"drop_below": 0.35, "min_keep": 5},
+        "project": {"drop_below": 0.30, "min_keep": 0},
+        "certification": {"drop_below": 0.30, "min_keep": 0},
+        "language": {"drop_below": 0.00, "min_keep": None},
+    }
+
     def __init__(
         self,
         job_post_text: str,
@@ -222,45 +328,98 @@ class CVFilter:
         assert isinstance(job_post_text, str)
         self.job_post_text = job_post_text
         self.entries = entries
-
         self.grade = grade
         self.user = user
 
-    def output(self):
+    def output(self) -> dict:
+        """Return {section: [entry dicts + score], ...}, each section ranked desc."""
         if self.grade == "strong":
-            return self.strong()
+            base = (
+                self._strong_scores() or self._standard_scores() or self._light_scores()
+            )
         elif self.grade == "standard":
-            return self.standard()
+            base = self._standard_scores() or self._light_scores()
         else:
-            return self.light()
+            base = self._light_scores()
+        return self._select(base)
 
-    def strong(self):
-        entries = self.ai_conversational_filter()
-        if not entries:
-            entries = self.standard()
-        return entries
+    # --- score sources (each returns {id: float} or {} on failure) ---------------------
 
-    def standard(self):
-        entries = self.ai_filter()
-        if not entries:
-            entries = self.light()
-        return entries
+    def _light_scores(self) -> dict:
+        ranked = Embed(self.job_post_text, self.entries).ranked_entries()
+        return {r["id"]: r["score"] for r in ranked} if ranked else {}
 
-    def light(self):
-        return self.embed_filter()
+    def _standard_scores(self) -> dict:
+        # TODO: Instruct LLM ranking. Returns {} until implemented -> falls back to light.
+        return {}
 
-    def embed_filter(self):
-        # request to model vie Embed class
-        llm = Embed(self.job_post_text, self.entries)
-        scores = llm.ranked_entries()
-        if not scores:
-            return self.entries
-        print(llm)
+    def _strong_scores(self) -> dict:
+        # TODO: Conversational LLM ranking. Returns {} until implemented -> falls back.
+        return {}
 
-    def ai_filter(self):
-        llm = Instruct
-        print(llm)
+    # --- shared selection layer --------------------------------------------------------
 
-    def ai_conversational_filter(self):
-        llm = Conversational
-        print(llm)
+    def _propagate(self, base: dict) -> dict:
+        """Single ascending-tier sweep: lift each node by its best higher-tier neighbour."""
+        eff = {e["id"]: base.get(e["id"], 0.0) for e in self.entries}
+        type_of = {e["id"]: e["type"] for e in self.entries}
+
+        adj: dict[str, set[str]] = {}
+        for e in self.entries:
+            for r in e.get("refs", []):
+                adj.setdefault(e["id"], set()).add(r)
+                adj.setdefault(r, set()).add(e["id"])
+
+        for tier in (1, 2, 3):
+            for e in self.entries:
+                if self._TIER.get(e["type"]) != tier:
+                    continue
+                eid = e["id"]
+                higher = [
+                    eff[n]
+                    for n in adj.get(eid, ())
+                    if self._TIER.get(type_of.get(n), 99) < tier
+                ]
+                if higher:
+                    eff[eid] = max(eff[eid], self._ANCHOR_W * max(higher))
+        return eff
+
+    def _select(self, base: dict) -> dict:
+        """Apply propagation + per-section drop. Empty base -> keep everything unscored."""
+        if not base:
+            return self._group_all()
+
+        eff = self._propagate(base)
+
+        by_section: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_section.setdefault(e["type"], []).append(e)
+
+        out: dict[str, list[dict]] = {}
+        for section, items in by_section.items():
+            policy = self._SECTION_POLICY.get(
+                section, {"drop_below": 0.0, "min_keep": 0}
+            )
+            items.sort(key=lambda e: eff.get(e["id"], 0.0), reverse=True)
+
+            min_keep = policy["min_keep"]
+            if min_keep is None:
+                keep = items
+            else:
+                keep = [
+                    e for e in items if eff.get(e["id"], 0.0) >= policy["drop_below"]
+                ]
+                if len(keep) < min_keep:
+                    keep = items[:min_keep]
+
+            out[section] = [
+                {**e, "score": round(eff.get(e["id"], 0.0), 4)} for e in keep
+            ]
+        return out
+
+    def _group_all(self) -> dict:
+        """Fallback when scoring fails: every entry kept, score 0.0."""
+        out: dict[str, list[dict]] = {}
+        for e in self.entries:
+            out.setdefault(e["type"], []).append({**e, "score": 0.0})
+        return out

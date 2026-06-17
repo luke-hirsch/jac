@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from django.conf import settings
@@ -12,8 +13,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from jac import llm as jac_llm
-from jac.cv import CV
+from jac.cv import CV, CVFilter
 from jac.models import (
     Certification,
     Domain,
@@ -233,705 +233,6 @@ class CVQueryTests(TestCase):
             set(cv.entries.keys()),
             {"skills", "jobs", "educations", "certifications", "projects", "languages"},
         )
-
-
-# ---------------------------------------------------------------------------
-# CV deterministic helpers
-# ---------------------------------------------------------------------------
-
-
-class CVDeterministicFilterTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lukas")
-        cls.dom = Domain.objects.create(user=cls.user, name="Healthcare")
-
-        cls.skill = Skill.objects.create(user=cls.user, name="Python")
-        cls.skill.domains.add(cls.dom)
-        cls.skill_unrelated = Skill.objects.create(user=cls.user, name="COBOL")
-
-        cls.job = Job.objects.create(
-            user=cls.user,
-            title="ML Engineer",
-            company="HealthCo",
-            started=date(2022, 1, 1),
-        )
-        cls.job.skills.add(cls.skill)
-
-        cls.job_unrelated = Job.objects.create(
-            user=cls.user,
-            title="Janitor",
-            company="Unrelated",
-            started=date(2010, 1, 1),
-        )
-
-        Education.objects.create(
-            user=cls.user,
-            institution="Health University",
-            field_of_study="Bio",
-            started=date(2010, 1, 1),
-        )
-        Education.objects.create(
-            user=cls.user,
-            institution="Art School",
-            field_of_study="Painting",
-            started=date(2008, 1, 1),
-        )
-
-        Certification.objects.create(
-            user=cls.user, name="Healthcare Data Cert", issuer="X"
-        )
-        Certification.objects.create(user=cls.user, name="Unrelated", issuer="Y")
-
-        cls.proj = Project.objects.create(
-            user=cls.user, name="Patient ETL", started=date(2021, 1, 1)
-        )
-        cls.proj.domains.add(cls.dom)
-        Project.objects.create(
-            user=cls.user, name="Cat photo blog", started=date(2018, 1, 1)
-        )
-
-        Language.objects.create(user=cls.user, name="English")
-        Language.objects.create(user=cls.user, name="Spanish")
-
-    def test_empty_keywords_is_noop(self):
-        cv = CV(user_pk=self.user.pk)
-        before = {k: len(v) for k, v in cv.entries.items()}
-        cv.deterministic_filter([])
-        after = {k: len(v) for k, v in cv.entries.items()}
-        self.assertEqual(before, after)
-
-    def test_filter_matches_substrings_case_insensitively(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.deterministic_filter(["health"])
-        self.assertEqual({s.name for s in cv.entries["skills"]}, {"Python"})
-        self.assertEqual({j.title for j in cv.entries["jobs"]}, {"ML Engineer"})
-        self.assertEqual(
-            {e.institution for e in cv.entries["educations"]}, {"Health University"}
-        )
-        self.assertEqual(
-            {c.name for c in cv.entries["certifications"]}, {"Healthcare Data Cert"}
-        )
-        self.assertEqual({p.name for p in cv.entries["projects"]}, {"Patient ETL"})
-
-    def test_filter_matches_through_related_skills_and_domains(self):
-        cv = CV(user_pk=self.user.pk)
-        # 'python' is only on a skill or via a skill's name on a job
-        cv.deterministic_filter(["python"])
-        self.assertEqual({j.title for j in cv.entries["jobs"]}, {"ML Engineer"})
-
-    def test_filter_languages_by_name(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.deterministic_filter(["english"])
-        self.assertEqual({la.name for la in cv.entries["languages"]}, {"English"})
-
-
-class CVExtractKeywordsTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lukas")
-        Skill.objects.create(user=cls.user, name="Python")
-        Skill.objects.create(user=cls.user, name="Go")
-        Language.objects.create(user=cls.user, name="English")
-
-    def test_returns_lowercase_significant_words(self):
-        cv = CV(user_pk=self.user.pk)
-        matched = cv.extract_keywords("We need Python and Haskell developers.")
-        self.assertIn("python", matched)
-        self.assertIn("haskell", matched)
-        self.assertIn("developers", matched)
-
-    def test_short_tokens_filtered_out(self):
-        # Min length 3 — "We", "Go", "to" never surface.
-        cv = CV(user_pk=self.user.pk)
-        matched = cv.extract_keywords("We go to work today.")
-        self.assertNotIn("we", matched)
-        self.assertNotIn("go", matched)
-        self.assertNotIn("to", matched)
-
-    def test_strict_drops_filler_loose_keeps_it(self):
-        cv = CV(user_pk=self.user.pk)
-        strict = cv.extract_keywords("Looking for a team player with experience.")
-        loose = cv.extract_keywords(
-            "Looking for a team player with experience.", loose=True
-        )
-        self.assertNotIn("team", strict)
-        self.assertNotIn("experience", strict)
-        self.assertIn("team", loose)
-        self.assertIn("experience", loose)
-
-    def test_empty_text_returns_empty(self):
-        cv = CV(user_pk=self.user.pk)
-        self.assertEqual(cv.extract_keywords(""), [])
-
-    def test_sorted_longest_first(self):
-        cv = CV(user_pk=self.user.pk)
-        matched = cv.extract_keywords("PostgreSQL and Python developers.")
-        lengths = [len(w) for w in matched]
-        self.assertEqual(lengths, sorted(lengths, reverse=True))
-
-
-class CVDeterministicFilterTextRetryTests(TestCase):
-    """When given raw text, deterministic_filter retries with loose stopwords
-    if the strict pass keeps fewer than min_kept entries."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lukas")
-        # Entries whose only overlap with the job text is a "filler" word —
-        # caught by loose but dropped by strict.
-        Skill.objects.create(
-            user=cls.user, name="Python", description="Strong team player."
-        )
-        Skill.objects.create(
-            user=cls.user, name="Java", description="Years of experience."
-        )
-        Skill.objects.create(
-            user=cls.user, name="Rust", description="Worked on team projects."
-        )
-
-    def test_strict_first_then_loose_fallback(self):
-        cv = CV(user_pk=self.user.pk)
-        # Posting has no overlap on tech terms — only "team" and "experience".
-        used = cv.deterministic_filter(
-            "We are looking for a team player with experience.", min_kept=2
-        )
-        # Loose retry should have kicked in; "team" should be among needles.
-        self.assertIn("team", used)
-        # At least 2 entries should survive thanks to the retry.
-        kept = sum(len(v) for v in cv.entries.values())
-        self.assertGreaterEqual(kept, 2)
-
-    def test_text_input_returns_keywords_used(self):
-        cv = CV(user_pk=self.user.pk)
-        used = cv.deterministic_filter("Strong Python developer wanted.")
-        self.assertIsInstance(used, list)
-        self.assertIn("python", used)
-
-
-# ---------------------------------------------------------------------------
-# CV LLM-driven methods (mocked)
-# ---------------------------------------------------------------------------
-
-
-class CVAIMethodsTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lukas")
-        cls.skill_py = Skill.objects.create(user=cls.user, name="Python")
-        cls.skill_excel = Skill.objects.create(user=cls.user, name="Excel")
-        cls.job = Job.objects.create(
-            user=cls.user,
-            title="Engineer",
-            company="Acme",
-            started=date(2022, 1, 1),
-        )
-
-    def test_entries_for_llm_flattens_all_sections(self):
-        cv = CV(user_pk=self.user.pk)
-        flat = cv._entries_for_llm()
-        ids = {item["id"] for item in flat}
-        self.assertIn(f"skill:{self.skill_py.pk}", ids)
-        self.assertIn(f"skill:{self.skill_excel.pk}", ids)
-        self.assertIn(f"job:{self.job.pk}", ids)
-        for item in flat:
-            self.assertIn("type", item)
-            self.assertIn("text", item)
-
-    def test_apply_scores_attaches_relevance_attrs(self):
-        cv = CV(user_pk=self.user.pk)
-        scores = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.9, "reason": "match"},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.1, "reason": "weak"},
-            {"id": f"job:{self.job.pk}", "score": 0.5, "reason": "ok"},
-        ]
-        cv._apply_scores(scores)
-        skills = {s.pk: s for s in cv.entries["skills"]}
-        self.assertEqual(skills[self.skill_py.pk].relevance_score, 0.9)
-        self.assertEqual(skills[self.skill_py.pk].relevance_reason, "match")
-        self.assertEqual(skills[self.skill_excel.pk].relevance_score, 0.1)
-        self.assertEqual(cv.entries["jobs"][0].relevance_score, 0.5)
-
-    def test_apply_scores_defaults_missing_to_zero(self):
-        cv = CV(user_pk=self.user.pk)
-        cv._apply_scores([])  # no scores for anything
-        for s in cv.entries["skills"]:
-            self.assertEqual(s.relevance_score, 0.0)
-            self.assertEqual(s.relevance_reason, "")
-
-    def test_apply_scores_handles_unparseable_score(self):
-        cv = CV(user_pk=self.user.pk)
-        cv._apply_scores([{"id": f"skill:{self.skill_py.pk}", "score": "not a number"}])
-        skills = {s.pk: s for s in cv.entries["skills"]}
-        self.assertEqual(skills[self.skill_py.pk].relevance_score, 0.0)
-
-    def test_apply_scores_skips_entries_without_id(self):
-        cv = CV(user_pk=self.user.pk)
-        # Should not raise.
-        cv._apply_scores([{"score": 0.9}])
-
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    def test_ai_filter_entries_drops_below_threshold(self, mock_score):
-        cv = CV(user_pk=self.user.pk)
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.9, "reason": "yes"},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.1, "reason": "no"},
-            {"id": f"job:{self.job.pk}", "score": 0.5, "reason": "ok"},
-        ]
-        # Patch the per-section floors to 0 so the threshold drop is what's tested.
-        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
-            cv.ai_filter_entries("some job text", threshold=0.4)
-        skill_names = {s.name for s in cv.entries["skills"]}
-        self.assertEqual(skill_names, {"Python"})
-        self.assertEqual(len(cv.entries["jobs"]), 1)
-
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    def test_ai_filter_entries_floor_fills_sparse_section(self, mock_score):
-        """When fewer than the per-section floor survive the threshold, the
-        ranked top-K are kept instead so the section is never empty."""
-        cv = CV(user_pk=self.user.pk)
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.9, "reason": "yes"},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.1, "reason": "no"},
-            {"id": f"job:{self.job.pk}", "score": 0.05, "reason": "no"},
-        ]
-        cv.ai_filter_entries("some job text", threshold=0.4)
-        # Floor for skills is 5 but only 2 exist — both are kept (Python ranked first).
-        skill_names_in_order = [s.name for s in cv.entries["skills"]]
-        self.assertEqual(skill_names_in_order, ["Python", "Excel"])
-        # Floor for jobs is 3 but only 1 exists — kept even though below threshold.
-        self.assertEqual(len(cv.entries["jobs"]), 1)
-
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    def test_ai_rank_entries_sorts_desc_without_dropping(self, mock_score):
-        cv = CV(user_pk=self.user.pk)
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.2},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.8},
-        ]
-        cv.ai_rank_entries("some job text")
-        names_in_order = [s.name for s in cv.entries["skills"]]
-        self.assertEqual(names_in_order[:2], ["Excel", "Python"])
-        # Nothing was dropped.
-        self.assertEqual(len(cv.entries["skills"]), 2)
-
-    @patch("jac.cv.jac_llm.extract_job_keywords")
-    def test_ai_extract_keywords_delegates_to_llm(self, mock_extract):
-        mock_extract.return_value = ["Python", "Django"]
-        cv = CV(user_pk=self.user.pk)
-        self.assertEqual(cv.ai_extract_keywords("posting"), ["Python", "Django"])
-        mock_extract.assert_called_once_with(
-            "posting", llm="default", user=self.user.pk
-        )
-
-    @patch("jac.cv.jac_llm.score_entries_with_analysis")
-    @patch("jac.cv.jac_llm.analyze_job")
-    def test_agentic_tailor_calls_analyze_then_filters_and_sorts(
-        self, mock_analyze, mock_score
-    ):
-        mock_analyze.return_value = {"role_title": "Eng", "must_have": ["Python"]}
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.95},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.05},
-            {"id": f"job:{self.job.pk}", "score": 0.7},
-        ]
-        cv = CV(user_pk=self.user.pk)
-        # Patch the skills floor to 0 so the threshold drop is what's tested
-        # (default floor of 5 would otherwise refill from the ranked list).
-        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0}, clear=False):
-            analysis = cv.agentic_tailor("posting", threshold=0.4)
-
-        self.assertEqual(analysis["role_title"], "Eng")
-        # analysis is passed through to scorer
-        _, kwargs = mock_score.call_args
-        positional = mock_score.call_args.args
-        self.assertEqual(positional[1], analysis)
-        # Filtered: Excel (0.05) dropped, Python kept.
-        self.assertEqual({s.name for s in cv.entries["skills"]}, {"Python"})
-
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    def test_ai_filter_skips_llm_when_no_entries(self, mock_score):
-        empty_user = User.objects.create(username="empty")
-        cv = CV(user_pk=empty_user.pk)
-        cv.ai_filter_entries("posting")
-        mock_score.assert_not_called()
-
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_ai_conversational_tailor_keeps_selection_in_order(self, mock_tailor):
-        mock_tailor.return_value = [
-            {"id": f"skill:{self.skill_excel.pk}", "reason": "spreadsheet ops"},
-            {"id": f"skill:{self.skill_py.pk}", "reason": "automation"},
-        ]
-        cv = CV(user_pk=self.user.pk)
-        selection = cv.ai_conversational_tailor("posting")
-
-        names_in_order = [s.name for s in cv.entries["skills"]]
-        self.assertEqual(names_in_order, ["Excel", "Python"])
-        # The selected job wasn't in the response → jobs section drops to empty.
-        self.assertEqual(cv.entries["jobs"], [])
-        # Reasons are attached to the model instances.
-        excel = next(s for s in cv.entries["skills"] if s.name == "Excel")
-        self.assertEqual(excel.relevance_reason, "spreadsheet ops")
-        self.assertEqual(len(selection), 2)
-
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_ai_conversational_tailor_propagates_value_error(self, mock_tailor):
-        mock_tailor.side_effect = ValueError("too few valid ids")
-        cv = CV(user_pk=self.user.pk)
-        with self.assertRaises(ValueError):
-            cv.ai_conversational_tailor("posting")
-
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_ai_conversational_tailor_skips_llm_when_no_entries(self, mock_tailor):
-        empty_user = User.objects.create(username="empty")
-        cv = CV(user_pk=empty_user.pk)
-        out = cv.ai_conversational_tailor("posting")
-        self.assertEqual(out, [])
-        mock_tailor.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# CV fallback ladder
-# ---------------------------------------------------------------------------
-
-
-# Pin the full ladder regardless of the default config's `strength` (now
-# "light") — these tests exercise fall-through from the top. The light/standard
-# ladders are covered by CVTailorStrengthTests below.
-@patch("llm_connector.conf.get_alias_strength", return_value="strong")
-class CVTailorWithFallbackTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lukas")
-        cls.skill_py = Skill.objects.create(
-            user=cls.user, name="Python", description="Backend automation."
-        )
-        cls.skill_excel = Skill.objects.create(
-            user=cls.user, name="Excel", description="Spreadsheets."
-        )
-        cls.job = Job.objects.create(
-            user=cls.user,
-            title="Backend Engineer",
-            company="Acme",
-            started=date(2022, 1, 1),
-            description="Python services.",
-        )
-
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_tier1_conversational_happy_path(self, mock_tailor, mock_strength):
-        mock_tailor.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "reason": "direct"},
-            {"id": f"job:{self.job.pk}", "reason": "direct"},
-        ]
-        cv = CV(user_pk=self.user.pk)
-        result = cv.ai_tailor_with_fallback("python backend engineer wanted")
-        self.assertEqual(result["tier"], "conversational")
-        self.assertEqual(result["keywords"], None)
-        self.assertEqual(len(result["selection"]), 2)
-        # Excel was excluded by the selection.
-        self.assertEqual({s.name for s in cv.entries["skills"]}, {"Python"})
-
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_tier1_failure_falls_through_to_filter(
-        self, mock_tailor, mock_score, mock_strength
-    ):
-        mock_tailor.side_effect = TimeoutError("model timed out")
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.9},
-            {"id": f"skill:{self.skill_excel.pk}", "score": 0.05},
-            {"id": f"job:{self.job.pk}", "score": 0.8},
-        ]
-        cv = CV(user_pk=self.user.pk)
-        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
-            result = cv.ai_tailor_with_fallback("posting", threshold=0.4)
-        self.assertEqual(result["tier"], "filter")
-        self.assertEqual(result["selection"], None)
-        # Snapshot was restored before filter ran, then filter dropped Excel.
-        self.assertEqual({s.name for s in cv.entries["skills"]}, {"Python"})
-
-    @patch("jac.cv.jac_llm.extract_job_keywords")
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_falls_through_to_keyword_tier(
-        self, mock_tailor, mock_score, mock_extract, mock_strength
-    ):
-        mock_tailor.side_effect = RuntimeError("boom")
-        mock_score.side_effect = RuntimeError("boom")
-        mock_extract.return_value = ["python"]
-        cv = CV(user_pk=self.user.pk)
-        result = cv.ai_tailor_with_fallback("posting")
-        self.assertEqual(result["tier"], "keyword")
-        self.assertEqual(result["keywords"], ["python"])
-
-    @patch("jac.cv.jac_llm.extract_job_keywords")
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_falls_through_to_deterministic_tier(
-        self, mock_tailor, mock_score, mock_extract, mock_strength
-    ):
-        mock_tailor.side_effect = RuntimeError("boom")
-        mock_score.side_effect = RuntimeError("boom")
-        mock_extract.side_effect = RuntimeError("boom")
-        cv = CV(user_pk=self.user.pk)
-        result = cv.ai_tailor_with_fallback(
-            "Python automation engineer wanted.", language="en"
-        )
-        self.assertEqual(result["tier"], "deterministic")
-        self.assertIsInstance(result["keywords"], list)
-        # Substring match on "python" should retain at least the Python skill / job.
-        kept = sum(len(v) for v in cv.entries.values())
-        self.assertGreaterEqual(kept, 1)
-
-    @patch("jac.cv.jac_llm.extract_job_keywords")
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_all_tiers_fail_returns_unfiltered_snapshot(
-        self, mock_tailor, mock_score, mock_extract, mock_strength
-    ):
-        mock_tailor.side_effect = RuntimeError("boom")
-        mock_score.side_effect = RuntimeError("boom")
-        mock_extract.side_effect = RuntimeError("boom")
-        cv = CV(user_pk=self.user.pk)
-        before_counts = {k: len(v) for k, v in cv.entries.items()}
-        # Posting with zero substring overlap on any of our entries' tokens.
-        result = cv.ai_tailor_with_fallback("zzz qqq xxx yyy.", language="en")
-        self.assertEqual(result["tier"], "unfiltered")
-        self.assertEqual(result["selection"], None)
-        self.assertEqual(result["keywords"], None)
-        after_counts = {k: len(v) for k, v in cv.entries.items()}
-        self.assertEqual(before_counts, after_counts)
-
-
-class CVTailorStrengthTests(TestCase):
-    """The `strength` hint picks the ladder: weak models skip the heavy tiers."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="lara")
-        cls.skill_py = Skill.objects.create(
-            user=cls.user, name="Python", description="Backend automation."
-        )
-        cls.job = Job.objects.create(
-            user=cls.user,
-            title="Backend Engineer",
-            company="Acme",
-            started=date(2022, 1, 1),
-            description="Python services.",
-        )
-
-    @patch("llm_connector.conf.get_alias_strength", return_value="light")
-    @patch("jac.cv.jac_llm.extract_job_keywords", return_value=["python"])
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_light_strength_routes_straight_to_keyword(
-        self, mock_tailor, mock_score, mock_extract, mock_strength
-    ):
-        cv = CV(user_pk=self.user.pk)
-        result = cv.ai_tailor_with_fallback("python backend engineer")
-        self.assertEqual(result["tier"], "keyword")
-        # Light ladder = [keyword, deterministic]: the expensive tiers never run.
-        mock_tailor.assert_not_called()
-        mock_score.assert_not_called()
-
-    @patch("llm_connector.conf.get_alias_strength", return_value="standard")
-    @patch("jac.cv.jac_llm.score_entries_for_job")
-    @patch("jac.cv.jac_llm.tailor_cv_conversationally")
-    def test_standard_strength_skips_conversational(
-        self, mock_tailor, mock_score, mock_strength
-    ):
-        mock_score.return_value = [
-            {"id": f"skill:{self.skill_py.pk}", "score": 0.9},
-            {"id": f"job:{self.job.pk}", "score": 0.8},
-        ]
-        cv = CV(user_pk=self.user.pk)
-        with patch.dict(CV._MIN_PER_SECTION, {"skills": 0, "jobs": 0}, clear=False):
-            result = cv.ai_tailor_with_fallback("posting", threshold=0.4)
-        self.assertEqual(result["tier"], "filter")
-        # Standard ladder = [filter, keyword, deterministic]: no conversational.
-        mock_tailor.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# jac.llm wrappers — line-protocol parsing + mocked complete()
-# ---------------------------------------------------------------------------
-
-
-class LineParserTests(TestCase):
-    def test_keyword_lines_dedupe_and_strip_markers(self):
-        raw = "- Python\nDjango\n1. REST\nPython"
-        self.assertEqual(
-            jac_llm._parse_keyword_lines(raw), ["Python", "Django", "REST"]
-        )
-
-    def test_keyword_lines_strip_code_fence(self):
-        raw = "```\nPython\nDjango\n```"
-        self.assertEqual(jac_llm._parse_keyword_lines(raw), ["Python", "Django"])
-
-    def test_scored_lines_parse_and_skip_garbage(self):
-        # A junk line with no '|' between two good rows is dropped, not fatal.
-        raw = "skill:1 | 0.9 | direct\nGARBAGE NO PIPE\njob:2 | 0.5 | transferable"
-        self.assertEqual(
-            jac_llm._parse_scored_lines(raw),
-            [
-                {"id": "skill:1", "score": 0.9, "reason": "direct"},
-                {"id": "job:2", "score": 0.5, "reason": "transferable"},
-            ],
-        )
-
-    def test_scored_lines_default_score_and_pipe_in_reason(self):
-        # Non-numeric score -> 0.0; a '|' inside the reason is preserved.
-        raw = "skill:1 | notanumber | a | b"
-        self.assertEqual(
-            jac_llm._parse_scored_lines(raw),
-            [{"id": "skill:1", "score": 0.0, "reason": "a | b"}],
-        )
-
-    def test_selection_lines_bare_id_and_reason(self):
-        raw = "skill:1 | core skill\njob:2"
-        self.assertEqual(
-            jac_llm._parse_selection_lines(raw),
-            [
-                {"id": "skill:1", "reason": "core skill"},
-                {"id": "job:2", "reason": ""},
-            ],
-        )
-
-    def test_analysis_block_parses_headers_and_bullets(self):
-        raw = (
-            "ROLE: Backend Engineer\n"
-            "SENIORITY: mid\n"
-            "MUST_HAVE:\n- Python\n- Django\n"
-            "DOMAINS: fintech, payments\n"
-            "SUMMARY: Builds services. Ships fast."
-        )
-        out = jac_llm._parse_analysis_block(raw)
-        self.assertEqual(out["role_title"], "Backend Engineer")
-        self.assertEqual(out["seniority"], "mid")
-        self.assertEqual(out["must_have"], ["Python", "Django"])
-        self.assertEqual(out["domains"], ["fintech", "payments"])
-        self.assertEqual(out["summary"], "Builds services. Ships fast.")
-        # Every key is always present, even when the model omits a section.
-        self.assertEqual(out["nice_to_have"], [])
-
-
-class LLMWrappersTests(TestCase):
-    @patch("jac.llm.complete")
-    def test_extract_job_keywords_parses_lines(self, mock_complete):
-        mock_complete.return_value = "Python\nDjango"
-        out = jac_llm.extract_job_keywords("posting")
-        self.assertEqual(out, ["Python", "Django"])
-
-    @patch("jac.llm.complete")
-    def test_extract_job_keywords_uses_default_alias(self, mock_complete):
-        mock_complete.return_value = ""
-        jac_llm.extract_job_keywords("posting")
-        self.assertEqual(mock_complete.call_args.kwargs["alias"], "default")
-
-    @patch("jac.llm.complete")
-    def test_extract_job_keywords_forwards_user(self, mock_complete):
-        mock_complete.return_value = ""
-        jac_llm.extract_job_keywords("posting", user=42)
-        self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
-
-    @patch("jac.llm.complete")
-    def test_score_entries_for_job_forwards_user(self, mock_complete):
-        mock_complete.return_value = ""
-        jac_llm.score_entries_for_job("posting", [], user=42)
-        self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
-
-    @patch("jac.llm.complete")
-    def test_analyze_job_forwards_user(self, mock_complete):
-        mock_complete.return_value = ""
-        jac_llm.analyze_job("posting", user=42)
-        self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
-
-    @patch("jac.llm.complete")
-    def test_score_entries_with_analysis_forwards_user(self, mock_complete):
-        mock_complete.return_value = ""
-        jac_llm.score_entries_with_analysis("posting", {}, [], user=42)
-        self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
-
-    @patch("jac.llm.complete")
-    def test_extract_job_keywords_returns_surface_form_per_line(self, mock_complete):
-        mock_complete.return_value = "1\n2\n3"
-        self.assertEqual(jac_llm.extract_job_keywords("posting"), ["1", "2", "3"])
-
-    @patch("jac.llm.complete")
-    def test_score_entries_for_job_returns_parsed(self, mock_complete):
-        mock_complete.return_value = "skill:1 | 0.9 | strong fit"
-        out = jac_llm.score_entries_for_job(
-            "posting", [{"id": "skill:1", "type": "skill", "text": "x"}]
-        )
-        self.assertEqual(out, [{"id": "skill:1", "score": 0.9, "reason": "strong fit"}])
-
-    @patch("jac.llm.complete")
-    def test_analyze_job_returns_dict(self, mock_complete):
-        mock_complete.return_value = "ROLE: Engineer\nSENIORITY: mid"
-        out = jac_llm.analyze_job("posting")
-        self.assertEqual(out["role_title"], "Engineer")
-        self.assertEqual(out["seniority"], "mid")
-
-    @patch("jac.llm.complete")
-    def test_score_entries_with_analysis_returns_parsed(self, mock_complete):
-        mock_complete.return_value = "job:1 | 0.7 | direct"
-        out = jac_llm.score_entries_with_analysis(
-            "posting", {"must_have": ["x"]}, [{"id": "job:1"}]
-        )
-        self.assertEqual(out, [{"id": "job:1", "score": 0.7, "reason": "direct"}])
-
-    @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_returns_ranked_selection(self, mock_complete):
-        mock_complete.return_value = "skill:1 | core\njob:2 | direct"
-        entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:2", "type": "job", "text": "Backend Engineer at Acme"},
-        ]
-        out = jac_llm.tailor_cv_conversationally("posting", entries)
-        self.assertEqual(out[0]["id"], "skill:1")
-        self.assertEqual(out[1]["id"], "job:2")
-        self.assertEqual(out[0]["reason"], "core")
-
-    @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_drops_hallucinated_ids(self, mock_complete):
-        mock_complete.return_value = (
-            "skill:1 | real\nskill:999 | made up\njob:2 | real"
-        )
-        entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:2", "type": "job", "text": "Backend"},
-        ]
-        out = jac_llm.tailor_cv_conversationally("posting", entries)
-        ids = [item["id"] for item in out]
-        self.assertEqual(ids, ["skill:1", "job:2"])
-
-    @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_raises_when_too_few_valid(self, mock_complete):
-        mock_complete.return_value = "skill:999 | made up"
-        entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:2", "type": "job", "text": "Backend"},
-        ]
-        with self.assertRaises(ValueError):
-            jac_llm.tailor_cv_conversationally("posting", entries)
-
-    @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_raises_on_prose(self, mock_complete):
-        # Prose with no valid ids yields < 2 picks after id-validation -> raise.
-        mock_complete.return_value = "I cannot help with this request."
-        entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:2", "type": "job", "text": "Backend"},
-        ]
-        with self.assertRaises(ValueError):
-            jac_llm.tailor_cv_conversationally("posting", entries)
-
-    @patch("jac.llm.complete")
-    def test_tailor_cv_conversationally_forwards_user(self, mock_complete):
-        mock_complete.return_value = "a | x\nb | y"
-        entries = [{"id": "a"}, {"id": "b"}]
-        jac_llm.tailor_cv_conversationally("posting", entries, user=42)
-        self.assertEqual(mock_complete.call_args.kwargs["user"], 42)
 
 
 # ---------------------------------------------------------------------------
@@ -1656,9 +957,7 @@ class CvExportImportRoundTripTests(TestCase):
         """Export A to a temp file and import it into B."""
         buf = io.StringIO()
         call_command("cv_export", "--user", str(self.a.pk), stdout=buf)
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".json", delete=False
-        ) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
             fh.write(buf.getvalue())
             path = fh.name
         try:
@@ -1715,9 +1014,7 @@ class CvExportImportRoundTripTests(TestCase):
         self.assertIn(b_domain, py.domains.all())
         # A's original domain is untouched / not cross-linked to B.
         self.assertEqual(Domain.objects.filter(name="Backend").count(), 2)
-        self.assertEqual(
-            Domain.objects.filter(user=self.a, name="Backend").count(), 1
-        )
+        self.assertEqual(Domain.objects.filter(user=self.a, name="Backend").count(), 1)
 
     def test_job_location_and_snippet_round_trip(self):
         self._round_trip()
@@ -1735,7 +1032,7 @@ class CvExportImportRoundTripTests(TestCase):
         buf = io.StringIO()
         call_command("cv_export", "--user", str(self.a.pk), stdout=buf)
         # The computed read-only property must not leak into the dump.
-        self.assertNotIn("years_of_experience\"", buf.getvalue())
+        self.assertNotIn('years_of_experience"', buf.getvalue())
         self.assertIn("years_of_experience_override", buf.getvalue())
 
     def test_system_default_domain_reused_not_duplicated(self):
@@ -1767,3 +1064,228 @@ class CvExportImportRoundTripTests(TestCase):
         self.assertFalse(Domain.objects.filter(user=self.b, name="finance").exists())
         b_py = Skill.objects.get(user=self.b, name="Python")
         self.assertIn(sysdom, b_py.domains.all())
+
+
+# ---------------------------------------------------------------------------
+# CV edge / selection tests
+# ---------------------------------------------------------------------------
+
+
+class CVEdgeTests(TestCase):
+    """_flatten_entries emits correct relationship edges."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="edgeuser")
+        cls.cert = Certification.objects.create(
+            user=cls.user, name="AWS SA", issuer="Amazon"
+        )
+        cls.skill = Skill.objects.create(
+            user=cls.user, name="Python", certification=cls.cert
+        )
+        cls.cert.skills.add(cls.skill)
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+        cls.job.skills.add(cls.skill)
+        cls.project = Project.objects.create(
+            user=cls.user, name="Side", started=date(2023, 1, 1), job=cls.job
+        )
+        cls.project.skills.add(cls.skill)
+
+    def _by_id(self):
+        return {e["id"]: e for e in CV(user_pk=self.user.pk)._flatten_entries()}
+
+    def test_job_refs_skill_and_project(self):
+        flat = self._by_id()
+        refs = set(flat[f"job:{self.job.pk}"]["refs"])
+        self.assertIn(f"skill:{self.skill.pk}", refs)
+        self.assertIn(f"project:{self.project.pk}", refs)
+
+    def test_project_refs_skill_and_job(self):
+        refs = set(self._by_id()[f"project:{self.project.pk}"]["refs"])
+        self.assertIn(f"skill:{self.skill.pk}", refs)
+        self.assertIn(f"job:{self.job.pk}", refs)
+
+    def test_skill_refs_certification(self):
+        refs = self._by_id()[f"skill:{self.skill.pk}"]["refs"]
+        self.assertIn(f"certification:{self.cert.pk}", refs)
+
+    def test_refs_pruned_to_existing_ids(self):
+        # Skill filtered out by proficiency -> job must not ref a missing skill.
+        cv = CV(user_pk=self.user.pk, min_skill_proficiency="expert")
+        flat = {e["id"]: e for e in cv._flatten_entries()}
+        if f"skill:{self.skill.pk}" not in flat:  # intermediate skill dropped
+            self.assertNotIn(
+                f"skill:{self.skill.pk}", flat[f"job:{self.job.pk}"]["refs"]
+            )
+
+
+class CVSelectionTests(TestCase):
+    """CVFilter propagation + per-section drop, with injected fake scores."""
+
+    def _entries(self):
+        return [
+            {"id": "job:1", "type": "job", "text": "", "refs": ["skill:1"]},
+            {"id": "skill:1", "type": "skill", "text": "", "refs": []},
+            {"id": "skill:2", "type": "skill", "text": "", "refs": []},
+            {
+                "id": "certification:1",
+                "type": "certification",
+                "text": "",
+                "refs": ["skill:1"],
+            },
+            {"id": "language:1", "type": "language", "text": "", "refs": []},
+        ]
+
+    def _filter(self):
+        return CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+
+    def test_propagation_lifts_low_skill_under_strong_job(self):
+        f = self._filter()
+        base = {"job:1": 0.9, "skill:1": 0.05, "skill:2": 0.05}
+        eff = f._propagate(base)
+        # skill:1 is anchored by job:1 -> lifted to 0.85 * 0.9.
+        self.assertAlmostEqual(eff["skill:1"], 0.765, places=3)
+        # skill:2 has no high-tier neighbour -> untouched.
+        self.assertAlmostEqual(eff["skill:2"], 0.05, places=3)
+
+    def test_propagation_chains_job_to_skill_to_cert(self):
+        f = self._filter()
+        eff = f._propagate({"job:1": 1.0, "skill:1": 0.0, "certification:1": 0.0})
+        # job (0.85) -> skill:1, then skill:1 (0.85) -> cert.
+        self.assertAlmostEqual(eff["skill:1"], 0.85, places=3)
+        self.assertAlmostEqual(eff["certification:1"], 0.7225, places=3)
+
+    def test_low_skill_dropped_below_floor(self):
+        f = self._filter()
+        # All scores low, no anchoring; skill floor 0.35, min_keep 5 but only 2 skills exist.
+        out = f._select({"job:1": 0.9, "skill:1": 0.10, "skill:2": 0.10})
+        kept = {e["id"] for e in out.get("skill", [])}
+        # min_keep(5) > available(2) -> both skills kept despite being below floor.
+        self.assertEqual(kept, {"skill:1", "skill:2"})
+
+    def test_skill_floor_drops_when_above_min_keep(self):
+        entries = [
+            {"id": f"skill:{i}", "type": "skill", "text": "", "refs": []}
+            for i in range(1, 8)
+        ]
+        f = CVFilter(job_post_text="x", entries=entries, grade="light")
+        base = {f"skill:{i}": (0.9 if i <= 5 else 0.10) for i in range(1, 8)}
+        out = f._select(base)
+        kept = {e["id"] for e in out["skill"]}
+        # 5 above floor kept; the 2 below floor dropped (min_keep already satisfied).
+        self.assertEqual(kept, {f"skill:{i}" for i in range(1, 6)})
+
+    def test_languages_never_dropped(self):
+        f = self._filter()
+        out = f._select({"language:1": 0.0})
+        self.assertEqual([e["id"] for e in out["language"]], ["language:1"])
+
+    def test_empty_base_keeps_everything(self):
+        f = self._filter()
+        out = f._select({})
+        kept = {e["id"] for sect in out.values() for e in sect}
+        self.assertEqual(kept, {e["id"] for e in self._entries()})
+
+    def test_sections_ranked_descending(self):
+        entries = [
+            {"id": "job:1", "type": "job", "text": "", "refs": []},
+            {"id": "job:2", "type": "job", "text": "", "refs": []},
+        ]
+        f = CVFilter(job_post_text="x", entries=entries, grade="light")
+        out = f._select({"job:1": 0.3, "job:2": 0.8})
+        self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:1"])
+
+
+class CVApplySelectionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="applyuser")
+        cls.s1 = Skill.objects.create(user=cls.user, name="Python")
+        cls.s2 = Skill.objects.create(user=cls.user, name="SQL")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+
+    def test_prunes_and_orders_and_scores(self):
+        cv = CV(user_pk=self.user.pk)
+        selection = {
+            "skill": [
+                {"id": f"skill:{self.s2.pk}", "score": 0.9},
+                {"id": f"skill:{self.s1.pk}", "score": 0.4},
+            ],
+            "job": [{"id": f"job:{self.job.pk}", "score": 0.7}],
+        }
+        cv.apply_selection(selection)
+        # skills kept in the selection's (ranked) order, not DB order.
+        self.assertEqual([s.pk for s in cv.entries["skills"]], [self.s2.pk, self.s1.pk])
+        self.assertEqual(cv.entries["skills"][0].relevance_score, 0.9)
+        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
+
+    def test_section_absent_from_selection_is_emptied(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.apply_selection({"job": [{"id": f"job:{self.job.pk}", "score": 1.0}]})
+        self.assertEqual(cv.entries["skills"], [])
+        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
+
+    def test_unknown_ids_are_ignored(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.apply_selection({"skill": [{"id": "skill:999999", "score": 1.0}]})
+        self.assertEqual(cv.entries["skills"], [])
+
+
+def _keep_all(self, job_post_text, grade=None):
+    """Stand-in for CV.filter_cv: keep every flattened entry, score 1.0."""
+    out: dict = {}
+    for e in self._flatten_entries():
+        out.setdefault(e["type"], []).append({**e, "score": 1.0})
+    return out
+
+
+class CVCommandSmokeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="cmduser")
+        cls.skill = Skill.objects.create(user=cls.user, name="Python")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+        cls.job.skills.add(cls.skill)
+
+    @patch("jac.cv.CV.filter_cv", new=_keep_all)
+    def test_cv_test_writes_one_md_per_grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command(
+                "cv_test",
+                "--user",
+                str(self.user.pk),
+                "--job",
+                "Senior Python engineer",
+                "--grades",
+                "light",
+                "standard",
+                "--out-dir",
+                tmp,
+                stdout=io.StringIO(),
+            )
+            self.assertTrue((Path(tmp) / "cv_light.md").exists())
+            self.assertTrue((Path(tmp) / "cv_standard.md").exists())
+
+    @patch("jac.cv.CV.filter_cv", new=_keep_all)
+    def test_cv_eval_writes_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = Path(tmp) / "posting.md"
+            job.write_text("Senior Python engineer")
+            call_command(
+                "cv_eval",
+                "--user",
+                str(self.user.pk),
+                "--job-file",
+                str(job),
+                "--out-dir",
+                tmp,
+                stdout=io.StringIO(),
+            )
+            self.assertTrue((Path(tmp) / "findings.json").exists())
+            self.assertTrue((Path(tmp) / "findings.md").exists())

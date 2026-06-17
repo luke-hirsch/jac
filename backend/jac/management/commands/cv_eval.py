@@ -1,13 +1,12 @@
-"""Batch-evaluate the SHIPPED CV pipeline over a corpus of job postings.
+"""Batch-evaluate the CV pipeline over a corpus of job postings.
 
-Unlike cv_test (which probes agentic_tailor per alias on ONE posting), this runs
-CV.ai_tailor_with_fallback over a directory of postings and writes a comparable
+Runs CV.filter_cv(grade) + apply_selection over a directory of postings and writes a comparable
 findings artifact, so a pipeline change can be measured before/after.
 
 Usage:
     python manage.py cv_eval --user 1 --jobs-dir data/postings
     python manage.py cv_eval --user 1 --job-file data/test_job.md
-    python manage.py cv_eval --user 1 --jobs-dir data/postings --llm ollama
+    python manage.py cv_eval --user 1 --jobs-dir data/postings --grade standard
     python manage.py cv_eval --user 1 --jobs-dir data/postings \
         --compare data/eval/<earlier-run>/findings.json
 """
@@ -26,6 +25,7 @@ from jac.render import CvRender
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SECTIONS = ["skills", "jobs", "educations", "certifications", "projects", "languages"]
+_GRADES = ["light", "standard", "strong"]
 
 
 def _safe(name: str) -> str:
@@ -45,9 +45,8 @@ class Command(BaseCommand):
             "--job-file", type=str, help="A single posting file (quick check)"
         )
         parser.add_argument(
-            "--llm", type=str, default="default", help="LLM alias (default: 'default')"
+            "--grade", type=str, default="light", choices=_GRADES, help="Filter grade"
         )
-        parser.add_argument("--threshold", type=float, default=0.25)
         parser.add_argument(
             "--out-dir",
             type=str,
@@ -63,7 +62,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--verbose",
             action="store_true",
-            help="Show jac.cv DEBUG logs (tier selection, distill rounds)",
+            help="Show jac.cv DEBUG logs",
         )
 
     def handle(self, *args, **opts):
@@ -107,18 +106,13 @@ class Command(BaseCommand):
         meta = {
             "timestamp": stamp,
             "user": opts["user"],
-            "llm": opts["llm"],
-            "threshold": opts["threshold"],
+            "grade": opts["grade"],
         }
         write(f"cv_eval — {len(postings)} posting(s) → {out_dir}")
-        write(
-            f"  user={meta['user']} llm={meta['llm']} threshold={meta['threshold']}\n"
-        )
+        write(f"  user={meta['user']} grade={meta['grade']}\n")
 
         rows = [
-            self._evaluate(
-                opts["user"], text, slug, opts["llm"], opts["threshold"], out_dir, write
-            )
+            self._evaluate(opts["user"], text, slug, opts["grade"], out_dir, write)
             for slug, text in postings
         ]
 
@@ -128,22 +122,21 @@ class Command(BaseCommand):
         if opts["compare"]:
             self._compare(opts["compare"], rows, write)
 
-    def _evaluate(self, user_pk, job_text, slug, llm, threshold, out_dir, write):
+    def _evaluate(self, user_pk, job_text, slug, grade, out_dir, write):
         cv = CV(user_pk=user_pk)
         t0 = time.monotonic()
         try:
-            result = cv.ai_tailor_with_fallback(job_text, llm=llm, threshold=threshold)
+            selection = cv.filter_cv(job_text, grade=grade)
+            cv.apply_selection(selection)
         except Exception as exc:
             write(f"  {slug:<28} ERROR: {exc}")
             return {
                 "posting": slug,
-                "tier": "error",
+                "grade": "error",
                 "error": str(exc),
                 "elapsed_s": round(time.monotonic() - t0, 1),
                 "total": 0,
                 "counts": {s: 0 for s in _SECTIONS},
-                "n_keywords": None,
-                "n_selected": None,
             }
         elapsed = time.monotonic() - t0
 
@@ -154,15 +147,13 @@ class Command(BaseCommand):
         counts = {s: len(cv.entries.get(s, [])) for s in _SECTIONS}
         row = {
             "posting": slug,
-            "tier": result["tier"],
+            "grade": grade,
             "elapsed_s": round(elapsed, 1),
             "total": sum(counts.values()),
             "counts": counts,
-            "n_keywords": len(result["keywords"]) if result.get("keywords") else None,
-            "n_selected": len(result["selection"]) if result.get("selection") else None,
         }
         write(
-            f"  {slug:<28} tier={row['tier']:<14}{elapsed:>6.1f}s  total={row['total']}"
+            f"  {slug:<28} grade={row['grade']:<10}{elapsed:>6.1f}s  total={row['total']}"
         )
         return row
 
@@ -170,22 +161,19 @@ class Command(BaseCommand):
         (out_dir / "findings.json").write_text(
             json.dumps(rows, indent=2), encoding="utf-8"
         )
-        header = (
-            f"user={meta['user']}  llm={meta['llm']}  "
-            f"threshold={meta['threshold']}  postings={len(rows)}"
-        )
+        header = f"user={meta['user']}  grade={meta['grade']}  postings={len(rows)}"
         lines = [
             f"# CV eval — {meta['timestamp']}",
             "",
             header,
             "",
-            "| posting | tier | total | skills | jobs | edu | certs | proj | lang | elapsed |",
+            "| posting | grade | total | skills | jobs | edu | certs | proj | lang | elapsed |",
             "|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
         ]
         for r in rows:
             c = r["counts"]
             lines.append(
-                f"| {r['posting']} | {r['tier']} | {r['total']} | "
+                f"| {r['posting']} | {r['grade']} | {r['total']} | "
                 f"{c['skills']} | {c['jobs']} | {c['educations']} | {c['certifications']} | "
                 f"{c['projects']} | {c['languages']} | {r['elapsed_s']}s |"
             )
@@ -203,10 +191,14 @@ class Command(BaseCommand):
                 continue
             d_total = r["total"] - p["total"]
             d_time = r["elapsed_s"] - p["elapsed_s"]
-            tier = (
-                "" if p["tier"] == r["tier"] else f"   tier {p['tier']} → {r['tier']}"
+            prev_grade = p.get("grade", p.get("tier"))
+            cur_grade = r.get("grade")
+            grade = (
+                ""
+                if prev_grade == cur_grade
+                else f"   grade {prev_grade} → {cur_grade}"
             )
             write(
                 f"  {r['posting']:<28} total {p['total']}→{r['total']} ({d_total:+d})  "
-                f"time {d_time:+.1f}s{tier}"
+                f"time {d_time:+.1f}s{grade}"
             )
