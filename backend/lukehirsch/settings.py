@@ -176,7 +176,7 @@ LLM = {
         "provider": os.getenv("LLM_DEFAULT_PROVIDER", "ollama"),
         "url": os.getenv("LLM_URL", "http://localhost:11434/v1"),
         "model": os.getenv("LLM_MODEL", "llama3.2:1b"),
-        "embed_model": os.getenv("LLM_EMBED_MODEL", "wen3-embedding:0.6b"),
+        "embed_model": os.getenv("LLM_EMBED_MODEL", "qwen3-embedding:0.6b"),
         "timeout": os.getenv("LLM_TIMEOUT", 300),
         "think": os.getenv("LLM_THINKING", False),
         "strength": os.getenv("LLM_STRENGTH", "light"),

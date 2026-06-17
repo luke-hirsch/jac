@@ -5,37 +5,24 @@ Stop-word sets live in stopwords.py to keep this module focused on pipeline logi
 """
 
 import logging
-import re
-import time
-from datetime import date
-from typing import Any
 
+# import re
+# import time
+from datetime import date
+
+# from typing import Any
 from django.db.models import Q
 
-from jac import llm as jac_llm
+from jac.llm_prompts import Conversational, Embed, Instruct
 from jac.models import Certification, Education, Job, Language, Project, Skill
-from jac.stopwords import get_stopwords
 
 logger = logging.getLogger(__name__)
 
 
 class CV:
-    """In-memory CV snapshot for a single user.
-
-    Loads all matching career entries from the DB on construction, then lets
-    callers narrow the snapshot progressively via filter/rank methods. Every
-    mutating method (deterministic_filter, ai_filter_entries, ai_rank_entries,
-    agentic_tailor) operates on self.entries in-place.
-
-    Constructor kwargs allow pre-filtering by domain, date window, and minimum
-    skill proficiency before any pipeline steps run.
-    """
-
     PROFICIENCY_ORDER = ["beginner", "intermediate", "advanced", "expert"]
+    FILTER_GRADE = ["strong", "standard", "light"]
 
-    # Minimum entries to retain per section after threshold filtering. If
-    # fewer survive, fall back to top-K from the ranked list. None means
-    # "keep above-threshold; if none, keep the single top-ranked entry".
     _MIN_PER_SECTION = {
         "skills": 5,
         "jobs": 3,
@@ -52,6 +39,7 @@ class CV:
         started: date | None = None,
         ended: date | None = None,
         min_skill_proficiency: str | None = None,
+        filter_grade: str = "light",
     ):
         """Load career entries for `user_pk`.
 
@@ -68,6 +56,10 @@ class CV:
         self.ended = ended
         self.min_skill_proficiency = min_skill_proficiency
         self.entries = self.get_cv_entries()
+        if filter_grade in self.FILTER_GRADE:
+            self.filter_grade = filter_grade
+        else:
+            self.filter_grade = "light"
 
     def get_cv_entries(self) -> dict:
         """Return a fresh {section: [model instances]} dict from the DB."""
@@ -140,158 +132,7 @@ class CV:
             .order_by("name")
         )
 
-    # filter
-
-    def extract_keywords(
-        self, text: str, *, loose: bool = False, language: str | None = None
-    ) -> list[str]:
-        """Significant tokens from text — for use as deterministic_filter input.
-
-        Returns lowercase words of length >= 3 with stopwords removed. Sorted
-        longest-first so multi-character matches are tried before fragments.
-
-        Args:
-            text: Raw job posting or any free text to tokenise.
-            loose: True → keep ubiquitous job-posting filler ("team", "role",
-                "experience"). Useful as a fallback when the strict pass is too sparse.
-            language: ISO 639-1 code of the posting language ("en", "de", …).
-                None applies stop words from all registered languages.
-        """
-        if not text:
-            return []
-        stop = get_stopwords(language, loose=loose)
-        words = {
-            w
-            for w in re.findall(r"[\w#+]+", text.lower())
-            if len(w) >= 3 and w not in stop
-        }
-        return sorted(words, key=len, reverse=True)
-
-    def deterministic_filter(
-        self,
-        keywords_or_text: list[str] | str,
-        *,
-        min_kept: int = 5,
-        language: str | None = None,
-    ) -> list[str]:
-        """Substring-match entries against keywords. Returns the keywords used.
-
-        Pass a list[str] to filter once with no retry.
-        Pass the raw job text to extract keywords automatically with strict
-        stopwords; if fewer than `min_kept` entries survive, retry with loose
-        stopwords. Useful so the filter works for any user's vocabulary, not
-        just one where the posting happens to overlap with the CV.
-
-        Args:
-            keywords_or_text: Pre-extracted keyword list, or raw job posting text.
-            min_kept: When text is passed, minimum surviving entries before the
-                filter retries with loose stop words.
-            language: ISO 639-1 code forwarded to extract_keywords when text is
-                passed ("en", "de", …). None uses all registered languages.
-        """
-        if isinstance(keywords_or_text, str):
-            text = keywords_or_text
-            snapshot = {k: list(v) for k, v in self.entries.items()}
-            keywords = self.extract_keywords(text, loose=False, language=language)
-            self._apply_keyword_filter(keywords)
-            kept = sum(len(v) for v in self.entries.values())
-            total = sum(len(v) for v in snapshot.values())
-            if kept < min_kept and kept < total:
-                self.entries = snapshot
-                keywords = self.extract_keywords(text, loose=True, language=language)
-                self._apply_keyword_filter(keywords)
-            return keywords
-
-        keywords = list(keywords_or_text)
-        self._apply_keyword_filter(keywords)
-        return keywords
-
-    def _apply_keyword_filter(self, keywords: list[str]) -> None:
-        """Mutate self.entries to keep only entries that substring-match at least one keyword.
-
-        Short keywords (< 5 chars) use word-boundary regex to avoid false positives
-        (e.g. "sql" should not match "mysql" by accident). Long keywords use plain
-        substring matching, which is faster and sufficient at that length.
-        """
-        if not keywords:
-            return
-        long_needles: list[str] = []
-        short_needles: list[str] = []
-        for kw in keywords:
-            if not kw:
-                continue
-            low = kw.lower()
-
-            (long_needles if len(low) >= 5 else short_needles).append(low)
-        if not (long_needles or short_needles):
-            return
-        short_re = (
-            re.compile(
-                r"(?<!\w)(?:"
-                + "|".join(re.escape(n) for n in short_needles)
-                + r")(?!\w)"
-            )
-            if short_needles
-            else None
-        )
-
-        def matches(*parts: str | None) -> bool:
-            haystack = " ".join(p.lower() for p in parts if p)
-            if any(needle in haystack for needle in long_needles):
-                return True
-            return bool(short_re and short_re.search(haystack))
-
-        self.entries["skills"] = [
-            s
-            for s in self.entries["skills"]
-            if matches(s.name, s.description, *(d.name for d in s.domains.all()))
-        ]
-        self.entries["jobs"] = [
-            j
-            for j in self.entries["jobs"]
-            if matches(
-                j.title,
-                j.company,
-                j.description,
-                j.location.city if j.location else None,
-                *(s.name for s in j.skills.all()),
-                *(d.name for d in j.domains.all()),
-            )
-        ]
-        self.entries["educations"] = [
-            e
-            for e in self.entries["educations"]
-            if matches(
-                e.institution,
-                e.field_of_study,
-                e.degree,
-                e.description,
-                e.location.city if e.location else None,
-            )
-        ]
-        self.entries["certifications"] = [
-            c
-            for c in self.entries["certifications"]
-            if matches(c.name, c.issuer, c.description)
-        ]
-        self.entries["projects"] = [
-            p
-            for p in self.entries["projects"]
-            if matches(
-                p.name,
-                p.description,
-                p.location.city if p.location else None,
-                *(s.name for s in p.skills.all()),
-                *(d.name for d in p.domains.all()),
-            )
-        ]
-        self.entries["languages"] = [
-            la for la in self.entries["languages"] if matches(la.name)
-        ]
-
-    # AI methods (single LLM call) -----------------------------------------
-
-    def _entries_for_llm(self) -> list[dict]:
+    def _flatten_entries(self) -> list[dict]:
         """Flatten self.entries into [{id, type, text}, ...] for LLM scoring."""
         out: list[dict] = []
 
@@ -357,349 +198,69 @@ class CV:
 
         return out
 
-    def _apply_scores(self, scores: list[dict]) -> dict[str, tuple[float, str]]:
-        """Index scored results by id and attach attrs to model instances."""
-        by_id: dict[str, tuple[float, str]] = {}
-        for s in scores:
-            sid = s.get("id")
-            if not sid:
-                continue
-            try:
-                score = float(s.get("score", 0.0))
-            except (TypeError, ValueError):
-                score = 0.0
-            by_id[sid] = (score, str(s.get("reason", "")))
-
-        type_key = {
-            "skill": "skills",
-            "job": "jobs",
-            "education": "educations",
-            "certification": "certifications",
-            "project": "projects",
-            "language": "languages",
-        }
-        for type_name, key in type_key.items():
-            for obj in self.entries[key]:
-                sid = f"{type_name}:{obj.pk}"
-                score, reason = by_id.get(sid, (0.0, ""))
-                obj.relevance_score = score
-                obj.relevance_reason = reason
-        return by_id
-
-    def _filter_with_floor(self, threshold: float) -> None:
-        """Drop entries below `threshold`; if a section falls below its floor,
-        fall back to that section's top-K by relevance_score from the full
-        pre-threshold list. Assumes _apply_scores has already attached scores.
-        Each section list is left in descending-score order.
-        """
-        for key, items in self.entries.items():
-            ranked = sorted(
-                items,
-                key=lambda o: getattr(o, "relevance_score", 0.0),
-                reverse=True,
-            )
-            above = [
-                o for o in ranked if getattr(o, "relevance_score", 0.0) >= threshold
-            ]
-            floor = self._MIN_PER_SECTION.get(key)
-            if floor is None:
-                # Keep above-threshold; if none, keep the top-1 so small-but-real
-                # sections (languages, certifications) don't get wiped entirely.
-                self.entries[key] = above if above else ranked[:1] if ranked else []
-                continue
-            if len(above) >= floor:
-                self.entries[key] = above
-            else:
-                k = min(floor, len(ranked))
-                self.entries[key] = ranked[:k]
-
-    def ai_extract_keywords(self, job_text: str, llm: str = "default") -> list[str]:
-        """Free-form keyword extraction via LLM. Complements extract_keywords()."""
-        logger.debug(
-            "ai_extract_keywords: calling llm=%s (%d chars)", llm, len(job_text)
+    # filter
+    def filter_cv(self, job_post_text: str, grade: str | None):
+        cv_filter = CVFilter(
+            job_post_text=job_post_text,
+            entries=self._flatten_entries(),
+            grade=grade
+            if grade and grade in ["light", "standard", "strong"]
+            else "light",
+            user=self.user,
         )
-        t = time.monotonic()
-        result = jac_llm.extract_job_keywords(job_text, llm=llm, user=self.user)
-        logger.debug(
-            "ai_extract_keywords: got %d keywords in %.1fs",
-            len(result),
-            time.monotonic() - t,
-        )
-        return result
+        return cv_filter.output()
 
-    def ai_keyword_filter(self, job_text: str, llm: str = "default") -> list[str]:
-        """LLM keyword extraction → deterministic filter. SLM-friendly alternative to
-        ai_filter_entries: extraction is a simple list-in/list-out task a small model
-        handles well; full entry scoring in one shot is not. Returns keywords used."""
-        keywords = self.ai_extract_keywords(job_text, llm=llm)
-        logger.debug(
-            "ai_keyword_filter: applying deterministic filter with %d keywords",
-            len(keywords),
-        )
-        self.deterministic_filter(keywords)
-        total = sum(len(v) for v in self.entries.values())
-        logger.debug("ai_keyword_filter: %d entries remaining", total)
-        return keywords
 
-    def ai_filter_entries(
-        self, job_text: str, threshold: float = 0.25, llm: str = "default"
-    ) -> None:
-        """Score entries against the job and drop those below threshold. Mutates self.entries.
-
-        Sections that fall below their _MIN_PER_SECTION floor get the top-K
-        ranked entries instead, so output is never empty when scored entries exist.
-        """
-        flat = self._entries_for_llm()
-        if not flat:
-            return
-        logger.debug(
-            "ai_filter_entries: scoring %d entries (llm=%s, threshold=%.2f)",
-            len(flat),
-            llm,
-            threshold,
-        )
-        t = time.monotonic()
-        scores = jac_llm.score_entries_for_job(job_text, flat, llm=llm, user=self.user)
-        logger.debug(
-            "ai_filter_entries: scored in %.1fs → filtering", time.monotonic() - t
-        )
-        self._apply_scores(scores)
-        self._filter_with_floor(threshold)
-        total = sum(len(v) for v in self.entries.values())
-        logger.debug("ai_filter_entries: %d entries remaining after threshold", total)
-
-    def ai_rank_entries(self, job_text: str, llm: str = "default") -> None:
-        """Score entries, attach .relevance_score/.relevance_reason, sort each list desc. Mutates."""
-        flat = self._entries_for_llm()
-        if not flat:
-            return
-        logger.debug("ai_rank_entries: scoring %d entries (llm=%s)", len(flat), llm)
-        t = time.monotonic()
-        scores = jac_llm.score_entries_for_job(job_text, flat, llm=llm, user=self.user)
-        logger.debug("ai_rank_entries: scored in %.1fs → sorting", time.monotonic() - t)
-        self._apply_scores(scores)
-        for key in self.entries:
-            self.entries[key].sort(
-                key=lambda o: getattr(o, "relevance_score", 0.0), reverse=True
-            )
-
-    # Agentic methods (multi-step, reasoning-model friendly) --------------
-
-    def ai_analyze_job(self, job_text: str, llm: str = "default") -> dict:
-        """Return structured analysis of the job posting."""
-        logger.debug("ai_analyze_job: calling llm=%s (%d chars)", llm, len(job_text))
-        t = time.monotonic()
-        result = jac_llm.analyze_job(job_text, llm=llm, user=self.user)
-        logger.debug("ai_analyze_job: done in %.1fs", time.monotonic() - t)
-        return result
-
-    def agentic_tailor(
-        self, job_text: str, llm: str = "default", threshold: float = 0.25
-    ) -> dict:
-        """Full pipeline: analyze job, then filter+rank entries using the analysis.
-
-        Returns the analysis dict; mutates self.entries (filtered + sorted, annotated).
-        Sections that fall below their _MIN_PER_SECTION floor get the top-K
-        ranked entries instead, so output is never empty when scored entries exist.
-        """
-        logger.debug("agentic_tailor: step 1/2 — analyze job (llm=%s)", llm)
-        t = time.monotonic()
-        analysis = jac_llm.analyze_job(job_text, llm=llm, user=self.user)
-        logger.debug("agentic_tailor: job analyzed in %.1fs", time.monotonic() - t)
-
-        flat = self._entries_for_llm()
-        if not flat:
-            return analysis
-
-        logger.debug(
-            "agentic_tailor: step 2/2 — score %d entries with analysis (llm=%s)",
-            len(flat),
-            llm,
-        )
-        t = time.monotonic()
-        scores = jac_llm.score_entries_with_analysis(
-            job_text, analysis, flat, llm=llm, user=self.user
-        )
-        logger.debug(
-            "agentic_tailor: scored in %.1fs → filtering at threshold=%.2f",
-            time.monotonic() - t,
-            threshold,
-        )
-
-        self._apply_scores(scores)
-        self._filter_with_floor(threshold)
-        total = sum(len(v) for v in self.entries.values())
-        logger.debug("agentic_tailor: done — %d entries remaining", total)
-        return analysis
-
-    def ai_conversational_tailor(
-        self, job_text: str, llm: str = "default"
-    ) -> list[dict]:
-        """Reasoning-grade tailoring: loose prompt, selection contract, ranked output.
-
-        Hands the model the full career database and the posting, asks it to
-        return the entries that belong on the CV in descending relevance order.
-        Mutates self.entries in place: only selected entries survive, ordered
-        as the model returned them, with `relevance_reason` attached. Entries
-        not in the selection are dropped (sections may end up empty).
-
-        Returns the validated `[{"id", "reason"}, ...]` selection so callers
-        (views, management commands) can surface the reasoning. Propagates the
-        ValueError raised by `tailor_cv_conversationally` when too few valid
-        ids survive — that's the fallback signal for `ai_tailor_with_fallback`.
-        """
-        flat = self._entries_for_llm()
-        if not flat:
-            return []
-        logger.debug(
-            "ai_conversational_tailor: tailoring %d entries (llm=%s)", len(flat), llm
-        )
-        t = time.monotonic()
-        selection = jac_llm.tailor_cv_conversationally(
-            job_text, flat, llm=llm, user=self.user
-        )
-        logger.debug(
-            "ai_conversational_tailor: %d picks in %.1fs",
-            len(selection),
-            time.monotonic() - t,
-        )
-
-        type_key = {
-            "skill": "skills",
-            "job": "jobs",
-            "education": "educations",
-            "certification": "certifications",
-            "project": "projects",
-            "language": "languages",
-        }
-        by_id: dict[str, tuple[str, Any]] = {}
-        for type_name, key in type_key.items():
-            for obj in self.entries[key]:
-                by_id[f"{type_name}:{obj.pk}"] = (key, obj)
-
-        new_entries: dict[str, list] = {k: [] for k in self.entries}
-        for pick in selection:
-            sid = pick["id"]
-            entry = by_id.get(sid)
-            if entry is None:
-                continue
-            key, obj = entry
-            obj.relevance_reason = pick.get("reason", "")
-            obj.relevance_score = 1.0
-            new_entries[key].append(obj)
-        self.entries = new_entries
-        return selection
-
-    # Tiered fallback pipeline --------------------------------------------
-
-    def ai_tailor_with_fallback(
+class CVFilter:
+    def __init__(
         self,
-        job_text: str,
-        llm: str = "default",
-        threshold: float = 0.25,
-        language: str | None = None,
-    ) -> dict:
-        """Tier the tailoring pipeline to the model's capability.
+        job_post_text: str,
+        entries: list[dict],
+        grade: str = "light",
+        user=None,
+    ):
+        assert isinstance(job_post_text, str)
+        self.job_post_text = job_post_text
+        self.entries = entries
 
-        The ladder is chosen by the alias's `strength` hint (see
-        llm_connector.conf.get_alias_strength):
+        self.grade = grade
+        self.user = user
 
-          strong   : conversational -> filter -> keyword -> deterministic
-          standard : filter -> keyword -> deterministic
-          light    : keyword -> deterministic        (cheap output a SLM can do)
+    def output(self):
+        if self.grade == "strong":
+            return self.strong()
+        elif self.grade == "standard":
+            return self.standard()
+        else:
+            return self.light()
 
-        Routing weak models straight to the keyword rung stops them burning
-        minutes failing the heavy per-entry-scoring tiers they can't do. Each
-        rung falls through on any exception (timeout, parse error, context
-        overflow, hallucinated ids that fail id-validation) or an empty result,
-        restoring the pre-call snapshot so partial mutations don't leak. Every
-        ladder ends in an `unfiltered` fallthrough. Returns:
-          {"tier":      <which tier won>,
-           "selection": [{id, reason}, ...] | None,   # conversational only
-           "keywords":  [str, ...] | None}            # keyword / deterministic only
-        """
-        from llm_connector.conf import get_alias_strength
+    def strong(self):
+        entries = self.ai_conversational_filter()
+        if not entries:
+            entries = self.standard()
+        return entries
 
-        snapshot = {k: list(v) for k, v in self.entries.items()}
+    def standard(self):
+        entries = self.ai_filter()
+        if not entries:
+            entries = self.light()
+        return entries
 
-        def restore() -> None:
-            self.entries = {k: list(v) for k, v in snapshot.items()}
+    def light(self):
+        return self.embed_filter()
 
-        def tier_conversational():
-            try:
-                selection = self.ai_conversational_tailor(job_text, llm=llm)
-                if any(self.entries.values()):
-                    return {
-                        "tier": "conversational",
-                        "selection": selection,
-                        "keywords": None,
-                    }
-            except Exception:
-                logger.warning(
-                    "ai_tailor_with_fallback: ai_conversational_tailor failed",
-                    exc_info=True,
-                )
-            restore()
-            return None
+    def embed_filter(self):
+        # request to model vie Embed class
+        llm = Embed(self.job_post_text, self.entries)
+        scores = llm.ranked_entries()
+        if not scores:
+            return self.entries
+        print(llm)
 
-        def tier_filter():
-            try:
-                self.ai_filter_entries(job_text, threshold=threshold, llm=llm)
-                if any(self.entries.values()):
-                    return {"tier": "filter", "selection": None, "keywords": None}
-            except Exception:
-                logger.warning(
-                    "ai_tailor_with_fallback: ai_filter_entries failed", exc_info=True
-                )
-            restore()
-            return None
+    def ai_filter(self):
+        llm = Instruct
+        print(llm)
 
-        def tier_keyword():
-            try:
-                keywords = self.ai_keyword_filter(job_text, llm=llm)
-                if any(self.entries.values()):
-                    return {"tier": "keyword", "selection": None, "keywords": keywords}
-            except Exception:
-                logger.warning(
-                    "ai_tailor_with_fallback: ai_keyword_filter failed", exc_info=True
-                )
-            restore()
-            return None
-
-        def tier_deterministic():
-            try:
-                keywords = self.deterministic_filter(job_text, language=language)
-                if any(self.entries.values()):
-                    return {
-                        "tier": "deterministic",
-                        "selection": None,
-                        "keywords": keywords,
-                    }
-            except Exception:
-                logger.warning(
-                    "ai_tailor_with_fallback: deterministic_filter failed",
-                    exc_info=True,
-                )
-            restore()
-            return None
-
-        ladders = {
-            "strong": [tier_conversational, tier_filter, tier_keyword, tier_deterministic],
-            "standard": [tier_filter, tier_keyword, tier_deterministic],
-            "light": [tier_keyword, tier_deterministic],
-        }
-        strength = get_alias_strength(llm, user=self.user)
-        ladder = ladders.get(strength, ladders["strong"])
-        logger.debug(
-            "ai_tailor_with_fallback: strength=%s (%d tiers)", strength, len(ladder)
-        )
-
-        for tier in ladder:
-            result = tier()
-            if result is not None:
-                return result
-
-        logger.info(
-            "ai_tailor_with_fallback: every tier filtered too strictly — returning unfiltered CV"
-        )
-        return {"tier": "unfiltered", "selection": None, "keywords": None}
+    def ai_conversational_filter(self):
+        llm = Conversational
+        print(llm)
