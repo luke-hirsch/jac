@@ -48,7 +48,12 @@ shipped:
   edge list); `CVFilter` is a **scoring-agnostic** selection layer — directional tier propagation
   over the edges + per-section *absolute floor + min-keep* drop. The `light` rung (`Embed`,
   `llm_prompts.py`) is the working embedding-rank floor. `cv_test` / `cv_eval` management commands
-  exercise the grade ladder offline (fake-score injection in tests).
+  exercise the grade ladder offline (fake-score injection in tests); `cv_eval` reports per-entry
+  ranks + colour-graded one-page target counts per section.
+- jac: **favourite** flag on every `CvEntry` — pins an entry for a small post-propagation ranking
+  nudge (`CVFilter._FAVOURITE_BONUS`, kept below the lowest section floor so it can't resurrect a
+  ~0-scored entry), capped per type (`CvEntry.FAVOURITE_LIMIT`, enforced in `model.clean` + a
+  serializer mixin). Wired through the API + CRUD UI (editor toggle + sortable star column).
 
 active skeleton (the thing under construction):
 - `standard` (`Instruct`) and `strong` (`Conversational`) rungs in `llm_prompts.py` are stubs;
