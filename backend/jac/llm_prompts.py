@@ -101,15 +101,18 @@ class Conversational:
     # entry ids are  type:pk  (e.g. job:2); anchor on a leading id, the rest of the line is why.
     _PICK_RE = re.compile(r"([a-z]+:\d+)\s*[-—:.)\]]*\s*(.*)")
 
-    def __init__(self, job_post_text: str, entries: list[dict], user=None):
+    def __init__(
+        self, job_post_text: str, entries: list[dict], user=None, alias: str = "default"
+    ):
         self.job_post_text = job_post_text
         self.entries = entries
         self.user = user
+        self.alias = alias
 
     def selection(self) -> list[dict]:
         """Return an ordered [{id, why}] of chosen entries. [] on any failure."""
         try:
-            raw = complete(prompt=self._prompt(), user=self.user)
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
         except Exception:
             logger.exception("Conversational selector: LLM call failed")
             return []
