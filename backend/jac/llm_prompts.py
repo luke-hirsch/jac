@@ -233,3 +233,135 @@ class Instruct:
             if eid in valid:
                 out[eid] = max(0, min(self._LABEL_MAX, int(score)))
         return out
+
+
+class TheJudge:
+    """Selection-quality grader for one eval run: a fixed strong LLM reads the job posting plus
+    what the pipeline KEPT vs DROPPED and critiques the choice — a letter grade for the run, then
+    id-anchored notes on questionable keeps/drops. Used by `cv_eval --analyze` to turn raw
+    counts/scores into a judgment and to feed the cross-run `Analyst` summary.
+
+    Provider-agnostic. Line-format I/O (never JSON — see the `no-json-llm-io` memory): the reply's
+    `GRADE <A-F>` line is parsed for the table; `<id> — <note>` lines are collected as critique,
+    ids validated against this run's entry set, unreadable lines skipped. Any failure yields a null
+    grade + empty notes so the analysis degrades instead of crashing.
+    """
+
+    _INSTRUCTION = (
+        "You are auditing how well an automated system tailored a ONE-PAGE CV to a job posting.\n"
+        "Below are the job posting, the entries the system KEPT (best first), and the entries it "
+        "DROPPED. Judge the SELECTION quality for THIS posting:\n"
+        "  - did it keep what the posting actually calls for, and drop the off-topic?\n"
+        "  - flag any KEPT entry that is weak or irrelevant, and any DROPPED entry that should "
+        "have stayed (e.g. a required skill).\n"
+        "Reply in this EXACT line format, nothing else:\n"
+        "  - first line: 'GRADE <A-F>' — overall selection quality (A best);\n"
+        "  - then ONE line per problem, '<id> — <short note>' (<=15 words), worst first;\n"
+        "  - if the selection is sound, emit no problem lines.\n"
+        "Use the exact ids given below. No prose, no markdown, no JSON."
+    )
+    _MAX_POST_CHARS = 12000
+
+    _GRADE_RE = re.compile(r"\bGRADE\s+([A-Fa-f])\b")
+    # entry ids are  type:pk  (e.g. job:2); anchor on a leading id, the rest of the line is the note.
+    _NOTE_RE = re.compile(r"([a-z]+:\d+)\s*[-—:.)\]]*\s*(.*)")
+
+    def __init__(
+        self,
+        job_post_text: str,
+        kept: list[dict],
+        dropped: list[dict],
+        user=None,
+        alias: str = "default",
+    ):
+        self.job_post_text = job_post_text
+        self.kept = kept  # [{id, text}], ranked best-first
+        self.dropped = dropped  # [{id, text}]
+        self.user = user
+        self.alias = alias
+
+    def critique(self) -> dict:
+        """Return {'grade': 'A'..'F' | None, 'notes': [{id, note}]}. Safe defaults on any failure."""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("Judge: LLM call failed")
+            return {"grade": None, "notes": []}
+        return self._parse(raw)
+
+    def _prompt(self) -> str:
+        post = self.job_post_text[: self._MAX_POST_CHARS]
+        kept = (
+            "\n".join(f"{e['id']} — {e.get('text') or ''}" for e in self.kept)
+            or "(none)"
+        )
+        dropped = (
+            "\n".join(f"{e['id']} — {e.get('text') or ''}" for e in self.dropped)
+            or "(none)"
+        )
+        return (
+            f"{self._INSTRUCTION}\n\n"
+            f"JOB POSTING:\n{post}\n\n"
+            f"KEPT (best first):\n{kept}\n\n"
+            f"DROPPED:\n{dropped}\n\n"
+            f"VERDICT:"
+        )
+
+    def _parse(self, raw: str) -> dict:
+        text = raw or ""
+        gm = self._GRADE_RE.search(text)
+        grade = gm.group(1).upper() if gm else None
+        valid = {e["id"] for e in (self.kept + self.dropped)}
+        notes: list[dict] = []
+        seen: set[str] = set()
+        for line in text.splitlines():
+            if self._GRADE_RE.search(line):  # don't read the grade line as a note
+                continue
+            m = self._NOTE_RE.search(line)
+            if not m:
+                continue
+            eid = m.group(1)
+            if eid in valid and eid not in seen:
+                seen.add(eid)
+                notes.append({"id": eid, "note": m.group(2).strip()[:200]})
+        return {"grade": grade, "notes": notes}
+
+
+class TheAnalyst:
+    """Cross-run summariser for `cv_eval --analyze`: a strong LLM reads the whole evaluation —
+    every posting×model run's counts-vs-target, score range, elapsed time, and the per-run `Judge`
+    grade + notes — and writes a human-readable analysis (which models/grades pick well, where they
+    over/under-shoot, speed/quality trade-offs, recurring mistakes, next steps).
+
+    Unlike the other rungs this output is read by a human (written to `analysis.md`), not parsed, so
+    it returns free-form prose. Any failure returns '' so the caller can note the analysis was
+    skipped.
+    """
+
+    _INSTRUCTION = (
+        "You are analysing an evaluation of an automated CV-tailoring pipeline run over several job "
+        "postings with several models/grades. Each run below shows how many entries it KEPT per "
+        "section (vs a one-page target), the relevance-score range, elapsed time, and an auditor's "
+        "letter grade plus notes on questionable keeps/drops.\n"
+        "Write a concise analysis for the engineer tuning the pipeline:\n"
+        "  - which model/grade selects best, and the speed/quality trade-off;\n"
+        "  - sections that consistently over- or under-shoot the one-page target;\n"
+        "  - recurring selection mistakes across postings (cite ids);\n"
+        "  - one or two concrete next steps.\n"
+        "Use short paragraphs and bullet points. Be specific; cite postings, models, and ids."
+    )
+
+    def __init__(self, report: str, user=None, alias: str = "default"):
+        self.report = report
+        self.user = user
+        self.alias = alias
+
+    def analyse(self) -> str:
+        try:
+            return complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("Analyst: summary call failed")
+            return ""
+
+    def _prompt(self) -> str:
+        return f"{self._INSTRUCTION}\n\nEVALUATION DATA:\n{self.report}\n\nANALYSIS:"

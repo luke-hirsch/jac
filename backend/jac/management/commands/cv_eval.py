@@ -29,11 +29,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
-
 from llm_connector.conf import get_alias_strength
 from llm_connector.models import LLMConfig
 
 from jac.cv import CV
+from jac.llm_prompts import TheAnalyst, TheJudge
 from jac.render import CvRender
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -62,16 +62,19 @@ def _safe(name: str) -> str:
     return cleaned or "posting"
 
 
-def _resolve_runs(grade, llm, aliases, strength_of):
+def _resolve_runs(grade, llm, aliases, strength_of, all_models=False):
     """Return [(alias, grade)] per the grade×llm matrix.
 
+    - all_models:           run EVERY configured alias at its own autodetected grade.
     - llm given:            run that alias (grade as given, else autodetected).
     - grade only:           run every configured alias forced to that grade (compare models).
     - neither:              run the 'default' alias at its autodetected grade.
 
-    `aliases` is the user's configured alias list (only consulted in the grade-only case);
+    `aliases` is the user's configured alias list (consulted in the all_models / grade-only cases);
     `strength_of` is a callable(alias) -> autodetected grade.
     """
+    if all_models:
+        return [(a, strength_of(a)) for a in aliases]
     if llm:
         return [(llm, grade or strength_of(llm))]
     if grade:
@@ -151,6 +154,25 @@ class Command(BaseCommand):
             action="store_true",
             help="Show jac.cv DEBUG logs",
         )
+        parser.add_argument(
+            "--all-models",
+            action="store_true",
+            help="Run every configured model at its own auto-detected grade (ignores "
+            "--grade/--llm). The natural sweep for --analyze.",
+        )
+        parser.add_argument(
+            "--analyze",
+            action="store_true",
+            help="After the run, have a strong LLM judge each selection (kept vs dropped vs the "
+            "posting) and write a cross-run analysis.md. Costs N postings × M models calls.",
+        )
+        parser.add_argument(
+            "--analyst",
+            type=str,
+            default=None,
+            help="LLMConfig alias used as the judge/analyst for --analyze. "
+            "Omit to use the strongest configured model.",
+        )
 
     def handle(self, *args, **opts):
         write = lambda m="": self.stdout.write(m)
@@ -201,6 +223,7 @@ class Command(BaseCommand):
             opts["llm"],
             aliases,
             lambda a: get_alias_strength(a, user=opts["user"]),
+            all_models=opts["all_models"],
         )
 
         meta = {
@@ -211,7 +234,9 @@ class Command(BaseCommand):
         }
         runs_str = "  ".join(f"{a}:{g}" for a, g in runs)
         targets_str = "  ".join(f"{s}={_ONE_PAGE_TARGET[s]}" for s in _SECTIONS)
-        write(f"cv_eval — {len(postings)} posting(s) × {len(runs)} model(s) → {out_dir}")
+        write(
+            f"cv_eval — {len(postings)} posting(s) × {len(runs)} model(s) → {out_dir}"
+        )
         write(f"  user={meta['user']} runs: {runs_str}")
         write(f"  one-page targets: {targets_str}\n")
 
@@ -233,6 +258,17 @@ class Command(BaseCommand):
 
         self._write_findings(rows, out_dir, meta)
         write(f"\n  findings → {out_dir / 'findings.md'}")
+        if opts["analyze"]:
+            analyst = opts["analyst"] or next(
+                (
+                    a
+                    for a in aliases
+                    if get_alias_strength(a, user=opts["user"]) == "strong"
+                ),
+                "default",
+            )
+            slug_text = {slug: text for slug, text in postings}
+            self._analyze(rows, slug_text, analyst, opts["user"], out_dir, write)
 
         if opts["compare"]:
             self._compare(opts["compare"], rows, write)
@@ -246,6 +282,7 @@ class Command(BaseCommand):
         t0 = time.monotonic()
         try:
             selection = cv.filter_cv(job_text, grade=grade, alias=alias)
+            candidates = cv._flatten_entries()  # full set + text, before pruning
             cv.apply_selection(selection)
         except Exception as exc:
             write(f"  {alias}/{slug:<28} ERROR: {exc}")
@@ -281,6 +318,23 @@ class Command(BaseCommand):
             ]
 
         counts = {s: len(cv.entries.get(s, [])) for s in _SECTIONS}
+
+        # Kept (ranked, per selection order) + dropped, for the --analyze judge. Text is trimmed;
+        # these are stripped from findings.json (see _write_findings) to keep it lean/comparable.
+        text_by_id = {c["id"]: (c.get("text") or "") for c in candidates}
+        kept = [
+            {"id": it["id"], "text": text_by_id[it["id"]][:300]}
+            for items in selection.values()
+            for it in items
+            if it.get("id") in text_by_id
+        ]
+        kept_ids = {e["id"] for e in kept}
+        dropped = [
+            {"id": c["id"], "text": (c.get("text") or "")[:300]}
+            for c in candidates
+            if c["id"] not in kept_ids
+        ]
+
         row = {
             "posting": slug,
             "model": alias,
@@ -289,10 +343,13 @@ class Command(BaseCommand):
             "total": sum(counts.values()),
             "counts": counts,
             "ranks": ranks,
+            "kept": kept,
+            "dropped": dropped,
         }
 
         self._write_ranks(stem, grade, counts, ranks, out_dir)
         self._print_posting(slug, alias, elapsed, row, color, show_ranks, write)
+
         return row
 
     def _print_posting(self, slug, alias, elapsed, row, color, show_ranks, write):
@@ -335,8 +392,13 @@ class Command(BaseCommand):
         )
 
     def _write_findings(self, rows, out_dir, meta):
+        # Drop the per-run kept/dropped payloads from the comparable artifact (they're heavy and
+        # already captured in *.ranks.md / *.cv.md); they live only in-memory for --analyze.
+        slim = [
+            {k: v for k, v in r.items() if k not in ("kept", "dropped")} for r in rows
+        ]
         (out_dir / "findings.json").write_text(
-            json.dumps(rows, indent=2), encoding="utf-8"
+            json.dumps(slim, indent=2), encoding="utf-8"
         )
         runs_str = "  ".join(f"{r['model']}:{r['grade']}" for r in meta["runs"])
         header = f"user={meta['user']}  runs={runs_str}  rows={len(rows)}"
@@ -390,3 +452,86 @@ class Command(BaseCommand):
                 f"  {label:<28} total {p['total']}→{r['total']} ({d_total:+d})  "
                 f"time {d_time:+.1f}s{grade}"
             )
+
+    def _analyze(self, rows, slug_text, analyst_alias, user, out_dir, write):
+        """Judge each run's selection (kept vs dropped vs posting), then summarise the whole sweep.
+
+        Writes one `*.judge.md` per run and a single `analysis.md`. The judge + analyst both run
+        under `analyst_alias` (a fixed strong grader). Error rows are skipped.
+        """
+        write("\n" + "=" * 72)
+        write(f"AI ANALYSIS — judge + summary via '{analyst_alias}'")
+        write("=" * 72)
+        blocks = []
+        for r in rows:
+            label = f"{r.get('model', '?')}/{r['posting']}"
+            if r.get("grade") == "error":
+                write(f"  {label:<28} skipped (run errored)")
+                continue
+            verdict = TheJudge(
+                slug_text.get(r["posting"], ""),
+                r.get("kept", []),
+                r.get("dropped", []),
+                user=user,
+                alias=analyst_alias,
+            ).critique()
+            self._write_judge(r, verdict, out_dir)
+            write(
+                f"  {label:<28} grade {verdict['grade'] or '?'}  "
+                f"({len(verdict['notes'])} note(s))"
+            )
+            blocks.append(self._run_block(r, verdict))
+
+        if not blocks:
+            write("\n  analysis skipped (no successful runs to judge)")
+            return
+
+        summary = TheAnalyst(
+            "\n\n".join(blocks), user=user, alias=analyst_alias
+        ).analyse()
+        if summary:
+            (out_dir / "analysis.md").write_text(
+                f"# CV eval — AI analysis (judge: {analyst_alias})\n\n{summary}\n",
+                encoding="utf-8",
+            )
+            write(f"\n  analysis → {out_dir / 'analysis.md'}")
+        else:
+            write("\n  analysis skipped (summary call returned nothing)")
+
+    def _run_block(self, r, verdict):
+        """One run's block for the Analyst's input: counts vs target + judge grade/notes."""
+        c = r["counts"]
+        counts = "  ".join(f"{s}={c[s]}/{_ONE_PAGE_TARGET[s]}" for s in _SECTIONS)
+        lines = [
+            f"## {r.get('model', '?')} / {r['posting']}  "
+            f"(grade={r['grade']}, {r['elapsed_s']}s)",
+            f"counts: {counts}  total={r['total']}",
+            f"selection grade: {verdict['grade'] or '?'}",
+        ]
+        if verdict["notes"]:
+            lines.append("issues:")
+            lines += [f"  {n['id']} — {n['note']}" for n in verdict["notes"]]
+        else:
+            lines.append("issues: none flagged")
+        return "\n".join(lines)
+
+    def _write_judge(self, r, verdict, out_dir):
+        stem = f"{_safe(r.get('model', '?'))}__{r['posting']}"
+        lines = [
+            f"# Judge — {r.get('model', '?')} / {r['posting']}",
+            f"selection grade: {verdict['grade'] or '?'}",
+            "",
+            "## kept",
+            *[f"- {e['id']} — {e.get('text', '')}" for e in r.get("kept", [])],
+            "",
+            "## dropped",
+            *[f"- {e['id']} — {e.get('text', '')}" for e in r.get("dropped", [])],
+            "",
+            "## flagged",
+        ]
+        lines += [f"- {n['id']} — {n['note']}" for n in verdict["notes"]] or [
+            "_(none)_"
+        ]
+        (out_dir / f"{stem}.judge.md").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
