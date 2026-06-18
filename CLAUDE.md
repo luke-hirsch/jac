@@ -60,10 +60,11 @@ shipped:
   ~0-scored entry), capped per type (`CvEntry.FAVOURITE_LIMIT`, enforced in `model.clean` + a
   serializer mixin). Wired through the API + CRUD UI (editor toggle + sortable star column).
 
-active skeleton (the thing under construction):
-- `strong` (`Conversational`) rung in `llm_prompts.py` is still a stub; `CVFilter._strong_scores`
-  returns `{}` and `strong` currently routes through the (working) `standard` scorer until its
-  holistic selector lands.
+- jac CV ladder — **all three rungs done**. `strong` (`Conversational`, `llm_prompts.py`) reads the
+  posting + every entry and returns an *ordered, chosen set* (`<id> — <why>` lines, best first), not
+  scores; `CVFilter._select_holistic` applies guardrails only (pin favourites, hold `min_keep`, never
+  drop languages — no floors / propagation / count clamp). `output()` routes strong → standard →
+  light, each degrading to the next on empty.
 
 # roadmap
 
@@ -71,22 +72,18 @@ active skeleton (the thing under construction):
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **CV ladder — remaining rungs** (`backend/jac/cv.py`, `llm_prompts.py`). The relationship-aware
-   selection layer + `light` floor are *done*; what's left is the two LLM rungs. Each pairs its own
-   scorer **and** selection strategy (the shared floor path is a crutch for weak scorers — see the
-   plans); all LLM I/O is **line-format, not JSON** (id-anchored, token-cheap, truncation-robust —
-   see the `no-json-llm-io` memory):
-   - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries → propagation + floors. *(done)*
-   - `standard`: `Instruct` LLM rates each entry `0–3` (`<id> <rating>` lines) → keep-by-verdict
-     (`_select_ranked`); clean instruction approach, fits smaller models. *(done)*
-   - `strong`: `Conversational` LLM selects holistically (`<id> — <why>` lines, ordered) → guardrails
-     only (`_select_holistic`); for bigger models. **next** — only rung left.
-   model/grade selection is wired end-to-end: `cv_eval --llm/--grade` matrix + alias threading +
-   embedder autodetect + per-embedder `embed_floors`. *(done)*
-2. **cover-letter generation** — a class that writes a cover letter for a job, using
+1. **cover-letter generation** — a class that writes a cover letter for a job, using
    `ResumeSnippet` boilerplate stitched by the LLM (writer model: `llama3.2:1b`) to avoid AI slop.
-3. **frontend render** of the tailored CV + cover letter.
-4. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+   **next.**
+2. **frontend render** of the tailored CV + cover letter.
+3. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+
+> **CV ladder (roadmap item #1) — done.** All three rungs landed: `light` (embeddings →
+> propagation + floors), `standard` (`Instruct` `0–3` labels → keep-by-verdict), `strong`
+> (`Conversational` holistic ordered selection → guardrails only). All LLM I/O is **line-format,
+> not JSON** (id-anchored, truncation-robust — see `no-json-llm-io`). Model/grade selection wired
+> end-to-end: `cv_eval --llm/--grade` matrix + alias threading + embedder autodetect +
+> per-embedder `embed_floors`.
 
 # how we work
 

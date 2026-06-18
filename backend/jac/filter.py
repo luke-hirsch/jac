@@ -1,6 +1,6 @@
 from llm_connector.conf import get_embed_floors
 
-from jac.llm_prompts import Embed, Instruct
+from jac.llm_prompts import Conversational, Embed, Instruct
 
 
 class CVFilter:
@@ -47,12 +47,16 @@ class CVFilter:
     def output(self) -> dict:
         """Return {section: [entry dicts + score], ...}, each section ranked desc.
 
-        Rungs differ in BOTH scorer and selection strategy:
-          - light:    embedding cosine -> propagation + absolute section floors (_select).
-          - standard: Instruct-LLM relevance labels -> keep-by-verdict (_select_ranked).
-          - strong:   holistic selector (TBD) — currently reuses the standard scorer.
-        Each LLM rung degrades to the light floor when its scorer returns nothing.
+        Rungs differ in BOTH scorer and selection strategy, and each degrades to the next:
+          - strong:   conversational LLM holistic selection (_select_holistic);
+          - standard: Instruct-LLM relevance labels -> keep-by-verdict (_select_ranked);
+          - light:    embedding cosine -> propagation + absolute floors (_select).
         """
+        if self.grade == "strong":
+            selected = self._strong_selection()
+            if selected:
+                return self._select_holistic(selected)
+            # conversational selector failed -> degrade to standard
         if self.grade in ("standard", "strong"):
             labels = self._standard_scores()
             if labels:
@@ -74,9 +78,11 @@ class CVFilter:
         ).ranked_entries()
         return {r["id"]: r["score"] for r in ranked} if ranked else {}
 
-    def _strong_scores(self) -> dict:
-        # TODO: Conversational LLM ranking. Returns {} until implemented -> falls back.
-        return {}
+    def _strong_selection(self) -> list[dict]:
+        """Conversational holistic selection: ordered [{id, why}]. Empty -> standard fallback."""
+        return Conversational(
+            self.job_post_text, self.entries, user=self.user
+        ).selection()
 
     # --- shared selection layer --------------------------------------------------------
 
@@ -202,4 +208,61 @@ class CVFilter:
                     keep.sort(key=lambda e: labels.get(e["id"], 0), reverse=True)
 
             out[section] = [{**e, "score": labels.get(e["id"], 0)} for e in keep]
+        return out
+
+    def _select_holistic(self, selected: list[dict]) -> dict:
+        """Selection for the strong rung: trust the conversational model's chosen, ordered
+        set and apply guardrails only — pin favourites, never drop languages, guarantee
+        min_keep. No floors, no propagation, no count clamp (count tracks fit, by design).
+
+        `selected` is an ordered [{id, why}]; entries absent from it are dropped, except as
+        forced back by the guardrails. Surviving entries carry score=None (the rung emits no
+        numeric score) and reason=<why>.
+        """
+        entry_by_id = {e["id"]: e for e in self.entries}
+        why_by_id = {s["id"]: s["why"] for s in selected}
+
+        by_section_all: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_section_all.setdefault(e["type"], []).append(e)
+
+        # the model's chosen entries, per section, in its priority order
+        chosen_by_section: dict[str, list[dict]] = {}
+        for s in selected:
+            e = entry_by_id.get(s["id"])
+            if e is not None:
+                chosen_by_section.setdefault(e["type"], []).append(e)
+
+        out: dict[str, list[dict]] = {}
+        for section, items in by_section_all.items():
+            policy = self._SECTION_POLICY.get(section, {"min_keep": 0})
+            min_keep = policy["min_keep"]
+
+            keep = list(chosen_by_section.get(section, []))
+            kept_ids = {e["id"] for e in keep}
+
+            # favourites are a user override — pin any the model didn't pick.
+            for e in items:
+                if e.get("favourite") and e["id"] not in kept_ids:
+                    keep.append(e)
+                    kept_ids.add(e["id"])
+
+            # languages are never dropped; otherwise top up to min_keep from the remainder
+            # (natural order — date / name) without re-ordering the model's picks.
+            if min_keep is None:
+                for e in items:
+                    if e["id"] not in kept_ids:
+                        keep.append(e)
+                        kept_ids.add(e["id"])
+            elif len(keep) < min_keep:
+                for e in items:
+                    if e["id"] not in kept_ids:
+                        keep.append(e)
+                        kept_ids.add(e["id"])
+                        if len(keep) >= min_keep:
+                            break
+
+            out[section] = [
+                {**e, "score": None, "reason": why_by_id.get(e["id"], "")} for e in keep
+            ]
         return out

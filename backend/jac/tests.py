@@ -16,7 +16,7 @@ from rest_framework.test import APITestCase
 
 from jac.cv import CV
 from jac.filter import CVFilter
-from jac.llm_prompts import Embed, Instruct
+from jac.llm_prompts import Conversational, Embed, Instruct
 from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import (
     Certification,
@@ -436,6 +436,204 @@ class CVFilterRoutingTests(TestCase):
         ):
             out = f.output()
         self.assertEqual(out["job"][0]["id"], "job:1")
+
+
+class CVSelectHolisticTests(TestCase):
+    """CVFilter._select_holistic: model's selection + guardrails (favourites, min_keep, langs)."""
+
+    def _filter(self, entries):
+        return CVFilter(job_post_text="x", entries=entries, grade="strong")
+
+    def _sel(self, *ids):
+        return [{"id": i, "why": f"why {i}"} for i in ids]
+
+    def test_keeps_selected_in_order_drops_rest(self):
+        # projects: min_keep 0 -> unselected are genuinely dropped.
+        entries = [
+            {
+                "id": f"project:{i}",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 4)
+        ]
+        out = self._filter(entries)._select_holistic(
+            self._sel("project:3", "project:1")
+        )
+        self.assertEqual([e["id"] for e in out["project"]], ["project:3", "project:1"])
+
+    def test_reason_carried_and_score_none(self):
+        entries = [
+            {
+                "id": "project:1",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+        ]
+        out = self._filter(entries)._select_holistic(self._sel("project:1"))
+        self.assertEqual(out["project"][0]["reason"], "why project:1")
+        self.assertIsNone(out["project"][0]["score"])
+
+    def test_favourite_pinned_when_model_omits_it(self):
+        entries = [
+            {
+                "id": "project:1",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+            {
+                "id": "project:2",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": True,
+            },
+        ]
+        out = self._filter(entries)._select_holistic(self._sel("project:1"))
+        kept = {e["id"] for e in out["project"]}
+        self.assertEqual(kept, {"project:1", "project:2"})
+
+    def test_min_keep_tops_up_from_remainder(self):
+        # jobs min_keep 3; model picks only 1 -> two more topped up from natural order.
+        entries = [
+            {
+                "id": f"job:{i}",
+                "type": "job",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 5)
+        ]
+        out = self._filter(entries)._select_holistic(self._sel("job:2"))
+        kept = [e["id"] for e in out["job"]]
+        self.assertEqual(kept[0], "job:2")  # model's pick stays first
+        self.assertEqual(len(kept), 3)  # topped up to min_keep
+
+    def test_count_varies_with_fit_no_clamp(self):
+        # skills min_keep 5; model picks 7 -> all 7 kept (never clamped to a target).
+        entries = [
+            {
+                "id": f"skill:{i}",
+                "type": "skill",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 9)
+        ]
+        out = self._filter(entries)._select_holistic(
+            self._sel(*[f"skill:{i}" for i in range(1, 8)])
+        )
+        self.assertEqual(len(out["skill"]), 7)
+
+    def test_languages_never_dropped(self):
+        entries = [
+            {
+                "id": f"language:{i}",
+                "type": "language",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 3)
+        ]
+        out = self._filter(entries)._select_holistic(self._sel("language:1"))
+        self.assertEqual(
+            {e["id"] for e in out["language"]}, {"language:1", "language:2"}
+        )
+
+
+class ConversationalSelectorTests(TestCase):
+    """Conversational._parse / selection(): tolerant, validating, ordered — no network."""
+
+    def _selector(self):
+        entries = [
+            {"id": "skill:1", "type": "skill", "text": "Python"},
+            {"id": "job:1", "type": "job", "text": "Dev at X"},
+        ]
+        return Conversational("posting", entries)
+
+    def test_parses_ordered_selection(self):
+        raw = "job:1 — core\nskill:1 — req"
+        self.assertEqual(
+            self._selector()._parse(raw),
+            [{"id": "job:1", "why": "core"}, {"id": "skill:1", "why": "req"}],
+        )
+
+    def test_tolerates_markdown_and_extracts_amid_prose(self):
+        # bullets, code fences, a reasonless pick, and an unknown id -> only valid kept.
+        raw = "Here is my pick:\n```\n- skill:1\n2. skill:999 — x\n```"
+        self.assertEqual(self._selector()._parse(raw), [{"id": "skill:1", "why": ""}])
+
+    def test_dedupes_preserving_order(self):
+        raw = "job:1 — a\njob:1 — b\nskill:1 — c"
+        self.assertEqual(
+            [s["id"] for s in self._selector()._parse(raw)], ["job:1", "skill:1"]
+        )
+
+    def test_partial_reply_keeps_complete_picks(self):
+        # truncated mid-reply: job:1 parses in order, dangling line ignored.
+        self.assertEqual(
+            self._selector()._parse("job:1 — core\nski"),
+            [{"id": "job:1", "why": "core"}],
+        )
+
+    def test_garbage_returns_empty(self):
+        self.assertEqual(self._selector()._parse("no picks here"), [])
+
+    def test_selection_empty_on_llm_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._selector().selection(), [])
+
+
+class CVFilterStrongRoutingTests(TestCase):
+    """output() strong path: holistic when available, else standard, else light."""
+
+    def _entries(self):
+        return [
+            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
+            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
+        ]
+
+    def test_strong_uses_holistic_selection(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with patch.object(
+            CVFilter, "_strong_selection", return_value=[{"id": "job:2", "why": "best"}]
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["id"], "job:2")
+        self.assertEqual(out["job"][0]["reason"], "best")
+
+    def test_strong_falls_back_to_standard(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with (
+            patch.object(CVFilter, "_strong_selection", return_value=[]),
+            patch.object(
+                CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
+            ),
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["id"], "job:1")
+        self.assertEqual(out["job"][0]["score"], 3)  # standard labels, not holistic
+
+    def test_strong_falls_back_to_light_when_both_empty(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with (
+            patch.object(CVFilter, "_strong_selection", return_value=[]),
+            patch.object(CVFilter, "_standard_scores", return_value={}),
+            patch.object(
+                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
+            ),
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["score"], 0.9)  # cosine -> light path
 
 
 # ---------------------------------------------------------------------------

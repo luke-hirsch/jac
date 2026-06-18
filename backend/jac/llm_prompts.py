@@ -70,7 +70,93 @@ class Embed:
 
 
 class Conversational:
-    pass
+    """`strong` rung: a conversational LLM selects the CV holistically. It returns an
+    ORDERED list of chosen entry ids (priority order, best first) each with a short `why`,
+    rather than per-entry scores — CVFilter applies only guardrails (favourites, min_keep)
+    on top, so the model's judgment drives the selection.
+
+    Provider-agnostic (no provider-specific kwargs). The reply is a **line format**
+    (`<id> — <why>`, one pick per line), not JSON — token-cheap and robust to truncation
+    (see the `no-json-llm-io` memory). Any failure returns [] -> CVFilter degrades to the
+    standard rung.
+    """
+
+    _INSTRUCTION = (
+        "You are a senior CV editor tailoring a ONE-PAGE CV to a specific job posting.\n"
+        "From the candidate's full entry list below, choose the entries that make the "
+        "strongest, most relevant CV for THIS posting and drop the rest. Use judgment:\n"
+        "  - prefer entries the posting actually calls for; drop weak or off-topic ones;\n"
+        "  - keep a skill if a job/project you are keeping clearly relies on it;\n"
+        "  - it is fine to keep few entries for a poorly-matched posting, or many for a "
+        "strong match — fit should decide the count, not a fixed quota.\n"
+        "Output the entries you are KEEPING, best first, ONE per line: the entry id, "
+        "then ' — ', then a short reason (≤12 words).\n"
+        "Example:\n"
+        "job:2 — leads the relevant backend story\n"
+        "skill:7 — required stack\n"
+        "Include only ids you are keeping. No prose, no markdown, no other text."
+    )
+    _MAX_POST_CHARS = 12000
+
+    # entry ids are  type:pk  (e.g. job:2); anchor on a leading id, the rest of the line is why.
+    _PICK_RE = re.compile(r"([a-z]+:\d+)\s*[-—:.)\]]*\s*(.*)")
+
+    def __init__(self, job_post_text: str, entries: list[dict], user=None):
+        self.job_post_text = job_post_text
+        self.entries = entries
+        self.user = user
+
+    def selection(self) -> list[dict]:
+        """Return an ordered [{id, why}] of chosen entries. [] on any failure."""
+        try:
+            raw = complete(prompt=self._prompt(), user=self.user)
+        except Exception:
+            logger.exception("Conversational selector: LLM call failed")
+            return []
+        chosen = self._parse(raw)
+        if not chosen:
+            logger.warning("Conversational selector: no parseable selection in reply")
+        return chosen
+
+    def _prompt(self) -> str:
+        post = self.job_post_text[: self._MAX_POST_CHARS]
+        return (
+            f"{self._INSTRUCTION}\n\n"
+            f"JOB POSTING:\n{post}\n\n"
+            f"CANDIDATE ENTRIES (id — text):\n{self._grouped_entries()}\n\nSELECTION:"
+        )
+
+    def _grouped_entries(self) -> str:
+        """List entries grouped by type for readability, ids verbatim."""
+        by_type: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_type.setdefault(e["type"], []).append(e)
+        blocks = []
+        for etype, items in by_type.items():
+            lines = "\n".join(f"  {e['id']} — {e.get('text') or ''}" for e in items)
+            blocks.append(f"{etype.upper()}S:\n{lines}")
+        return "\n\n".join(blocks)
+
+    def _parse(self, raw: str) -> list[dict]:
+        """Extract an ordered [{id, why}] from a line format (`<id> — <why>`, best first).
+
+        Scans each line for a leading id pattern, taking the rest of the line as the reason,
+        and ignores lines it can't read (so a truncated reply still yields every complete pick
+        in order). Keeps only ids in this entry set, de-dupes preserving order, truncates
+        `why`. Returns [] when nothing usable is found.
+        """
+        valid = {e["id"] for e in self.entries}
+        out: list[dict] = []
+        seen: set[str] = set()
+        for line in (raw or "").splitlines():
+            m = self._PICK_RE.search(line)
+            if not m:
+                continue
+            eid = m.group(1)
+            if eid in valid and eid not in seen:
+                seen.add(eid)
+                out.append({"id": eid, "why": m.group(2).strip()[:200]})
+        return out
 
 
 class Instruct:
