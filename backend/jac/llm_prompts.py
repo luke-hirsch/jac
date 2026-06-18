@@ -343,12 +343,15 @@ class TheAnalyst:
         "postings with several models/grades. Each run below shows how many entries it KEPT per "
         "section (vs a one-page target), the relevance-score range, elapsed time, and an auditor's "
         "letter grade plus notes on questionable keeps/drops.\n"
-        "Write a concise analysis for the engineer tuning the pipeline:\n"
-        "  - which model/grade selects best, and the speed/quality trade-off;\n"
-        "  - sections that consistently over- or under-shoot the one-page target;\n"
+        "Write a concise COMPARATIVE summary for the engineer tuning the pipeline. Lead with how "
+        "the models relate to each other:\n"
+        "  - group the models that behave similarly, and call out any model that is off track;\n"
+        "  - name postings (or sections) where ALL models do badly, and where they disagree most;\n"
+        "  - note the speed/quality trade-off and which model/grade selects best overall;\n"
         "  - recurring selection mistakes across postings (cite ids);\n"
         "  - one or two concrete next steps.\n"
-        "Use short paragraphs and bullet points. Be specific; cite postings, models, and ids."
+        "Open with a 2-3 sentence verdict of the form 'X and Y behave alike; Z is off track; all "
+        "models struggle on …', then back it up. Be specific; cite postings, models, and ids."
     )
 
     def __init__(self, report: str, user=None, alias: str = "default"):

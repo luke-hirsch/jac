@@ -218,6 +218,10 @@ class Command(BaseCommand):
         aliases = list(
             LLMConfig.objects.filter(user=opts["user"]).values_list("alias", flat=True)
         ) or ["default"]
+        # --all-models compares every configured chat model; fold in 'default' too so the
+        # embedding-only `light` baseline (the server embedder) shows as its own row.
+        if opts["all_models"] and "default" not in aliases:
+            aliases = ["default"] + aliases
         runs = _resolve_runs(
             opts["grade"],
             opts["llm"],
@@ -256,8 +260,9 @@ class Command(BaseCommand):
             for slug, text in postings
         ]
 
-        self._write_findings(rows, out_dir, meta)
-        write(f"\n  findings → {out_dir / 'findings.md'}")
+        # Run the judge + cross-model summary BEFORE writing findings, so the judge grade lands in
+        # the findings table and the summary at the bottom of findings.md.
+        analyst_summary = ""
         if opts["analyze"]:
             analyst = opts["analyst"] or next(
                 (
@@ -268,7 +273,12 @@ class Command(BaseCommand):
                 "default",
             )
             slug_text = {slug: text for slug, text in postings}
-            self._analyze(rows, slug_text, analyst, opts["user"], out_dir, write)
+            analyst_summary = self._analyze(
+                rows, slug_text, analyst, opts["user"], out_dir, write
+            )
+
+        self._write_findings(rows, out_dir, meta, analyst_summary)
+        write(f"\n  findings → {out_dir / 'findings.md'}")
 
         if opts["compare"]:
             self._compare(opts["compare"], rows, write)
@@ -391,38 +401,58 @@ class Command(BaseCommand):
             "\n".join(lines) + "\n", encoding="utf-8"
         )
 
-    def _write_findings(self, rows, out_dir, meta):
-        # Drop the per-run kept/dropped payloads from the comparable artifact (they're heavy and
-        # already captured in *.ranks.md / *.cv.md); they live only in-memory for --analyze.
+    def _write_findings(self, rows, out_dir, meta, summary=""):
+        # Drop the heavy per-run payloads from the comparable artifact: kept/dropped (only needed
+        # in-memory for --analyze) and ranks (already in *.ranks.md). Keeps findings.json small.
         slim = [
-            {k: v for k, v in r.items() if k not in ("kept", "dropped")} for r in rows
+            {k: v for k, v in r.items() if k not in ("kept", "dropped", "ranks")}
+            for r in rows
         ]
         (out_dir / "findings.json").write_text(
             json.dumps(slim, indent=2), encoding="utf-8"
         )
+
         runs_str = "  ".join(f"{r['model']}:{r['grade']}" for r in meta["runs"])
-        header = f"user={meta['user']}  runs={runs_str}  rows={len(rows)}"
         t = meta["targets"]
-        target_row = (
-            f"| _target_ |  |  |  | {t['skills']} | {t['jobs']} | {t['educations']} | "
-            f"{t['certifications']} | {t['projects']} | {t['languages']} |  |"
+        target_line = "one-page target → " + " · ".join(
+            f"{s} {t[s]}" for s in _SECTIONS
         )
         lines = [
             f"# CV eval — {meta['timestamp']}",
             "",
-            header,
+            f"user={meta['user']}  runs={runs_str}  rows={len(rows)}",
+            target_line,
             "",
-            "| posting | model | grade | total | skills | jobs | edu | certs | proj | lang | elapsed |",
-            "|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
-            target_row,
         ]
+
+        # One table per run (model+grade), grouped in first-seen order — so each model reads as its
+        # own block, then the cross-model summary lands at the bottom.
+        groups: dict[tuple, list] = {}
         for r in rows:
-            c = r["counts"]
-            lines.append(
-                f"| {r['posting']} | {r.get('model', '?')} | {r['grade']} | {r['total']} | "
-                f"{c['skills']} | {c['jobs']} | {c['educations']} | {c['certifications']} | "
-                f"{c['projects']} | {c['languages']} | {r['elapsed_s']}s |"
-            )
+            groups.setdefault((r.get("model", "?"), r["grade"]), []).append(r)
+        for (model, grade), grp in groups.items():
+            lines += [
+                f"## {model} ({grade})",
+                "",
+                "| posting | total | skills | jobs | edu | certs | proj | lang | judge | elapsed |",
+                "|---|--:|--:|--:|--:|--:|--:|--:|:--:|--:|",
+            ]
+            for r in grp:
+                c = r["counts"]
+                lines.append(
+                    f"| {r['posting']} | {r['total']} | {c['skills']} | {c['jobs']} | "
+                    f"{c['educations']} | {c['certifications']} | {c['projects']} | "
+                    f"{c['languages']} | {r.get('judge') or '—'} | {r['elapsed_s']}s |"
+                )
+            lines.append("")
+
+        if summary:
+            lines += ["## AI summary", "", summary.strip(), ""]
+        else:
+            lines += [
+                "_AI summary: re-run with `--analyze` for a cross-model judgment._",
+                "",
+            ]
         (out_dir / "findings.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _compare(self, prev_path, rows, write):
@@ -456,8 +486,10 @@ class Command(BaseCommand):
     def _analyze(self, rows, slug_text, analyst_alias, user, out_dir, write):
         """Judge each run's selection (kept vs dropped vs posting), then summarise the whole sweep.
 
-        Writes one `*.judge.md` per run and a single `analysis.md`. The judge + analyst both run
-        under `analyst_alias` (a fixed strong grader). Error rows are skipped.
+        Attaches each run's letter grade to its row (`row['judge']`, surfaced in findings.md),
+        writes one `*.judge.md` per run and a single `analysis.md`, and RETURNS the cross-model
+        summary text (so findings.md can carry it). The judge + analyst both run under
+        `analyst_alias` (a fixed strong grader). Error rows are skipped. '' when nothing to judge.
         """
         write("\n" + "=" * 72)
         write(f"AI ANALYSIS — judge + summary via '{analyst_alias}'")
@@ -475,6 +507,7 @@ class Command(BaseCommand):
                 user=user,
                 alias=analyst_alias,
             ).critique()
+            r["judge"] = verdict["grade"]  # surfaced in the findings.md judge column
             self._write_judge(r, verdict, out_dir)
             write(
                 f"  {label:<28} grade {verdict['grade'] or '?'}  "
@@ -484,7 +517,7 @@ class Command(BaseCommand):
 
         if not blocks:
             write("\n  analysis skipped (no successful runs to judge)")
-            return
+            return ""
 
         summary = TheAnalyst(
             "\n\n".join(blocks), user=user, alias=analyst_alias
@@ -497,6 +530,7 @@ class Command(BaseCommand):
             write(f"\n  analysis → {out_dir / 'analysis.md'}")
         else:
             write("\n  analysis skipped (summary call returned nothing)")
+        return summary
 
     def _run_block(self, r, verdict):
         """One run's block for the Analyst's input: counts vs target + judge grade/notes."""

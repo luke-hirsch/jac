@@ -2,7 +2,7 @@
 
 ## Goal
 
-Two strands ran this session on branch `backend/cover-letter`:
+Two strands ran this session on branch `backend/cv-eval-ai-analysis`:
 1. **(AI)** trim the fat from `backend/jac/tests.py` — it had grown bloated.
 2. **(Human, in-flight)** build the `cv_eval` AI-analysis layer (`TheJudge` + `TheAnalyst`),
    per `.claude/plans/to-do/[backend]-cv-eval-ai-analysis.md`.
@@ -35,8 +35,6 @@ Two strands ran this session on branch `backend/cover-letter`:
 
 ## Open threads / risks
 
-- **Branch/work mismatch:** the cv-eval-analysis work is happening on branch `backend/cover-letter`.
-  Harmless but worth straightening before the cover-letter feature actually starts.
 - The Judge/Analyst feature is **unverified** (no test run this session); `--all-models` is
   incomplete per its own plan.
 - This commit is a **WIP checkpoint** — feature code is committed but not validated.
