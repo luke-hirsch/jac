@@ -81,7 +81,7 @@ class CVFilter:
     def _strong_selection(self) -> list[dict]:
         """Conversational holistic selection: ordered [{id, why}]. Empty -> standard fallback."""
         return Conversational(
-            self.job_post_text, self.entries, user=self.user
+            self.job_post_text, self.entries, user=self.user, alias=self.alias
         ).selection()
 
     # --- shared selection layer --------------------------------------------------------

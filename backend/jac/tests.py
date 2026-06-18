@@ -16,7 +16,7 @@ from rest_framework.test import APITestCase
 
 from jac.cv import CV
 from jac.filter import CVFilter
-from jac.llm_prompts import Conversational, Embed, Instruct
+from jac.llm_prompts import Conversational, Embed, Instruct, TheAnalyst, TheJudge
 from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import (
     Certification,
@@ -29,6 +29,19 @@ from jac.models import (
     ResumeSnippet,
     Skill,
 )
+
+
+def _entry(id, type, *, text="", refs=None, favourite=False):
+    """A flattened CV entry, shaped like CV._flatten_entries output. The selection
+    code reads `favourite`/`refs` via .get(), so the defaults are always safe."""
+    return {
+        "id": id,
+        "type": type,
+        "text": text,
+        "refs": refs or [],
+        "favourite": favourite,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Model tests
@@ -247,16 +260,7 @@ class CVSelectRankedTests(TestCase):
 
     def test_keeps_relevant_drops_zero_label(self):
         # 4 jobs (min_keep 3): two rated relevant, two rated 0. min_keep forces a 3rd back.
-        entries = [
-            {
-                "id": f"job:{i}",
-                "type": "job",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 5)
-        ]
+        entries = [_entry(f"job:{i}", "job") for i in range(1, 5)]
         labels = {"job:1": 3, "job:2": 2, "job:3": 0, "job:4": 0}
         out = self._filter(entries)._select_ranked(labels)
         kept = [e["id"] for e in out["job"]]
@@ -266,16 +270,7 @@ class CVSelectRankedTests(TestCase):
 
     def test_skills_count_varies_with_fit(self):
         # 8 skills (min_keep 5): 6 rated relevant -> all 6 kept (count tracks fit, no clamp).
-        entries = [
-            {
-                "id": f"skill:{i}",
-                "type": "skill",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 9)
-        ]
+        entries = [_entry(f"skill:{i}", "skill") for i in range(1, 9)]
         labels = {f"skill:{i}": (2 if i <= 6 else 0) for i in range(1, 9)}
         out = self._filter(entries)._select_ranked(labels)
         self.assertEqual(len(out["skill"]), 6)
@@ -283,52 +278,26 @@ class CVSelectRankedTests(TestCase):
     def test_favourite_pinned_despite_zero_label(self):
         # project min_keep 0; a 0-rated favourite is still kept (pinned), a 0-rated non-fav isn't.
         entries = [
-            {
-                "id": "project:1",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": True,
-            },
-            {
-                "id": "project:2",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
+            _entry("project:1", "project", favourite=True),
+            _entry("project:2", "project"),
         ]
         out = self._filter(entries)._select_ranked({"project:1": 0, "project:2": 0})
         kept = {e["id"] for e in out["project"]}
         self.assertEqual(kept, {"project:1"})
 
     def test_languages_never_dropped(self):
-        entries = [
-            {
-                "id": "language:1",
-                "type": "language",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
-        ]
-        out = self._filter(entries)._select_ranked({"language:1": 0})
+        out = self._filter([_entry("language:1", "language")])._select_ranked(
+            {"language:1": 0}
+        )
         self.assertEqual([e["id"] for e in out["language"]], ["language:1"])
 
     def test_ranked_descending_by_label(self):
-        entries = [
-            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
-            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
-            {"id": "job:3", "type": "job", "text": "", "refs": [], "favourite": False},
-        ]
+        entries = [_entry(f"job:{i}", "job") for i in range(1, 4)]
         out = self._filter(entries)._select_ranked({"job:1": 1, "job:2": 3, "job:3": 2})
         self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:3", "job:1"])
 
     def test_score_is_the_label(self):
-        entries = [
-            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
-        ]
-        out = self._filter(entries)._select_ranked({"job:1": 2})
+        out = self._filter([_entry("job:1", "job")])._select_ranked({"job:1": 2})
         self.assertEqual(out["job"][0]["score"], 2)
 
 
@@ -337,8 +306,8 @@ class InstructScorerParseTests(TestCase):
 
     def _scorer(self):
         entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:1", "type": "job", "text": "Dev at X"},
+            _entry("skill:1", "skill", text="Python"),
+            _entry("job:1", "job", text="Dev at X"),
         ]
         return Instruct("posting", entries)
 
@@ -399,13 +368,10 @@ class InstructScorerParseTests(TestCase):
 
 
 class CVFilterRoutingTests(TestCase):
-    """output() picks the right scorer + selection per grade, with fallback."""
+    """output() standard path: ranked selection, with light fallback."""
 
     def _entries(self):
-        return [
-            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
-            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
-        ]
+        return [_entry("job:1", "job"), _entry("job:2", "job")]
 
     def test_standard_uses_ranked_selection(self):
         f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
@@ -429,14 +395,6 @@ class CVFilterRoutingTests(TestCase):
         # light path: floored selection, cosine scores preserved.
         self.assertEqual(out["job"][0]["score"], 0.9)
 
-    def test_strong_currently_routes_through_standard_scorer(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
-        with patch.object(
-            CVFilter, "_standard_scores", return_value={"job:1": 2, "job:2": 0}
-        ):
-            out = f.output()
-        self.assertEqual(out["job"][0]["id"], "job:1")
-
 
 class CVSelectHolisticTests(TestCase):
     """CVFilter._select_holistic: model's selection + guardrails (favourites, min_keep, langs)."""
@@ -449,51 +407,23 @@ class CVSelectHolisticTests(TestCase):
 
     def test_keeps_selected_in_order_drops_rest(self):
         # projects: min_keep 0 -> unselected are genuinely dropped.
-        entries = [
-            {
-                "id": f"project:{i}",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 4)
-        ]
+        entries = [_entry(f"project:{i}", "project") for i in range(1, 4)]
         out = self._filter(entries)._select_holistic(
             self._sel("project:3", "project:1")
         )
         self.assertEqual([e["id"] for e in out["project"]], ["project:3", "project:1"])
 
     def test_reason_carried_and_score_none(self):
-        entries = [
-            {
-                "id": "project:1",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
-        ]
-        out = self._filter(entries)._select_holistic(self._sel("project:1"))
+        out = self._filter([_entry("project:1", "project")])._select_holistic(
+            self._sel("project:1")
+        )
         self.assertEqual(out["project"][0]["reason"], "why project:1")
         self.assertIsNone(out["project"][0]["score"])
 
     def test_favourite_pinned_when_model_omits_it(self):
         entries = [
-            {
-                "id": "project:1",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
-            {
-                "id": "project:2",
-                "type": "project",
-                "text": "",
-                "refs": [],
-                "favourite": True,
-            },
+            _entry("project:1", "project"),
+            _entry("project:2", "project", favourite=True),
         ]
         out = self._filter(entries)._select_holistic(self._sel("project:1"))
         kept = {e["id"] for e in out["project"]}
@@ -501,16 +431,7 @@ class CVSelectHolisticTests(TestCase):
 
     def test_min_keep_tops_up_from_remainder(self):
         # jobs min_keep 3; model picks only 1 -> two more topped up from natural order.
-        entries = [
-            {
-                "id": f"job:{i}",
-                "type": "job",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 5)
-        ]
+        entries = [_entry(f"job:{i}", "job") for i in range(1, 5)]
         out = self._filter(entries)._select_holistic(self._sel("job:2"))
         kept = [e["id"] for e in out["job"]]
         self.assertEqual(kept[0], "job:2")  # model's pick stays first
@@ -518,32 +439,14 @@ class CVSelectHolisticTests(TestCase):
 
     def test_count_varies_with_fit_no_clamp(self):
         # skills min_keep 5; model picks 7 -> all 7 kept (never clamped to a target).
-        entries = [
-            {
-                "id": f"skill:{i}",
-                "type": "skill",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 9)
-        ]
+        entries = [_entry(f"skill:{i}", "skill") for i in range(1, 9)]
         out = self._filter(entries)._select_holistic(
             self._sel(*[f"skill:{i}" for i in range(1, 8)])
         )
         self.assertEqual(len(out["skill"]), 7)
 
     def test_languages_never_dropped(self):
-        entries = [
-            {
-                "id": f"language:{i}",
-                "type": "language",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            }
-            for i in range(1, 3)
-        ]
+        entries = [_entry(f"language:{i}", "language") for i in range(1, 3)]
         out = self._filter(entries)._select_holistic(self._sel("language:1"))
         self.assertEqual(
             {e["id"] for e in out["language"]}, {"language:1", "language:2"}
@@ -555,8 +458,8 @@ class ConversationalSelectorTests(TestCase):
 
     def _selector(self):
         entries = [
-            {"id": "skill:1", "type": "skill", "text": "Python"},
-            {"id": "job:1", "type": "job", "text": "Dev at X"},
+            _entry("skill:1", "skill", text="Python"),
+            _entry("job:1", "job", text="Dev at X"),
         ]
         return Conversational("posting", entries)
 
@@ -597,10 +500,7 @@ class CVFilterStrongRoutingTests(TestCase):
     """output() strong path: holistic when available, else standard, else light."""
 
     def _entries(self):
-        return [
-            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
-            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
-        ]
+        return [_entry("job:1", "job"), _entry("job:2", "job")]
 
     def test_strong_uses_holistic_selection(self):
         f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
@@ -1190,7 +1090,6 @@ class OrderingFieldsAPITests(APITestCase):
         self.assertEqual(ids, [self.a.pk, self.b.pk])  # most-recently-updated first
 
     def test_disallowed_ordering_field_falls_back_to_default(self):
-
         r = self.client.get("/api/jac/jobs/?ordering=title")
         self.assertEqual(r.status_code, 200)
         ids = [row["id"] for row in r.data["results"]]
@@ -1230,7 +1129,7 @@ class DomainIsDefaultAPITests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 3e — cv_export / cv_import round-trip
+# Phase 3a-bis — ?domains=<id> list filtering
 # ---------------------------------------------------------------------------
 
 
@@ -1275,6 +1174,11 @@ class DomainFilterAPITests(APITestCase):
         r = self.client.get(f"/api/jac/certifications/?domains={self.backend.pk}")
         self.assertEqual(r.status_code, 200)
         self.assertEqual([c["name"] for c in r.data["results"]], ["AWS"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 3e — cv_export / cv_import round-trip
+# ---------------------------------------------------------------------------
 
 
 class CvExportImportRoundTripTests(TestCase):
@@ -1527,16 +1431,11 @@ class CVSelectionTests(TestCase):
 
     def _entries(self):
         return [
-            {"id": "job:1", "type": "job", "text": "", "refs": ["skill:1"]},
-            {"id": "skill:1", "type": "skill", "text": "", "refs": []},
-            {"id": "skill:2", "type": "skill", "text": "", "refs": []},
-            {
-                "id": "certification:1",
-                "type": "certification",
-                "text": "",
-                "refs": ["skill:1"],
-            },
-            {"id": "language:1", "type": "language", "text": "", "refs": []},
+            _entry("job:1", "job", refs=["skill:1"]),
+            _entry("skill:1", "skill"),
+            _entry("skill:2", "skill"),
+            _entry("certification:1", "certification", refs=["skill:1"]),
+            _entry("language:1", "language"),
         ]
 
     def _filter(self):
@@ -1567,10 +1466,7 @@ class CVSelectionTests(TestCase):
         self.assertEqual(kept, {"skill:1", "skill:2"})
 
     def test_skill_floor_drops_when_above_min_keep(self):
-        entries = [
-            {"id": f"skill:{i}", "type": "skill", "text": "", "refs": []}
-            for i in range(1, 8)
-        ]
+        entries = [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
         f = CVFilter(job_post_text="x", entries=entries, grade="light")
         base = {f"skill:{i}": (0.9 if i <= 5 else 0.10) for i in range(1, 8)}
         out = f._select(base)
@@ -1590,10 +1486,7 @@ class CVSelectionTests(TestCase):
         self.assertEqual(kept, {e["id"] for e in self._entries()})
 
     def test_sections_ranked_descending(self):
-        entries = [
-            {"id": "job:1", "type": "job", "text": "", "refs": []},
-            {"id": "job:2", "type": "job", "text": "", "refs": []},
-        ]
+        entries = [_entry("job:1", "job"), _entry("job:2", "job")]
         f = CVFilter(job_post_text="x", entries=entries, grade="light")
         out = f._select({"job:1": 0.3, "job:2": 0.8})
         self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:1"])
@@ -1603,7 +1496,7 @@ class EmbedAliasPassthroughTests(TestCase):
     """Embed forwards alias + user to embed() so the light rung honours --llm."""
 
     def _entries(self):
-        return [{"id": "skill:1", "type": "skill", "text": "Python"}]
+        return [_entry("skill:1", "skill", text="Python")]
 
     def test_query_passes_alias_and_user(self):
         with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
@@ -1625,10 +1518,7 @@ class CVFilterFloorsTests(TestCase):
     and _select drops by the resolved floor."""
 
     def _entries(self):
-        return [
-            {"id": f"skill:{i}", "type": "skill", "text": "", "refs": []}
-            for i in range(1, 8)
-        ]
+        return [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
 
     def test_floors_merge_config_over_defaults(self):
         f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
@@ -1853,8 +1743,8 @@ class CVFavouriteBonusTests(TestCase):
 
     def test_bonus_added_and_reranks(self):
         entries = [
-            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": True},
-            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
+            _entry("job:1", "job", favourite=True),
+            _entry("job:2", "job"),
         ]
         out = self._filter(entries)._select({"job:1": 0.40, "job:2": 0.40})
         scores = {e["id"]: e["score"] for e in out["job"]}
@@ -1867,27 +1757,9 @@ class CVFavouriteBonusTests(TestCase):
         # Two strong educations + one favourite at `fav_score`; education floor 0.15,
         # min_keep 2 (already satisfied by the two strong ones).
         return [
-            {
-                "id": "education:1",
-                "type": "education",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
-            {
-                "id": "education:2",
-                "type": "education",
-                "text": "",
-                "refs": [],
-                "favourite": False,
-            },
-            {
-                "id": "education:3",
-                "type": "education",
-                "text": "",
-                "refs": [],
-                "favourite": True,
-            },
+            _entry("education:1", "education"),
+            _entry("education:2", "education"),
+            _entry("education:3", "education", favourite=True),
         ], {"education:1": 0.9, "education:2": 0.9, "education:3": fav_score}
 
     def test_bonus_cannot_resurrect_zero_scored_favourite(self):
@@ -1959,3 +1831,70 @@ class CVCommandSmokeTests(TestCase):
             )
             self.assertTrue((Path(tmp) / "findings.json").exists())
             self.assertTrue((Path(tmp) / "findings.md").exists())
+
+
+class JudgeCritiqueTests(TestCase):
+    """Judge._parse / critique(): grade + id-anchored notes, tolerant, validating — no network."""
+
+    def _judge(self):
+        return TheJudge(
+            "posting",
+            kept=[{"id": "skill:1", "text": "Python"}],
+            dropped=[{"id": "job:9", "text": "old job"}],
+        )
+
+    def test_parses_grade_and_notes(self):
+        out = self._judge()._parse("GRADE B\njob:9 — required, should have stayed")
+        self.assertEqual(out["grade"], "B")
+        self.assertEqual(
+            out["notes"], [{"id": "job:9", "note": "required, should have stayed"}]
+        )
+
+    def test_grade_only_yields_no_notes(self):
+        out = self._judge()._parse("GRADE A")
+        self.assertEqual(out["grade"], "A")
+        self.assertEqual(out["notes"], [])
+
+    def test_missing_grade_is_none(self):
+        out = self._judge()._parse("skill:1 — weak match")
+        self.assertIsNone(out["grade"])
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
+
+    def test_unknown_ids_dropped_and_deduped(self):
+        out = self._judge()._parse(
+            "GRADE C\nskill:99 — not in set\nskill:1 — weak\nskill:1 — dupe"
+        )
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak"}])
+
+    def test_tolerates_separator_drift(self):
+        out = self._judge()._parse("GRADE D\njob:9: missing required stack")
+        self.assertEqual(
+            out["notes"], [{"id": "job:9", "note": "missing required stack"}]
+        )
+
+    def test_critique_safe_on_llm_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._judge().critique(), {"grade": None, "notes": []})
+
+    def test_critique_parses_reply(self):
+        with patch(
+            "jac.llm_prompts.complete", return_value="GRADE B\nskill:1 — weak match"
+        ):
+            out = self._judge().critique()
+        self.assertEqual(out["grade"], "B")
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
+
+
+class AnalystSummaryTests(TestCase):
+    """Analyst.analyse(): free-form prose passthrough, safe on failure — no network."""
+
+    def test_prompt_includes_report(self):
+        self.assertIn("REPORT-DATA", TheAnalyst("REPORT-DATA")._prompt())
+
+    def test_analyse_returns_text(self):
+        with patch("jac.llm_prompts.complete", return_value="the analysis"):
+            self.assertEqual(TheAnalyst("r").analyse(), "the analysis")
+
+    def test_analyse_empty_on_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
+            self.assertEqual(TheAnalyst("r").analyse(), "")
