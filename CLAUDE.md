@@ -63,14 +63,18 @@ active skeleton (the thing under construction):
 
 > this is the **moving part** of this file. it changes as goalposts move; keep it honest.
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
-> `/update-claude` edits this section after a coding phase.
+> `/wrap-up` refreshes this section at the end of a coding phase.
 
 1. **CV ladder — remaining rungs** (`backend/jac/cv.py`, `llm_prompts.py`). The relationship-aware
-   selection layer + `light` floor are *done*; what's left is the two LLM scorers (both just feed
-   `{id: score}` into the shared `CVFilter` selection):
-   - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries. *(done)*
-   - `standard`: `Instruct` LLM ranks entries — clean instruction approach, fits smaller models.
-   - `strong`: `Conversational` LLM ranks entries — conversational approach, for bigger models.
+   selection layer + `light` floor are *done*; what's left is the two LLM rungs. Each pairs its own
+   scorer **and** selection strategy (the shared floor path is a crutch for weak scorers — see the
+   plans); all LLM I/O is **line-format, not JSON** (id-anchored, token-cheap, truncation-robust —
+   see the `no-json-llm-io` memory):
+   - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries → propagation + floors. *(done)*
+   - `standard`: `Instruct` LLM rates each entry `0–3` (`<id> <rating>` lines) → keep-by-verdict
+     (`_select_ranked`); clean instruction approach, fits smaller models.
+   - `strong`: `Conversational` LLM selects holistically (`<id> — <why>` lines, ordered) → guardrails
+     only (`_select_holistic`); for bigger models.
 2. **cover-letter generation** — a class that writes a cover letter for a job, using
    `ResumeSnippet` boilerplate stitched by the LLM (writer model: `llama3.2:1b`) to avoid AI slop.
 3. **frontend render** of the tailored CV + cover letter.
@@ -120,10 +124,14 @@ testing still stays with the human.
 
 ## skills (slash commands)
 
+these live at the **user level** (`~/.claude/skills/`), so they're available in every project — not
+checked into this repo. listed here because the working style above leans on them.
+
 - **`/setup-guide`** — write a code-bearing implementation guide for a roadmap item into
   `.claude/plans/to-do/`. does not touch repo source.
-- **`/update-claude`** — after a coding phase, refresh this file's roadmap + current-state, distill
-  memory, and move finished plans `to-do/` → `done/`.
-- **`/handover`** — dump current working context to a durable file so a later session, or a person,
-  can pick up cold.
-- **`/commit-message`** — write a short commit message for the current changes and commit them.
+- **`/wrap-up`** — end-of-session combo. self-contained: refreshes the durable docs (this file's
+  roadmap + current-state, memory, moves finished plans `to-do/` → `done/`), writes a handover
+  snapshot, commits both (no Claude co-author trailer), then hands off to `/clear`. folds in what
+  used to be separate `/update-claude`, `/handover`, and `/commit-message` skills.
+- **`/pickup`** — the inverse of wrap-up: read the latest handover + git state + open to-do plans
+  and give the lay of the land when returning to a dormant project. read-only.
