@@ -8,14 +8,16 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from django.core.exceptions import ValidationError as DjangoValidationError
-
-from jac.cv import CV, CVFilter
+from jac.cv import CV
+from jac.filter import CVFilter
+from jac.llm_prompts import Embed, Instruct
+from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import (
     Certification,
     Domain,
@@ -235,6 +237,205 @@ class CVQueryTests(TestCase):
             set(cv.entries.keys()),
             {"skills", "jobs", "educations", "certifications", "projects", "languages"},
         )
+
+
+class CVSelectRankedTests(TestCase):
+    """CVFilter._select_ranked: keep-by-label, favourites pinned, min_keep honoured."""
+
+    def _filter(self, entries):
+        return CVFilter(job_post_text="x", entries=entries, grade="standard")
+
+    def test_keeps_relevant_drops_zero_label(self):
+        # 4 jobs (min_keep 3): two rated relevant, two rated 0. min_keep forces a 3rd back.
+        entries = [
+            {
+                "id": f"job:{i}",
+                "type": "job",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 5)
+        ]
+        labels = {"job:1": 3, "job:2": 2, "job:3": 0, "job:4": 0}
+        out = self._filter(entries)._select_ranked(labels)
+        kept = [e["id"] for e in out["job"]]
+        # two relevant kept + one zero-rated topped up to satisfy min_keep(3); ranked desc.
+        self.assertEqual(kept[:2], ["job:1", "job:2"])
+        self.assertEqual(len(kept), 3)
+
+    def test_skills_count_varies_with_fit(self):
+        # 8 skills (min_keep 5): 6 rated relevant -> all 6 kept (count tracks fit, no clamp).
+        entries = [
+            {
+                "id": f"skill:{i}",
+                "type": "skill",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            }
+            for i in range(1, 9)
+        ]
+        labels = {f"skill:{i}": (2 if i <= 6 else 0) for i in range(1, 9)}
+        out = self._filter(entries)._select_ranked(labels)
+        self.assertEqual(len(out["skill"]), 6)
+
+    def test_favourite_pinned_despite_zero_label(self):
+        # project min_keep 0; a 0-rated favourite is still kept (pinned), a 0-rated non-fav isn't.
+        entries = [
+            {
+                "id": "project:1",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": True,
+            },
+            {
+                "id": "project:2",
+                "type": "project",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+        ]
+        out = self._filter(entries)._select_ranked({"project:1": 0, "project:2": 0})
+        kept = {e["id"] for e in out["project"]}
+        self.assertEqual(kept, {"project:1"})
+
+    def test_languages_never_dropped(self):
+        entries = [
+            {
+                "id": "language:1",
+                "type": "language",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+        ]
+        out = self._filter(entries)._select_ranked({"language:1": 0})
+        self.assertEqual([e["id"] for e in out["language"]], ["language:1"])
+
+    def test_ranked_descending_by_label(self):
+        entries = [
+            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
+            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
+            {"id": "job:3", "type": "job", "text": "", "refs": [], "favourite": False},
+        ]
+        out = self._filter(entries)._select_ranked({"job:1": 1, "job:2": 3, "job:3": 2})
+        self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:3", "job:1"])
+
+    def test_score_is_the_label(self):
+        entries = [
+            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
+        ]
+        out = self._filter(entries)._select_ranked({"job:1": 2})
+        self.assertEqual(out["job"][0]["score"], 2)
+
+
+class InstructScorerParseTests(TestCase):
+    """Instruct._parse: tolerant line parsing, validating, clamping — no network."""
+
+    def _scorer(self):
+        entries = [
+            {"id": "skill:1", "type": "skill", "text": "Python"},
+            {"id": "job:1", "type": "job", "text": "Dev at X"},
+        ]
+        return Instruct("posting", entries)
+
+    def test_parses_clean_lines(self):
+        self.assertEqual(
+            self._scorer()._parse("skill:1 3\njob:1 1"),
+            {"skill:1": 3, "job:1": 1},
+        )
+
+    def test_tolerates_markdown_and_separator_drift(self):
+        # bullets, em-dash, colon, code fences, blank lines — all survive.
+        raw = "```\n- skill:1: 2\n1. job:1 — 0\n```"
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_extracts_lines_amid_prose(self):
+        raw = "Sure! Here are the ratings:\nskill:1 2\njob:1 0\nHope that helps."
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_partial_reply_keeps_complete_lines(self):
+        # truncated mid-reply: skill:1 parses, the dangling line is ignored.
+        self.assertEqual(self._scorer()._parse("skill:1 3\njob"), {"skill:1": 3})
+
+    def test_unknown_ids_dropped_and_labels_clamped(self):
+        raw = "skill:1 9\njob:1 0\nskill:999 2"
+        # 9 -> clamped to _LABEL_MAX(3); unknown id dropped.
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 3, "job:1": 0})
+
+    def test_parses_single_line_json(self):
+        # Regression: a model that ignores the line format and emits compact one-line
+        # JSON must still yield EVERY pair. The old per-line parser grabbed only the first,
+        # leaving a truthy-but-near-empty label map that masked the light fallback and
+        # collapsed selection to the min_keep skeleton for every posting.
+        raw = '{"skill:1": 2, "job:1": 0}'
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_parses_multiple_pairs_on_one_line(self):
+        self.assertEqual(
+            self._scorer()._parse("skill:1 3 job:1 1"), {"skill:1": 3, "job:1": 1}
+        )
+
+    def test_garbage_returns_empty(self):
+        self.assertEqual(self._scorer()._parse("no ratings here at all"), {})
+
+    def test_ranked_entries_empty_on_parse_failure(self):
+        with patch("jac.llm_prompts.complete", return_value="garbage"):
+            self.assertEqual(self._scorer().ranked_entries(), [])
+
+    def test_ranked_entries_empty_on_llm_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._scorer().ranked_entries(), [])
+
+    def test_ranked_entries_maps_labels(self):
+        with patch("jac.llm_prompts.complete", return_value="skill:1 3\njob:1 1"):
+            ranked = self._scorer().ranked_entries()
+        self.assertEqual(
+            {r["id"]: r["score"] for r in ranked}, {"skill:1": 3, "job:1": 1}
+        )
+
+
+class CVFilterRoutingTests(TestCase):
+    """output() picks the right scorer + selection per grade, with fallback."""
+
+    def _entries(self):
+        return [
+            {"id": "job:1", "type": "job", "text": "", "refs": [], "favourite": False},
+            {"id": "job:2", "type": "job", "text": "", "refs": [], "favourite": False},
+        ]
+
+    def test_standard_uses_ranked_selection(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
+        with patch.object(
+            CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
+        ):
+            out = f.output()
+        # ranked by label desc; scores are the labels (not cosine).
+        self.assertEqual([e["id"] for e in out["job"]], ["job:1", "job:2"])
+        self.assertEqual(out["job"][0]["score"], 3)
+
+    def test_standard_falls_back_to_light_when_scorer_empty(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
+        with (
+            patch.object(CVFilter, "_standard_scores", return_value={}),
+            patch.object(
+                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
+            ),
+        ):
+            out = f.output()
+        # light path: floored selection, cosine scores preserved.
+        self.assertEqual(out["job"][0]["score"], 0.9)
+
+    def test_strong_currently_routes_through_standard_scorer(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with patch.object(
+            CVFilter, "_standard_scores", return_value={"job:1": 2, "job:2": 0}
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["id"], "job:1")
 
 
 # ---------------------------------------------------------------------------
@@ -1200,6 +1401,93 @@ class CVSelectionTests(TestCase):
         self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:1"])
 
 
+class EmbedAliasPassthroughTests(TestCase):
+    """Embed forwards alias + user to embed() so the light rung honours --llm."""
+
+    def _entries(self):
+        return [{"id": "skill:1", "type": "skill", "text": "Python"}]
+
+    def test_query_passes_alias_and_user(self):
+        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
+            Embed("posting", self._entries(), user=7, alias="reasoning")._query()
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["alias"], "reasoning")
+        self.assertEqual(kwargs["user"], 7)
+
+    def test_defaults_to_default_alias_no_user(self):
+        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
+            Embed("posting", self._entries())._query()
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["alias"], "default")
+        self.assertIsNone(kwargs["user"])
+
+
+class CVFilterFloorsTests(TestCase):
+    """CVFilter._floors merges config embed_floors over _SECTION_POLICY defaults,
+    and _select drops by the resolved floor."""
+
+    def _entries(self):
+        return [
+            {"id": f"skill:{i}", "type": "skill", "text": "", "refs": []}
+            for i in range(1, 8)
+        ]
+
+    def test_floors_merge_config_over_defaults(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.55}):
+            floors = f._floors()
+        self.assertEqual(floors["skill"], 0.55)  # overridden by config
+        self.assertEqual(floors["job"], 0.20)  # default kept
+
+    def test_select_uses_overridden_floor(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        # 3 skills clear the default 0.35 floor; the other 4 sit at 0.20 (below default).
+        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
+        # Default would keep 3 + min_keep top-up to 5; lower the floor and all 7 clear it.
+        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.15}):
+            out = f._select(base)
+        self.assertEqual(len(out["skill"]), 7)
+
+    def test_default_floor_when_no_override(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
+        with patch("jac.filter.get_embed_floors", return_value={}):
+            out = f._select(base)
+        # 3 above the 0.35 default + min_keep(5) tops up to 5.
+        self.assertEqual(len(out["skill"]), 5)
+
+
+class ResolveRunsTests(TestCase):
+    """cv_eval._resolve_runs: the grade×llm selection matrix."""
+
+    def _strength(self, alias):
+        return {"default": "light", "reasoning": "standard"}.get(alias, "strong")
+
+    def test_neither_uses_default_at_autodetected_grade(self):
+        self.assertEqual(
+            _resolve_runs(None, None, ["a", "b"], self._strength),
+            [("default", "light")],
+        )
+
+    def test_llm_only_autodetects_grade(self):
+        self.assertEqual(
+            _resolve_runs(None, "reasoning", ["a", "b"], self._strength),
+            [("reasoning", "standard")],
+        )
+
+    def test_grade_only_fans_out_over_all_models(self):
+        self.assertEqual(
+            _resolve_runs("standard", None, ["a", "b"], self._strength),
+            [("a", "standard"), ("b", "standard")],
+        )
+
+    def test_both_uses_the_exact_pair(self):
+        self.assertEqual(
+            _resolve_runs("light", "reasoning", ["a", "b"], self._strength),
+            [("reasoning", "light")],
+        )
+
+
 class CVApplySelectionTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -1381,9 +1669,27 @@ class CVFavouriteBonusTests(TestCase):
         # Two strong educations + one favourite at `fav_score`; education floor 0.15,
         # min_keep 2 (already satisfied by the two strong ones).
         return [
-            {"id": "education:1", "type": "education", "text": "", "refs": [], "favourite": False},
-            {"id": "education:2", "type": "education", "text": "", "refs": [], "favourite": False},
-            {"id": "education:3", "type": "education", "text": "", "refs": [], "favourite": True},
+            {
+                "id": "education:1",
+                "type": "education",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+            {
+                "id": "education:2",
+                "type": "education",
+                "text": "",
+                "refs": [],
+                "favourite": False,
+            },
+            {
+                "id": "education:3",
+                "type": "education",
+                "text": "",
+                "refs": [],
+                "favourite": True,
+            },
         ], {"education:1": 0.9, "education:2": 0.9, "education:3": fav_score}
 
     def test_bonus_cannot_resurrect_zero_scored_favourite(self):

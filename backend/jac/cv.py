@@ -13,7 +13,7 @@ from datetime import date
 # from typing import Any
 from django.db.models import Q
 
-from jac.llm_prompts import Embed
+from jac.filter import CVFilter
 from jac.models import Certification, Education, Job, Language, Project, Skill
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,7 @@ class CV:
         return out
 
     # filter
-    def filter_cv(self, job_post_text: str, grade: str | None):
+    def filter_cv(self, job_post_text: str, grade: str | None, alias: str = "default"):
         cv_filter = CVFilter(
             job_post_text=job_post_text,
             entries=self._flatten_entries(),
@@ -278,6 +278,7 @@ class CV:
             if grade and grade in ["light", "standard", "strong"]
             else "light",
             user=self.user,
+            alias=alias,
         )
         return cv_filter.output()
 
@@ -308,154 +309,3 @@ class CV:
                 obj.relevance_score = item.get("score")
                 pruned[section].append(obj)
         self.entries = pruned
-
-
-class CVFilter:
-    """Turns per-entry relevance scores into a ranked, weakly-filtered CV.
-
-    Scoring is pluggable (embeddings / instruct LLM / conversational LLM); everything below the
-    score map — directional propagation over entry edges, then per-section drop — is shared.
-    """
-
-    # Tier: a node is lifted only by neighbours of a strictly lower tier number.
-    _TIER = {
-        "job": 0,
-        "project": 0,
-        "education": 0,
-        "skill": 1,
-        "certification": 2,
-        "language": 3,
-    }
-    # Damping applied to an anchor's score when it lifts a lower-tier neighbour.
-    _ANCHOR_W = 0.85
-
-    # Additive nudge for user-flagged favourites, applied to the effective score after
-    # propagation. Kept below the smallest non-zero section floor (education's 0.15) so a
-    # favourite the scorer rates ~0 still can't cross its drop threshold — favourites tilt
-    # close calls, they don't resurrect irrelevant entries.
-    _FAVOURITE_BONUS = 0.05
-
-    # Per-section drop rule. `drop_below`: absolute effective-score floor (cosine-scaled).
-    # `min_keep`: always keep at least this many top-ranked, even below the floor;
-    # None = never drop any; 0 = no floor guarantee (section may empty out if irrelevant).
-    _SECTION_POLICY = {
-        "job": {"drop_below": 0.20, "min_keep": 3},
-        "education": {"drop_below": 0.15, "min_keep": 2},
-        "skill": {"drop_below": 0.35, "min_keep": 5},
-        "project": {"drop_below": 0.30, "min_keep": 0},
-        "certification": {"drop_below": 0.30, "min_keep": 0},
-        "language": {"drop_below": 0.00, "min_keep": None},
-    }
-
-    def __init__(
-        self,
-        job_post_text: str,
-        entries: list[dict],
-        grade: str = "light",
-        user=None,
-    ):
-        assert isinstance(job_post_text, str)
-        self.job_post_text = job_post_text
-        self.entries = entries
-        self.grade = grade
-        self.user = user
-
-    def output(self) -> dict:
-        """Return {section: [entry dicts + score], ...}, each section ranked desc."""
-        if self.grade == "strong":
-            base = (
-                self._strong_scores() or self._standard_scores() or self._light_scores()
-            )
-        elif self.grade == "standard":
-            base = self._standard_scores() or self._light_scores()
-        else:
-            base = self._light_scores()
-        return self._select(base)
-
-    # --- score sources (each returns {id: float} or {} on failure) ---------------------
-
-    def _light_scores(self) -> dict:
-        ranked = Embed(self.job_post_text, self.entries).ranked_entries()
-        return {r["id"]: r["score"] for r in ranked} if ranked else {}
-
-    def _standard_scores(self) -> dict:
-        # TODO: Instruct LLM ranking. Returns {} until implemented -> falls back to light.
-        return {}
-
-    def _strong_scores(self) -> dict:
-        # TODO: Conversational LLM ranking. Returns {} until implemented -> falls back.
-        return {}
-
-    # --- shared selection layer --------------------------------------------------------
-
-    def _propagate(self, base: dict) -> dict:
-        """Single ascending-tier sweep: lift each node by its best higher-tier neighbour."""
-        eff = {e["id"]: base.get(e["id"], 0.0) for e in self.entries}
-        type_of = {e["id"]: e["type"] for e in self.entries}
-
-        adj: dict[str, set[str]] = {}
-        for e in self.entries:
-            for r in e.get("refs", []):
-                adj.setdefault(e["id"], set()).add(r)
-                adj.setdefault(r, set()).add(e["id"])
-
-        for tier in (1, 2, 3):
-            for e in self.entries:
-                if self._TIER.get(e["type"]) != tier:
-                    continue
-                eid = e["id"]
-                higher = [
-                    eff[n]
-                    for n in adj.get(eid, ())
-                    if self._TIER.get(type_of.get(n), 99) < tier
-                ]
-                if higher:
-                    eff[eid] = max(eff[eid], self._ANCHOR_W * max(higher))
-        return eff
-
-    def _select(self, base: dict) -> dict:
-        """Apply propagation + per-section drop. Empty base -> keep everything unscored."""
-        if not base:
-            return self._group_all()
-
-        eff = self._propagate(base)
-
-        # Favourite nudge: small, post-propagation, so it tilts close calls without
-        # lifting a ~0-scored entry over its section floor (see _FAVOURITE_BONUS).
-        for e in self.entries:
-            if e.get("favourite"):
-                eid = e["id"]
-                eff[eid] = eff.get(eid, 0.0) + self._FAVOURITE_BONUS
-
-        by_section: dict[str, list[dict]] = {}
-        for e in self.entries:
-            by_section.setdefault(e["type"], []).append(e)
-
-        out: dict[str, list[dict]] = {}
-        for section, items in by_section.items():
-            policy = self._SECTION_POLICY.get(
-                section, {"drop_below": 0.0, "min_keep": 0}
-            )
-            items.sort(key=lambda e: eff.get(e["id"], 0.0), reverse=True)
-
-            min_keep = policy["min_keep"]
-            if min_keep is None:
-                keep = items
-            else:
-                keep = [
-                    e for e in items if eff.get(e["id"], 0.0) >= policy["drop_below"]
-                ]
-                if len(keep) < min_keep:
-                    keep = items[:min_keep]
-
-            out[section] = [
-                {**e, "score": round(eff.get(e["id"], 0.0), 4)} for e in keep
-            ]
-        return out
-
-    def _group_all(self) -> dict:
-        """Fallback when scoring fails: every entry kept, score 0.0."""
-        out: dict[str, list[dict]] = {}
-        for e in self.entries:
-            out.setdefault(e["type"], []).append({**e, "score": 0.0})
-        return out

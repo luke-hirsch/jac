@@ -5,9 +5,16 @@ findings artifact, so a pipeline change can be measured before/after. Per postin
 the rank + relevance score of every kept entry, and colour-grades each section's kept-count against
 an assumed one-page target (green = on target, red = undershoot, blue = overshoot).
 
+Model & grade selection (the grade×llm matrix, see _resolve_runs):
+    - neither flag:     the 'default' alias at its auto-detected grade.
+    - --llm <alias>:    that model, grade auto-detected from it.
+    - --grade <g>:      every configured model, each forced to grade <g> (compare models).
+    - both:             that model at that grade.
+
 Usage:
     python manage.py cv_eval --user 1 --jobs-dir data/postings
     python manage.py cv_eval --user 1 --job-file data/test_job.md
+    python manage.py cv_eval --user 1 --job-file data/test_job.md --llm reasoning
     python manage.py cv_eval --user 1 --jobs-dir data/postings --grade standard
     python manage.py cv_eval --user 1 --job-file data/test_job.md --show-ranks
     python manage.py cv_eval --user 1 --jobs-dir data/postings \
@@ -22,6 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
+
+from llm_connector.conf import get_alias_strength
+from llm_connector.models import LLMConfig
 
 from jac.cv import CV
 from jac.render import CvRender
@@ -50,6 +60,23 @@ _C_BLUE = (80, 130, 230)
 def _safe(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
     return cleaned or "posting"
+
+
+def _resolve_runs(grade, llm, aliases, strength_of):
+    """Return [(alias, grade)] per the grade×llm matrix.
+
+    - llm given:            run that alias (grade as given, else autodetected).
+    - grade only:           run every configured alias forced to that grade (compare models).
+    - neither:              run the 'default' alias at its autodetected grade.
+
+    `aliases` is the user's configured alias list (only consulted in the grade-only case);
+    `strength_of` is a callable(alias) -> autodetected grade.
+    """
+    if llm:
+        return [(llm, grade or strength_of(llm))]
+    if grade:
+        return [(a, grade) for a in aliases]
+    return [("default", strength_of("default"))]
 
 
 def _lerp(a: tuple, b: tuple, t: float) -> tuple:
@@ -88,7 +115,19 @@ class Command(BaseCommand):
             "--job-file", type=str, help="A single posting file (quick check)"
         )
         parser.add_argument(
-            "--grade", type=str, default="light", choices=_GRADES, help="Filter grade"
+            "--grade",
+            type=str,
+            default=None,
+            choices=_GRADES,
+            help="Force a filter grade. Omit to auto-detect from the model's strength. "
+            "Given alone (no --llm), runs every configured model at this grade.",
+        )
+        parser.add_argument(
+            "--llm",
+            type=str,
+            default=None,
+            help="LLMConfig alias to run (e.g. 'reasoning'). Omit to use 'default'. "
+            "Given alone (no --grade), the grade is auto-detected from the model.",
         )
         parser.add_argument(
             "--out-dir",
@@ -153,15 +192,27 @@ class Command(BaseCommand):
         log.addHandler(handler)
         log.propagate = False
 
+        # Resolve which (model, grade) pairs to run from the grade×llm matrix.
+        aliases = list(
+            LLMConfig.objects.filter(user=opts["user"]).values_list("alias", flat=True)
+        ) or ["default"]
+        runs = _resolve_runs(
+            opts["grade"],
+            opts["llm"],
+            aliases,
+            lambda a: get_alias_strength(a, user=opts["user"]),
+        )
+
         meta = {
             "timestamp": stamp,
             "user": opts["user"],
-            "grade": opts["grade"],
+            "runs": [{"model": a, "grade": g} for a, g in runs],
             "targets": _ONE_PAGE_TARGET,
         }
+        runs_str = "  ".join(f"{a}:{g}" for a, g in runs)
         targets_str = "  ".join(f"{s}={_ONE_PAGE_TARGET[s]}" for s in _SECTIONS)
-        write(f"cv_eval — {len(postings)} posting(s) → {out_dir}")
-        write(f"  user={meta['user']} grade={meta['grade']}")
+        write(f"cv_eval — {len(postings)} posting(s) × {len(runs)} model(s) → {out_dir}")
+        write(f"  user={meta['user']} runs: {runs_str}")
         write(f"  one-page targets: {targets_str}\n")
 
         rows = [
@@ -169,12 +220,14 @@ class Command(BaseCommand):
                 opts["user"],
                 text,
                 slug,
-                opts["grade"],
+                grade,
+                alias,
                 out_dir,
                 write,
                 color,
                 opts["show_ranks"],
             )
+            for alias, grade in runs
             for slug, text in postings
         ]
 
@@ -185,17 +238,20 @@ class Command(BaseCommand):
             self._compare(opts["compare"], rows, write)
 
     def _evaluate(
-        self, user_pk, job_text, slug, grade, out_dir, write, color, show_ranks
+        self, user_pk, job_text, slug, grade, alias, out_dir, write, color, show_ranks
     ):
+        # Namespace artifacts by model so a multi-model run doesn't overwrite itself.
+        stem = f"{_safe(alias)}__{slug}"
         cv = CV(user_pk=user_pk)
         t0 = time.monotonic()
         try:
-            selection = cv.filter_cv(job_text, grade=grade)
+            selection = cv.filter_cv(job_text, grade=grade, alias=alias)
             cv.apply_selection(selection)
         except Exception as exc:
-            write(f"  {slug:<28} ERROR: {exc}")
+            write(f"  {alias}/{slug:<28} ERROR: {exc}")
             return {
                 "posting": slug,
+                "model": alias,
                 "grade": "error",
                 "error": str(exc),
                 "elapsed_s": round(time.monotonic() - t0, 1),
@@ -205,7 +261,7 @@ class Command(BaseCommand):
             }
         elapsed = time.monotonic() - t0
 
-        (out_dir / f"{slug}.cv.md").write_text(
+        (out_dir / f"{stem}.cv.md").write_text(
             CvRender(cv).export_md(), encoding="utf-8"
         )
 
@@ -227,6 +283,7 @@ class Command(BaseCommand):
         counts = {s: len(cv.entries.get(s, [])) for s in _SECTIONS}
         row = {
             "posting": slug,
+            "model": alias,
             "grade": grade,
             "elapsed_s": round(elapsed, 1),
             "total": sum(counts.values()),
@@ -234,12 +291,14 @@ class Command(BaseCommand):
             "ranks": ranks,
         }
 
-        self._write_ranks(slug, grade, counts, ranks, out_dir)
-        self._print_posting(slug, elapsed, row, color, show_ranks, write)
+        self._write_ranks(stem, grade, counts, ranks, out_dir)
+        self._print_posting(slug, alias, elapsed, row, color, show_ranks, write)
         return row
 
-    def _print_posting(self, slug, elapsed, row, color, show_ranks, write):
-        write(f"\n  {slug}  ({elapsed:.1f}s, total={row['total']})")
+    def _print_posting(self, slug, alias, elapsed, row, color, show_ranks, write):
+        write(
+            f"\n  {alias}/{slug}  ({row['grade']}, {elapsed:.1f}s, total={row['total']})"
+        )
         for section in _SECTIONS:
             count = row["counts"][section]
             target = _ONE_PAGE_TARGET.get(section, 0)
@@ -279,10 +338,11 @@ class Command(BaseCommand):
         (out_dir / "findings.json").write_text(
             json.dumps(rows, indent=2), encoding="utf-8"
         )
-        header = f"user={meta['user']}  grade={meta['grade']}  postings={len(rows)}"
+        runs_str = "  ".join(f"{r['model']}:{r['grade']}" for r in meta["runs"])
+        header = f"user={meta['user']}  runs={runs_str}  rows={len(rows)}"
         t = meta["targets"]
         target_row = (
-            f"| _target_ |  |  | {t['skills']} | {t['jobs']} | {t['educations']} | "
+            f"| _target_ |  |  |  | {t['skills']} | {t['jobs']} | {t['educations']} | "
             f"{t['certifications']} | {t['projects']} | {t['languages']} |  |"
         )
         lines = [
@@ -290,28 +350,32 @@ class Command(BaseCommand):
             "",
             header,
             "",
-            "| posting | grade | total | skills | jobs | edu | certs | proj | lang | elapsed |",
-            "|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
+            "| posting | model | grade | total | skills | jobs | edu | certs | proj | lang | elapsed |",
+            "|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
             target_row,
         ]
         for r in rows:
             c = r["counts"]
             lines.append(
-                f"| {r['posting']} | {r['grade']} | {r['total']} | "
+                f"| {r['posting']} | {r.get('model', '?')} | {r['grade']} | {r['total']} | "
                 f"{c['skills']} | {c['jobs']} | {c['educations']} | {c['certifications']} | "
                 f"{c['projects']} | {c['languages']} | {r['elapsed_s']}s |"
             )
         (out_dir / "findings.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _compare(self, prev_path, rows, write):
-        prev = {r["posting"]: r for r in json.loads(Path(prev_path).read_text())}
+        prev = {
+            (r.get("model", "?"), r["posting"]): r
+            for r in json.loads(Path(prev_path).read_text())
+        }
         write("\n" + "=" * 72)
         write(f"COMPARE vs {prev_path}")
         write("=" * 72)
         for r in rows:
-            p = prev.get(r["posting"])
+            label = f"{r.get('model', '?')}/{r['posting']}"
+            p = prev.get((r.get("model", "?"), r["posting"]))
             if not p:
-                write(f"  {r['posting']:<28} (new — no baseline)")
+                write(f"  {label:<28} (new — no baseline)")
                 continue
             d_total = r["total"] - p["total"]
             d_time = r["elapsed_s"] - p["elapsed_s"]
@@ -323,6 +387,6 @@ class Command(BaseCommand):
                 else f"   grade {prev_grade} → {cur_grade}"
             )
             write(
-                f"  {r['posting']:<28} total {p['total']}→{r['total']} ({d_total:+d})  "
+                f"  {label:<28} total {p['total']}→{r['total']} ({d_total:+d})  "
                 f"time {d_time:+.1f}s{grade}"
             )

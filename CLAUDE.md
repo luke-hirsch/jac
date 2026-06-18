@@ -44,20 +44,26 @@ shipped:
   `Certification`, `Language`, `ResumeSnippet`), full CRUD API + serializers, frontend CRUD UI.
 - `llm_connector`: multi-provider connector, per-user configs, native Ollama provider with `embed()`.
 
-- jac CV pipeline (`backend/jac/cv.py`): `CV` loads/flattens career entries (each carries a `refs`
-  edge list); `CVFilter` is a **scoring-agnostic** selection layer — directional tier propagation
-  over the edges + per-section *absolute floor + min-keep* drop. The `light` rung (`Embed`,
-  `llm_prompts.py`) is the working embedding-rank floor. `cv_test` / `cv_eval` management commands
-  exercise the grade ladder offline (fake-score injection in tests); `cv_eval` reports per-entry
-  ranks + colour-graded one-page target counts per section.
+- jac CV pipeline (`backend/jac/cv.py`, `filter.py`): `CV` loads/flattens career entries (each
+  carries a `refs` edge list); `CVFilter` is the selection layer. The `light` rung (`Embed`) does
+  propagation + per-section *floor + min-keep* drop; the `standard` rung (`Instruct`) does
+  keep-by-verdict on LLM relevance labels (`_select_ranked`). The chosen **alias** threads through
+  the pipeline (`filter_cv(alias=…)` → `CVFilter` → `Embed`/`Instruct`), so the LLM rungs use the
+  picked model and `light` embeds with that model's `embed_model`. Per-embedder cosine floors are
+  overridable via an `embed_floors` config key (merged over `_SECTION_POLICY` defaults).
+- jac eval tooling: `cv_test` / `cv_eval` management commands. `cv_eval` picks the model+grade via a
+  matrix (`--llm <alias>` and/or `--grade`; grade auto-detects from model strength when omitted, or
+  fans out over **all** configured models at a forced grade), reports per-entry ranks + colour-graded
+  one-page targets, and namespaces output per model. `get_alias_strength` autodetects embedders → `light`.
 - jac: **favourite** flag on every `CvEntry` — pins an entry for a small post-propagation ranking
   nudge (`CVFilter._FAVOURITE_BONUS`, kept below the lowest section floor so it can't resurrect a
   ~0-scored entry), capped per type (`CvEntry.FAVOURITE_LIMIT`, enforced in `model.clean` + a
   serializer mixin). Wired through the API + CRUD UI (editor toggle + sortable star column).
 
 active skeleton (the thing under construction):
-- `standard` (`Instruct`) and `strong` (`Conversational`) rungs in `llm_prompts.py` are stubs;
-  `CVFilter._standard_scores` / `_strong_scores` return `{}` and fall back to `light`.
+- `strong` (`Conversational`) rung in `llm_prompts.py` is still a stub; `CVFilter._strong_scores`
+  returns `{}` and `strong` currently routes through the (working) `standard` scorer until its
+  holistic selector lands.
 
 # roadmap
 
@@ -72,9 +78,11 @@ active skeleton (the thing under construction):
    see the `no-json-llm-io` memory):
    - `light`: server embedding model (`qwen3-embedding:0.6b`) ranks entries → propagation + floors. *(done)*
    - `standard`: `Instruct` LLM rates each entry `0–3` (`<id> <rating>` lines) → keep-by-verdict
-     (`_select_ranked`); clean instruction approach, fits smaller models.
+     (`_select_ranked`); clean instruction approach, fits smaller models. *(done)*
    - `strong`: `Conversational` LLM selects holistically (`<id> — <why>` lines, ordered) → guardrails
-     only (`_select_holistic`); for bigger models.
+     only (`_select_holistic`); for bigger models. **next** — only rung left.
+   model/grade selection is wired end-to-end: `cv_eval --llm/--grade` matrix + alias threading +
+   embedder autodetect + per-embedder `embed_floors`. *(done)*
 2. **cover-letter generation** — a class that writes a cover letter for a job, using
    `ResumeSnippet` boilerplate stitched by the LLM (writer model: `llama3.2:1b`) to avoid AI slop.
 3. **frontend render** of the tailored CV + cover letter.

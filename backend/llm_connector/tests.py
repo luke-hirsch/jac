@@ -15,6 +15,7 @@ from llm_connector.client import LLMClient, _normalise_messages
 from llm_connector.conf import (
     get_alias_config,
     get_alias_strength,
+    get_embed_floors,
     get_llm_settings,
     logging_enabled,
 )
@@ -148,6 +149,50 @@ class ConfTests(TestCase):
     def test_get_alias_strength_missing_alias_is_strong(self):
         # A broken/missing config must not crash the pipeline — default strong.
         self.assertEqual(get_alias_strength("nope"), "strong")
+
+    @override_settings(
+        LLM={"default": {"provider": "ollama", "model": "nomic-embed-text"}}
+    )
+    def test_get_alias_strength_autodetects_embedder_as_light(self):
+        self.assertEqual(get_alias_strength("default"), "light")
+
+    @override_settings(
+        LLM={"default": {"provider": "ollama", "model": "e5-mistral-7b"}}
+    )
+    def test_get_alias_strength_embedder_light_despite_large_size(self):
+        # The embedding-name hint wins over the 7b size token (would be 'standard').
+        self.assertEqual(get_alias_strength("default"), "light")
+
+    @override_settings(LLM={"default": {"provider": "ollama", "model": "bge-large"}})
+    def test_get_alias_strength_embedder_light_without_size(self):
+        self.assertEqual(get_alias_strength("default"), "light")
+
+    @override_settings(LLM=FAKE_LLM)
+    def test_get_embed_floors_empty_when_unset(self):
+        self.assertEqual(get_embed_floors("default"), {})
+
+    @override_settings(LLM=FAKE_LLM)
+    def test_get_embed_floors_empty_on_missing_alias(self):
+        # A broken/missing config must not crash the light path — empty dict.
+        self.assertEqual(get_embed_floors("nope"), {})
+
+    @override_settings(
+        LLM={
+            "default": {
+                "provider": "fake",
+                "model": "fake-1",
+                "embed_floors": {"skill": 0.55, "job": 0.45},
+            }
+        }
+    )
+    def test_get_embed_floors_reads_config(self):
+        self.assertEqual(get_embed_floors("default"), {"skill": 0.55, "job": 0.45})
+
+    @override_settings(
+        LLM={"default": {"provider": "fake", "model": "fake-1", "embed_floors": "nope"}}
+    )
+    def test_get_embed_floors_ignores_non_dict(self):
+        self.assertEqual(get_embed_floors("default"), {})
 
     @override_settings(LLM_LOGGING=True)
     def test_logging_enabled_true(self):

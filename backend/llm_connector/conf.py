@@ -76,6 +76,10 @@ _STRENGTHS = {"light", "standard", "strong"}
 _SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b")
 # Cloud model names without a size token that still signal a small/fast tier.
 _SMALL_NAME_HINTS = ("haiku", "mini", "nano", "lite", "flash")
+# Embedding-model name hints. These map to 'light' regardless of size token — an
+# embedder only ever does the light rung, and large embedders (e5-mistral-7b) must
+# not autodetect to 'standard'. Tune as new embedders show up.
+_EMBED_NAME_HINTS = ("embed", "bge", "gte", "e5", "minilm", "nomic")
 
 
 def _autodetect_strength(provider: str, model: str) -> str:
@@ -85,6 +89,8 @@ def _autodetect_strength(provider: str, model: str) -> str:
     behaviour. Only models we recognise as small get opted down.
     """
     name = (model or "").lower()
+    if any(hint in name for hint in _EMBED_NAME_HINTS):
+        return "light"
     sizes = [float(m) for m in _SIZE_RE.findall(name)]
     if sizes:
         size = max(sizes)
@@ -114,6 +120,21 @@ def get_alias_strength(alias: str = "default", user=None) -> str:
     if strength in _STRENGTHS:
         return strength
     return _autodetect_strength(config.get("provider", ""), config.get("model", ""))
+
+
+def get_embed_floors(alias: str = "default", user=None) -> dict:
+    """Per-section cosine drop floors for the light rung, from the resolved config's
+    `embed_floors` key. {} when unset or on any resolution error — the caller merges
+    these over its own defaults. Floors are embedder-specific (cosine distributions
+    differ between models), so they live with the model config, not hardcoded in the
+    filter.
+    """
+    try:
+        config = get_alias_config(alias, user=user)
+    except Exception:  # noqa: BLE001 — missing/broken config -> defaults
+        return {}
+    floors = config.get("embed_floors")
+    return floors if isinstance(floors, dict) else {}
 
 
 def logging_enabled() -> bool:
