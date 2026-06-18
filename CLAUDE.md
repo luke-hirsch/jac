@@ -53,8 +53,13 @@ shipped:
   overridable via an `embed_floors` config key (merged over `_SECTION_POLICY` defaults).
 - jac eval tooling: `cv_test` / `cv_eval` management commands. `cv_eval` picks the model+grade via a
   matrix (`--llm <alias>` and/or `--grade`; grade auto-detects from model strength when omitted, or
-  fans out over **all** configured models at a forced grade), reports per-entry ranks + colour-graded
-  one-page targets, and namespaces output per model. `get_alias_strength` autodetects embedders → `light`.
+  fans out over **all** configured models at a forced grade); `--all-models` runs every configured
+  model at its own grade **plus** the `default` embedding baseline; with no selection flag in a
+  terminal (or `--pick`) it opens an interactive questionnaire (models / grade / analysis). Output:
+  per-model tables in `findings.md` (colour-graded one-page targets) + per-model artifacts.
+  `--analyze` adds an AI layer (`llm_prompts.TheJudge` grades each run's kept-vs-dropped selection;
+  `TheAnalyst` writes a cross-model summary into `findings.md`), run under a fixed strong `--analyst`
+  alias. `get_alias_strength` autodetects embedders → `light`.
 - jac: **favourite** flag on every `CvEntry` — pins an entry for a small post-propagation ranking
   nudge (`CVFilter._FAVOURITE_BONUS`, kept below the lowest section floor so it can't resurrect a
   ~0-scored entry), capped per type (`CvEntry.FAVOURITE_LIMIT`, enforced in `model.clean` + a
