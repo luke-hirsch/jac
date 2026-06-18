@@ -6,9 +6,12 @@ the rank + relevance score of every kept entry, and colour-grades each section's
 an assumed one-page target (green = on target, red = undershoot, blue = overshoot).
 
 Model & grade selection (the grade×llm matrix, see _resolve_runs):
-    - neither flag:     the 'default' alias at its auto-detected grade.
+    - no flag (in a terminal): an interactive questionnaire (choose models / grade / analysis).
+    - no flag (scripted):      the 'default' alias at its auto-detected grade.
+    - --pick:           force the questionnaire even alongside other flags.
     - --llm <alias>:    that model, grade auto-detected from it.
     - --grade <g>:      every configured model, each forced to grade <g> (compare models).
+    - --all-models:     every configured model + the 'default' embedding baseline, own grades.
     - both:             that model at that grade.
 
 Usage:
@@ -24,6 +27,7 @@ Usage:
 import json
 import logging
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,11 +177,21 @@ class Command(BaseCommand):
             help="LLMConfig alias used as the judge/analyst for --analyze. "
             "Omit to use the strongest configured model.",
         )
+        parser.add_argument(
+            "--pick",
+            action="store_true",
+            help="Interactive questionnaire: choose which models to evaluate, the grade, and "
+            "whether to run the AI analysis. Also runs automatically when no selection flag "
+            "(--llm/--grade/--all-models) is given in a terminal.",
+        )
 
     def handle(self, *args, **opts):
         write = lambda m="": self.stdout.write(m)
         isatty = getattr(self.stdout, "isatty", None)
-        color = (not opts["no_color"]) and bool(isatty and isatty())
+        out_tty = bool(isatty and isatty())
+        color = (not opts["no_color"]) and out_tty
+        # Only prompt when both ends are a real terminal — keeps scripted/test runs from blocking.
+        interactive = out_tty and bool(sys.stdin and sys.stdin.isatty())
 
         # Resolve the posting set.
         postings: list[tuple[str, str]] = []  # (slug, text)
@@ -214,21 +228,26 @@ class Command(BaseCommand):
         log.addHandler(handler)
         log.propagate = False
 
-        # Resolve which (model, grade) pairs to run from the grade×llm matrix.
-        aliases = list(
+        # Resolve which (model, grade) pairs to run.
+        configured = list(
             LLMConfig.objects.filter(user=opts["user"]).values_list("alias", flat=True)
         ) or ["default"]
-        # --all-models compares every configured chat model; fold in 'default' too so the
-        # embedding-only `light` baseline (the server embedder) shows as its own row.
-        if opts["all_models"] and "default" not in aliases:
-            aliases = ["default"] + aliases
-        runs = _resolve_runs(
-            opts["grade"],
-            opts["llm"],
-            aliases,
-            lambda a: get_alias_strength(a, user=opts["user"]),
-            all_models=opts["all_models"],
-        )
+        # 'default' is the embedding-only `light` baseline (the server embedder); offer it in the
+        # picker and fold it into --all-models so it shows as its own row.
+        menu = configured if "default" in configured else ["default"] + configured
+        strength_of = lambda a: get_alias_strength(a, user=opts["user"])
+
+        no_flags = not (opts["llm"] or opts["grade"] or opts["all_models"])
+        if opts["pick"] or (no_flags and interactive):
+            runs, q_analyze = self._interactive_setup(menu, strength_of, interactive, write)
+            analyze = opts["analyze"] or q_analyze
+        else:
+            aliases = menu if opts["all_models"] else configured
+            runs = _resolve_runs(
+                opts["grade"], opts["llm"], aliases, strength_of,
+                all_models=opts["all_models"],
+            )
+            analyze = opts["analyze"]
 
         meta = {
             "timestamp": stamp,
@@ -263,13 +282,9 @@ class Command(BaseCommand):
         # Run the judge + cross-model summary BEFORE writing findings, so the judge grade lands in
         # the findings table and the summary at the bottom of findings.md.
         analyst_summary = ""
-        if opts["analyze"]:
+        if analyze:
             analyst = opts["analyst"] or next(
-                (
-                    a
-                    for a in aliases
-                    if get_alias_strength(a, user=opts["user"]) == "strong"
-                ),
+                (a for a in menu if strength_of(a) == "strong"),
                 "default",
             )
             slug_text = {slug: text for slug, text in postings}
@@ -282,6 +297,52 @@ class Command(BaseCommand):
 
         if opts["compare"]:
             self._compare(opts["compare"], rows, write)
+
+    def _interactive_setup(self, menu, strength_of, interactive, write):
+        """Questionnaire run when no selection flag is given (or --pick): choose models, grade, and
+        whether to run the AI analysis. Returns (runs, analyze).
+
+        Non-interactive (no TTY) falls back to the plain 'default' run so scripts/CI never block.
+        """
+        if not interactive:
+            return [("default", strength_of("default"))], False
+
+        write("\nWhich LLMs do you want to evaluate?")
+        for i, a in enumerate(menu, 1):
+            write(f"  {i}) {a:<14} auto-grade: {strength_of(a)}")
+        chosen = self._parse_pick(
+            input("  numbers (comma/space separated), or 'all' [all]: "), menu
+        )
+
+        forced = {"l": "light", "s": "standard", "g": "strong"}.get(
+            input(
+                "  grade — [a]uto per model / [l]ight / [s]tandard / stron[g] [a]: "
+            ).strip().lower()
+        )
+        analyze = input(
+            "  run AI judge + summary analysis? costs N×M LLM calls [y/N]: "
+        ).strip().lower() in ("y", "yes")
+
+        write("")
+        return [(a, forced or strength_of(a)) for a in chosen], analyze
+
+    @staticmethod
+    def _parse_pick(raw, menu):
+        """Parse a '1,3' / '1 3' / 'all' selection into an ordered, de-duped alias list.
+
+        Empty or 'all' -> the whole menu; out-of-range/garbage tokens are ignored; nothing
+        valid -> the whole menu (safer than an empty run).
+        """
+        raw = (raw or "").strip()
+        if not raw or raw.lower() == "all":
+            return list(menu)
+        picked = []
+        for tok in re.split(r"[,\s]+", raw):
+            if tok.isdigit() and 1 <= int(tok) <= len(menu):
+                a = menu[int(tok) - 1]
+                if a not in picked:
+                    picked.append(a)
+        return picked or list(menu)
 
     def _evaluate(
         self, user_pk, job_text, slug, grade, alias, out_dir, write, color, show_ranks
