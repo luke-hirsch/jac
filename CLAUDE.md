@@ -127,6 +127,9 @@ testing still stays with the human.
 - **`.claude/plans/to-do/`** ↔ **`.claude/plans/done/`** = roadmap execution. one code-bearing
   guide per item, named `[area]-<slug>.md` (`[backend]` / `[frontend]` / …). completed guides move
   to `done/`.
+- **branch per guide**: `main` is the integration/merge branch (live runs under `stage` / `prod`).
+  `/setup-guide` cuts a `<area>/<slug>` branch off `main`; the work happens there; `/wrap-up` merges
+  it back (`--no-ff`) and deletes it when the guide moves to `done/`.
 - **memory** (`/Users/lukas/.claude/projects/-Users-lukas-Projects-jac/memory/`) = durable
   cross-session facts the repo doesn't record. distilled, not a session log.
 

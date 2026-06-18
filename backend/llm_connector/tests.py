@@ -406,6 +406,30 @@ class LLMCheckCommandTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("llm_check", user=999999, stdout=StringIO())
 
+    def test_reports_strength_for_working_alias(self):
+        out = StringIO()
+        call_command("llm_check", "default", stdout=out)
+        # fake-1 has no size/name hint -> autodetects to the full ladder.
+        self.assertIn("strength=strong", out.getvalue())
+
+    def test_strength_respects_explicit_config(self):
+        with override_settings(
+            LLM={
+                "default": {"provider": "fake", "model": "fake-1", "strength": "light"}
+            }
+        ):
+            out = StringIO()
+            call_command("llm_check", "default", stdout=out)
+            self.assertIn("strength=light", out.getvalue())
+
+    def test_strength_autodetects_small_model(self):
+        with override_settings(
+            LLM={"default": {"provider": "fake", "model": "llama3.2:1b"}}
+        ):
+            out = StringIO()
+            call_command("llm_check", "default", stdout=out)
+            self.assertIn("strength=light", out.getvalue())
+
 
 class OpenAIAdapterParamTests(TestCase):
     """Unit tests for the OpenAI adapter param translation. Mocks the openai
