@@ -5,6 +5,8 @@ from .models import (
     Domain,
     Education,
     Job,
+    JobPostAddress,
+    JobPosting,
     Language,
     Location,
     Project,
@@ -78,3 +80,16 @@ class SnippetAdmin(admin.ModelAdmin):
     search_fields = ("title", "content")
     filter_horizontal = ("domains", "skills")
     autocomplete_fields = ("job", "project")
+
+
+class JobPostAddressInline(admin.StackedInline):
+    model = JobPostAddress
+    extra = 0
+
+
+@admin.register(JobPosting)
+class JobPostingAdmin(admin.ModelAdmin):
+    list_display = ("title", "user", "language", "created_at")
+    list_filter = ("language",)
+    search_fields = ("title", "posting_text")
+    inlines = [JobPostAddressInline]

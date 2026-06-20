@@ -23,5 +23,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "contrast",
             "email_reminders",
             "updated_at",
+            "street",
+            "address_line2",
+            "zip",
+            "city",
+            "country",
         )
         read_only_fields = ("id", "updated_at")

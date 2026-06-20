@@ -77,9 +77,15 @@ shipped:
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **cover-letter generation** — a class that writes a cover letter for a job, using
-   `ResumeSnippet` boilerplate stitched by the LLM (writer model: `llama3.2:1b`) to avoid AI slop.
-   **next.**
+1. **cover-letter generation** — **in progress (uncommitted on `backend/cover-letter`).**
+   `cover_letter.py` scaffolds it: `SnippetSelector` picks intro/closing/body from `ResumeSnippet`
+   boilerplate by relevance to the filtered CV; `CoverLetterWriter` (`llm_prompts.py`, writer model
+   `llama3.2:1b`) only *weaves* (snippet text stays authoritative — the anti-slop guard); `CoverLetter`
+   assembles sender/recipient/subject/salutation (bilingual furniture, `de`/`en`) around the body.
+   New `JobPosting` + `JobPostAddress` models hold the posting and the `AddressExtract`-parsed employer
+   block. **Next sub-step (guide in to-do, tests written):** `ResumeSnippet.language` flag + per-letter
+   **AI-share metric** — German postings keep selecting snippets cross-language and the writer translates
+   as needed, but the cost is *measured* (`ai_share`, e.g. "37% written by AI") rather than avoided.
 2. **frontend render** of the tailored CV + cover letter.
 3. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 

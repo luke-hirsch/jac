@@ -14,15 +14,25 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from jac.cover_letter import CoverLetter, SnippetSelector
 from jac.cv import CV
 from jac.filter import CVFilter
-from jac.llm_prompts import Conversational, Embed, Instruct, TheAnalyst, TheJudge
+from jac.llm_prompts import (
+    AddressExtract,
+    Conversational,
+    Embed,
+    Instruct,
+    TheAnalyst,
+    TheJudge,
+)
 from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import (
     Certification,
     Domain,
     Education,
     Job,
+    JobPostAddress,
+    JobPosting,
     Language,
     Location,
     Project,
@@ -1898,3 +1908,367 @@ class AnalystSummaryTests(TestCase):
     def test_analyse_empty_on_error(self):
         with patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
             self.assertEqual(TheAnalyst("r").analyse(), "")
+
+
+class AddressExtractParseTests(TestCase):
+    def setUp(self):
+        self.x = AddressExtract("posting")
+
+    def test_parses_known_fields(self):
+        raw = (
+            "company: Acme GmbH\n"
+            "contact_name: Jane Doe\n"
+            "email: jobs@acme.com\n"
+            "title: Backend Engineer\n"
+            "language: de"
+        )
+        out = self.x._parse(raw)
+        self.assertEqual(out["company"], "Acme GmbH")
+        self.assertEqual(out["email"], "jobs@acme.com")
+        self.assertEqual(out["language"], "de")
+
+    def test_skips_unknown_blank_and_placeholder(self):
+        raw = "company: Acme\nfoo: bar\ncity:\nemail: none\nphone: n/a"
+        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
+
+    def test_tolerates_surrounding_prose(self):
+        raw = "Here are the details:\ncompany: Acme\nThanks!"
+        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
+
+    def test_extract_empty_on_llm_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(AddressExtract("p").extract(), {})
+
+
+class SnippetSelectorTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("snipuser")
+        cls.domain = Domain.objects.create(user=cls.user, name="Backend")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        cls.job.domains.add(cls.domain)
+        cls.other_job = Job.objects.create(
+            user=cls.user, title="Old", company="Y", started=date(2010, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        cls.intro = ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="Hi", kind=K.intro
+        )
+        cls.closing = ResumeSnippet.objects.create(
+            user=cls.user, title="Bye", content="Thanks", kind=K.closing
+        )
+        cls.body_kept = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Did X",
+            kind=K.achievement,
+            job=cls.job,
+        )
+        cls.body_other = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Other",
+            content="Did Y",
+            kind=K.achievement,
+            job=cls.other_job,
+        )
+        cls.inactive_intro = ResumeSnippet.objects.create(
+            user=cls.user, title="Off", content="z", kind=K.intro, is_active=False
+        )
+
+    def _cv(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.entries = {
+            "jobs": [self.job],
+            "projects": [],
+            "skills": [],
+            "educations": [],
+            "certifications": [],
+            "languages": [],
+        }
+        return cv
+
+    def test_picks_one_intro_one_closing(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertEqual(sel["intro"], self.intro)
+        self.assertEqual(sel["closing"], self.closing)
+
+    def test_body_includes_kept_job_snippet_only(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertIn(self.body_kept, sel["body"])
+        self.assertNotIn(self.body_other, sel["body"])
+
+    def test_ordered_runs_intro_first_closing_last(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertEqual(sel["ordered"][0], self.intro)
+        self.assertEqual(sel["ordered"][-1], self.closing)
+
+    def test_inactive_snippet_excluded(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertNotEqual(sel["intro"], self.inactive_intro)
+
+
+class CoverLetterBuildTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            "cluser", email="me@example.com", first_name="Ada", last_name="Lovelace"
+        )
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="I build things.", kind=K.intro
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Shipped Y.",
+            kind=K.achievement,
+            job=cls.job,
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Bye", content="Thanks.", kind=K.closing
+        )
+
+    def _cv(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.entries = {
+            "jobs": [self.job],
+            "projects": [],
+            "skills": [],
+            "educations": [],
+            "certifications": [],
+            "languages": [],
+        }
+        return cv
+
+    def _jp(self, language="en", title="Backend Engineer"):
+        return JobPosting(
+            user=self.user,
+            title=title,
+            posting_text="We need a dev.",
+            language=language,
+        )
+
+    def test_build_uses_woven_body(self):
+        with patch("jac.llm_prompts.complete", return_value="Woven letter body."):
+            r = CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+            ).build()
+        self.assertEqual(r["body"], "Woven letter body.")
+        self.assertIn("Woven letter body.", r["text"])
+        self.assertIn("Acme", r["text"])
+        self.assertEqual(r["subject"], "Application for Backend Engineer")
+
+    def test_falls_back_to_raw_snippets_when_llm_empty(self):
+        with patch("jac.llm_prompts.complete", return_value=""):
+            r = CoverLetter(
+                self.user, self._jp(), self._cv(), address=JobPostAddress()
+            ).build()
+        self.assertIn("I build things.", r["body"])
+        self.assertIn("Thanks.", r["body"])
+
+    def test_salutation_named_when_contact_present(self):
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            r = CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(contact_name="Jane Doe"),
+            ).build()
+        self.assertEqual(r["salutation"], "Dear Jane Doe,")
+
+    def test_german_subject_and_generic_salutation(self):
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            r = CoverLetter(
+                self.user,
+                self._jp(language="de"),
+                self._cv(),
+                address=JobPostAddress(),
+            ).build()
+        self.assertEqual(r["subject"], "Bewerbung als Backend Engineer")
+        self.assertEqual(r["salutation"], "Sehr geehrte Damen und Herren,")
+
+    def test_ai_share_present_and_in_range(self):
+        with patch("jac.llm_prompts.complete", return_value="Body."):
+            r = CoverLetter(
+                self.user, self._jp(), self._cv(), address=JobPostAddress()
+            ).build()
+        self.assertIsInstance(r["ai_share"], float)
+        self.assertGreaterEqual(r["ai_share"], 0.0)
+        self.assertLessEqual(r["ai_share"], 1.0)
+
+    def test_provenance_partitions_snippets_used(self):
+        # All seeded snippets are EN; against a DE posting they are all "translated".
+        with patch("jac.llm_prompts.complete", return_value="Body."):
+            r = CoverLetter(
+                self.user,
+                self._jp(language="de"),
+                self._cv(),
+                address=JobPostAddress(),
+            ).build()
+        prov = r["snippet_provenance"]
+        self.assertEqual(
+            sorted(prov["native"] + prov["translated"]), sorted(r["snippets_used"])
+        )
+        self.assertEqual(prov["native"], [])
+        self.assertEqual(r["ai_share"], 1.0)  # nothing authored in the posting language
+
+
+class ResumeSnippetLanguageTests(APITestCase):
+    """The `language` flag defaults to English and round-trips through the API."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="snip_lang", password="pass")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_language_defaults_to_en(self):
+        s = ResumeSnippet.objects.create(
+            user=self.user, title="x", content="y", kind="intro"
+        )
+        self.assertEqual(s.language, "en")
+
+    def test_language_round_trips_through_api(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "Hallo",
+                "content": "Ich baue Dinge.",
+                "kind": "intro",
+                "language": "de",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["language"], "de")
+        self.assertEqual(ResumeSnippet.objects.get(pk=r.data["id"]).language, "de")
+
+
+class SnippetSelectorLanguageTests(TestCase):
+    """The native-language tie-break orders an already-in-language snippet ahead of an
+    equally-relevant one in the other language — but never resurrects a zero-relevance
+    snippet just for matching the posting language."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("snip_tb")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        # Two equally-relevant body snippets (both linked to the kept job): one DE, one EN.
+        cls.body_de = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="DE",
+            content="Ich habe X gebaut.",
+            kind=K.achievement,
+            job=cls.job,
+            language="de",
+        )
+        cls.body_en = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="EN",
+            content="I built X.",
+            kind=K.achievement,
+            job=cls.job,
+            language="en",
+        )
+        # Relevant to nothing kept (no job/project/domain/skill link) → relevance score 0.
+        cls.unlinked_de = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="DEx",
+            content="Nicht relevant.",
+            kind=K.achievement,
+            language="de",
+        )
+
+    def _cv(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.entries = {
+            "jobs": [self.job],
+            "projects": [],
+            "skills": [],
+            "educations": [],
+            "certifications": [],
+            "languages": [],
+        }
+        return cv
+
+    def _body(self, posting_language):
+        return SnippetSelector(
+            self._cv(), self.user.pk, posting_language=posting_language
+        ).select()["body"]
+
+    def test_native_de_snippet_ordered_first_for_de_posting(self):
+        self.assertEqual(self._body("de")[0], self.body_de)
+
+    def test_native_en_snippet_ordered_first_for_en_posting(self):
+        self.assertEqual(self._body("en")[0], self.body_en)
+
+    def test_tie_break_never_resurrects_zero_relevance_snippet(self):
+        # Posting is DE, but the irrelevant DE snippet (score 0) is still dropped while the
+        # relevant EN snippet survives — language only breaks ties, it is not relevance.
+        body = self._body("de")
+        self.assertIn(self.body_en, body)
+        self.assertNotIn(self.unlinked_de, body)
+
+
+class CoverLetterAiShareTests(TestCase):
+    """`CoverLetter._ai_share`: source provenance + a per-grade rewrite tax, clamped 0.0–1.0."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("ai_share")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+
+    def _cv(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.entries = {
+            "jobs": [self.job],
+            "projects": [],
+            "skills": [],
+            "educations": [],
+            "certifications": [],
+            "languages": [],
+        }
+        return cv
+
+    def _cl(self, grade="standard"):
+        jp = JobPosting(user=self.user, title="x", posting_text="y", language="en")
+        return CoverLetter(self.user, jp, self._cv(), grade=grade)
+
+    def _snip(self, language, words=4):
+        return ResumeSnippet(content=" ".join(["w"] * words), language=language)
+
+    def test_all_native_light_is_just_the_rewrite_tax(self):
+        self.assertEqual(self._cl("light")._ai_share([self._snip("en")], "en", False), 0.05)
+
+    def test_all_native_strong_carries_more_tax(self):
+        self.assertEqual(self._cl("strong")._ai_share([self._snip("en")], "en", False), 0.45)
+
+    def test_all_translated_is_fully_ai(self):
+        self.assertEqual(self._cl("light")._ai_share([self._snip("en")], "de", False), 1.0)
+
+    def test_no_snippets_is_fully_ai(self):
+        self.assertEqual(self._cl()._ai_share([], "en", False), 1.0)
+
+    def test_ai_fallback_is_fully_ai(self):
+        self.assertEqual(self._cl()._ai_share([self._snip("en")], "en", True), 1.0)
+
+    def test_mixed_lands_strictly_between(self):
+        share = self._cl("light")._ai_share(
+            [self._snip("de"), self._snip("en")], "de", False
+        )
+        self.assertGreater(share, 0.0)
+        self.assertLess(share, 1.0)

@@ -371,3 +371,151 @@ class TheAnalyst:
 
     def _prompt(self) -> str:
         return f"{self._INSTRUCTION}\n\nEVALUATION DATA:\n{self.report}\n\nANALYSIS:"
+
+
+class AddressExtract:
+    """Pull the employer's contact block out of a job posting with the chat/instruct model.
+
+    Line-format I/O (`<field>: <value>` per line, parsed with `re`, unknown/blank/placeholder
+    lines skipped) — never JSON (see the `no-json-llm-io` memory). Any failure or unparseable
+    reply -> {} so the caller proceeds with blanks (the renderer just omits missing lines).
+    """
+
+    _FIELDS = (
+        "company",
+        "contact_name",
+        "street",
+        "address_line2",
+        "zip",
+        "city",
+        "country",
+        "email",
+        "phone",
+        "title",
+        "language",
+    )
+    _INSTRUCTION = (
+        "Extract the EMPLOYER's contact details from the job posting below. Output one\n"
+        "'<field>: <value>' per line, using exactly these field names:\n"
+        "  company, contact_name, street, address_line2, zip, city, country, email, phone,\n"
+        "  title, language\n"
+        "  - title = the role being advertised.\n"
+        "  - language = ISO-639-1 code of the posting language (en, de, …).\n"
+        "Omit a line entirely if the posting does not state that field — never guess.\n"
+        "No prose, no markdown, no JSON."
+    )
+    _MAX_POST_CHARS = 12000
+    _PLACEHOLDERS = {"none", "n/a", "na", "-", "—", "unknown", "null"}
+    # `<field>: <value>` or `<field> - <value>`; value required (blank values are dropped).
+    _LINE = re.compile(r"^\s*([a-zA-Z_]+)\s*[:\-]\s*(.+?)\s*$")
+
+    def __init__(self, job_post_text: str, *, alias: str = "default", user=None):
+        self.job_post_text = job_post_text
+        self.alias = alias
+        self.user = user
+
+    def extract(self) -> dict:
+        """Return {field: value} for the fields the posting states. {} on any failure."""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("AddressExtract: LLM call failed")
+            return {}
+        return self._parse(raw)
+
+    def _prompt(self) -> str:
+        post = self.job_post_text[: self._MAX_POST_CHARS]
+        return f"{self._INSTRUCTION}\n\nJOB POSTING:\n{post}\n\nFIELDS:"
+
+    def _parse(self, raw: str) -> dict:
+        allowed = set(self._FIELDS)
+        out: dict[str, str] = {}
+        for line in (raw or "").splitlines():
+            m = self._LINE.match(line)
+            if not m:
+                continue
+            key = m.group(1).strip().lower()
+            val = m.group(2).strip()
+            if key in allowed and val and val.lower() not in self._PLACEHOLDERS:
+                out[key] = val[:200]
+        return out
+
+
+class CoverLetterWriter:
+    """Weave selected `ResumeSnippet`s into cover-letter body prose with the chat model.
+
+    Snippet content is authoritative: the model stitches and smooths, it does not invent facts.
+    `grade` tunes only how much rewriting is allowed (light = glue; standard = smooth
+    transitions; strong = polished, reordered for impact) — never the content. Output is free
+    prose (the body), the one place structured line-format I/O does not apply. Any failure
+    -> '' so the caller falls back to the raw stitched snippets.
+    """
+
+    _GRADE_CLAUSE = {
+        "light": (
+            "Join the snippets into one letter body. Keep their wording where you can; add only "
+            "minimal connective phrases so it reads as one piece. Do not rewrite or embellish."
+        ),
+        "standard": (
+            "Weave the snippets into a smooth, cohesive letter body. You may lightly rephrase "
+            "for flow and transitions, but preserve every concrete claim and the candidate's "
+            "voice. Do not invent facts the snippets do not state."
+        ),
+        "strong": (
+            "Compose a polished, persuasive letter body from the snippets, ordered for impact "
+            "against THIS posting. Improve prose and transitions freely, but every factual "
+            "claim must come from the snippets — invent nothing."
+        ),
+    }
+    _COMMON = (
+        "Write ONLY the body paragraphs of a cover letter — no date, no addresses, no subject "
+        "line, no salutation, no sign-off, no markdown, no placeholders. Write in {language}."
+    )
+    _MAX_POST_CHARS = 8000
+
+    def __init__(
+        self,
+        job_post_text: str,
+        snippets: list,
+        *,
+        candidate_name: str = "",
+        title: str = "",
+        language: str = "en",
+        grade: str = "standard",
+        alias: str = "default",
+        user=None,
+    ):
+        self.job_post_text = job_post_text
+        self.snippets = snippets
+        self.candidate_name = candidate_name
+        self.title = title
+        self.language = language
+        self.grade = grade
+        self.alias = alias
+        self.user = user
+
+    def write(self) -> str:
+        """Return the woven body prose. '' when there are no snippets or the LLM fails."""
+        if not self.snippets:
+            return ""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("CoverLetterWriter: LLM call failed")
+            return ""
+        return (raw or "").strip()
+
+    def _prompt(self) -> str:
+        clause = self._GRADE_CLAUSE.get(self.grade, self._GRADE_CLAUSE["standard"])
+        common = self._COMMON.format(language=self.language)
+        post = self.job_post_text[: self._MAX_POST_CHARS]
+        blocks = "\n\n".join(
+            f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
+        )
+        return (
+            f"{clause}\n{common}\n\n"
+            f"CANDIDATE: {self.candidate_name}\n"
+            f"ROLE: {self.title}\n\n"
+            f"JOB POSTING:\n{post}\n\n"
+            f"SNIPPETS (in order, use them all):\n{blocks}\n\nLETTER BODY:"
+        )

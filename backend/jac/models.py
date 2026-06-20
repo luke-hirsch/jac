@@ -148,8 +148,8 @@ class CvEntry(models.Model):
         if (
             self.favourite
             and self.FAVOURITE_LIMIT is not None
-            and self.user_id is not None
-            and self.favourite_count(self.user_id, exclude_pk=self.pk)
+            and self.user.id is not None
+            and self.favourite_count(self.user.id, exclude_pk=self.pk)
             >= self.FAVOURITE_LIMIT
         ):
             raise ValidationError(
@@ -379,3 +379,55 @@ class ResumeSnippet(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_kind_display()}: {self.title}"  # type: ignore[attr-defined]
+
+
+class JobPosting(models.Model):
+    """A job posting the user is tailoring an application to.
+
+    Owns the raw posting text plus the role title and detected language. Parent for the
+    extracted recipient address (`JobPostAddress`, 1:1) and — later — the generated CV and
+    cover letter (roadmap items #2/#3). User-scoped like every other JAC record.
+    """
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="job_postings"
+    )
+    title = models.CharField(max_length=200, blank=True)
+    posting_text = models.TextField()
+    # ISO-639-1 code of the posting language (e.g. "en", "de"); drives salutation/subject and
+    # the weave-prompt language hint. Best-effort from AddressExtract; defaults to English.
+    language = models.CharField(max_length=8, default="en")
+    source_url = models.URLField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.title or 'Posting'} ({self.created_at:%Y-%m-%d})"
+
+
+class JobPostAddress(models.Model):
+    """Employer contact block extracted from a job posting.
+
+    Every field is `blank=True` — extraction is lossy and a posting rarely states all of them;
+    the cover-letter renderer simply omits empty lines. `email`/`phone` are captured for later
+    application-sending / tracking.
+    """
+
+    job_posting = models.OneToOneField(
+        JobPosting, on_delete=models.CASCADE, related_name="address"
+    )
+    company = models.CharField(max_length=200, blank=True)
+    contact_name = models.CharField(max_length=200, blank=True)
+    street = models.CharField(max_length=200, blank=True)
+    address_line2 = models.CharField(max_length=200, blank=True)
+    zip = models.CharField(max_length=20, blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=30, blank=True)
+
+    def __str__(self) -> str:
+        return self.company or f"Address for posting {self.job_posting.pk}"

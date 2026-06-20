@@ -53,8 +53,15 @@ class UserProfile(models.Model):
     linkedin_url = models.URLField(blank=True)
     github_url = models.URLField(blank=True)
 
+    # Postal address — the sender block on JAC cover letters.
+    street = models.CharField(max_length=200, blank=True)
+    address_line2 = models.CharField(max_length=200, blank=True)
+    zip = models.CharField(max_length=20, blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+
     # Locale — timezone key drives Celery reminder scheduling (Phase 5)
-    timezone = models.CharField(max_length=64, default="UTC")
+    timezone = models.CharField(max_length=64, default="CET")
 
     # UI preferences
     theme = models.CharField(max_length=6, choices=Theme, default=Theme.system)
