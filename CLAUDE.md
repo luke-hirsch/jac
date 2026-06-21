@@ -103,8 +103,9 @@ shipped:
 
 > **Cover-letter generation — done.** Selection (`SnippetSelector`) + writer (`CoverLetterWriter`,
 > posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to
-> `main`. Open: a few cover-letter tests in `jac/tests.py` fail and are deferred to a follow-up
-> fix-guide; the live pipeline was smoke-tested green.
+> `main`. The previously-failing cover-letter tests are now green (the breakage was a missing test
+> import + a `langauge` typo in `ResumeSnippetSerializer` that 500'd every snippet endpoint — both
+> fixed). `jac` + `llm_connector` suites pass clean (279 tests, no stray log/stdout noise).
 >
 > **CV ladder — done.** All three rungs landed: `light` (embeddings →
 > propagation + floors), `standard` (`Instruct` `0–3` labels → keep-by-verdict), `strong`

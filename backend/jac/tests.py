@@ -1,7 +1,9 @@
 import io
 import json
+import logging
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -20,7 +22,9 @@ from jac.filter import CVFilter
 from jac.llm_prompts import (
     AddressExtract,
     Conversational,
+    CoverLetterWriter,
     Embed,
+    FaithfulnessCheck,
     Instruct,
     TheAnalyst,
     TheJudge,
@@ -41,6 +45,24 @@ from jac.models import (
 )
 
 
+@contextmanager
+def _muted():
+    """Silence logging inside the block. Wrap ONLY the LLM error-path tests,
+    which deliberately trigger `logger.exception(...)`. Logging anywhere else
+    still surfaces — so an unexpected traceback in the run output always means
+    something is genuinely off, never an expected error path."""
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+# ===========================================================================
+# Shared test helpers
+# ===========================================================================
+
+
 def _entry(id, type, *, text="", refs=None, favourite=False):
     """A flattened CV entry, shaped like CV._flatten_entries output. The selection
     code reads `favourite`/`refs` via .get(), so the defaults are always safe."""
@@ -53,9 +75,63 @@ def _entry(id, type, *, text="", refs=None, favourite=False):
     }
 
 
-# ---------------------------------------------------------------------------
+def _cv_with(user_pk, *, jobs=None):
+    """A CV whose entries are injected directly (bypassing the DB query layer),
+    used by the cover-letter tests. Only the kept `jobs` ever vary."""
+    cv = CV(user_pk=user_pk)
+    cv.entries = {
+        "jobs": jobs or [],
+        "projects": [],
+        "skills": [],
+        "educations": [],
+        "certifications": [],
+        "languages": [],
+    }
+    return cv
+
+
+def _job_posting(user, *, language="en", title="Backend Engineer", posting_text="We need a dev."):
+    """An unsaved JobPosting for cover-letter tests."""
+    return JobPosting(
+        user=user, title=title, posting_text=posting_text, language=language
+    )
+
+
+class _CoverLetterCVMixin:
+    """Shared cover-letter fixture: a CV with only `self.job` kept, plus a
+    JobPosting factory bound to `self.user`. Every cover-letter test class used
+    to redefine these identically."""
+
+    def _cv(self):
+        return _cv_with(self.user.pk, jobs=[self.job])
+
+    def _jp(self, **kw):
+        return _job_posting(self.user, **kw)
+
+
+class _StubSnippet:
+    """Minimal stand-in for a ResumeSnippet in writer/verifier prompt tests."""
+
+    def __init__(self, title, content, kind_display="Achievement"):
+        self.title = title
+        self.content = content
+        self._kind_display = kind_display
+
+    def get_kind_display(self):
+        return self._kind_display
+
+
+def _keep_all(self, job_post_text, grade=None):
+    """Stand-in for CV.filter_cv: keep every flattened entry, score 1.0."""
+    out: dict = {}
+    for e in self._flatten_entries():
+        out.setdefault(e["type"], []).append({**e, "score": 1.0})
+    return out
+
+
+# ===========================================================================
 # Model tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 
 class DomainModelTests(TestCase):
@@ -104,9 +180,102 @@ class SkillYearsOfExperienceTests(TestCase):
         self.assertGreaterEqual(int(skill.years_of_experience), 13)
 
 
-# ---------------------------------------------------------------------------
-# CV query/filter tests
-# ---------------------------------------------------------------------------
+class SkillYearsOverrideModelTests(TestCase):
+    """The override is the escape hatch for intermittently-used skills the
+    automatic recogniser over-counts: when set, the property returns it
+    verbatim; when cleared, it falls back to the computed delta.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create(username="override_user")
+
+    def test_property_uses_computed_delta_without_override(self):
+        skill = Skill.objects.create(
+            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
+        )
+        self.assertIsNone(skill.years_of_experience_override)
+        self.assertGreaterEqual(int(skill.years_of_experience), 14)
+
+    def test_override_wins_over_computed(self):
+        skill = Skill.objects.create(
+            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
+        )
+        skill.years_of_experience_override = 2
+        self.assertEqual(skill.years_of_experience, 2)
+
+    def test_clearing_override_falls_back_to_computed(self):
+        skill = Skill.objects.create(
+            user=self.user,
+            name="C/C++",
+            first_used=date(2010, 1, 1),
+            years_of_experience_override=2,
+        )
+        self.assertEqual(skill.years_of_experience, 2)
+        skill.years_of_experience_override = None
+        self.assertGreaterEqual(int(skill.years_of_experience), 14)
+
+    def test_override_of_zero_is_respected(self):
+        # 0 is a legitimate override (and not None), so it must win.
+        skill = Skill.objects.create(
+            user=self.user,
+            name="COBOL",
+            first_used=date(2010, 1, 1),
+            years_of_experience_override=0,
+        )
+        self.assertEqual(skill.years_of_experience, 0)
+
+
+class FavouriteLimitModelTests(TestCase):
+    """CvEntry.clean() enforces the per-type favourite cap (Education limit = 2)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="favmodel")
+
+    def _edu(self, favourite, institution):
+        return Education.objects.create(
+            user=self.user,
+            institution=institution,
+            started=date(2020, 1, 1),
+            favourite=favourite,
+        )
+
+    def test_clean_blocks_over_limit(self):
+        self._edu(True, "A")
+        self._edu(True, "B")  # at the limit of 2
+        extra = Education(
+            user=self.user,
+            institution="C",
+            started=date(2020, 1, 1),
+            favourite=True,
+        )
+        with self.assertRaises(DjangoValidationError):
+            extra.clean()
+
+    def test_clean_allows_within_limit(self):
+        self._edu(True, "A")
+        ok = Education(
+            user=self.user,
+            institution="B",
+            started=date(2020, 1, 1),
+            favourite=True,
+        )
+        ok.clean()  # second favourite is still within the limit -> no raise
+
+    def test_clean_excludes_self_on_update(self):
+        edu = self._edu(True, "A")
+        self._edu(True, "B")
+        edu.description = "edited"
+        edu.clean()  # re-saving an existing favourite must not count itself out
+
+    def test_non_favourite_unconstrained(self):
+        for i in range(5):
+            self._edu(False, f"U{i}")  # no cap on non-favourites
+
+
+# ===========================================================================
+# CV query layer — loading, flattening, edges, apply_selection
+# ===========================================================================
 
 
 class CVQueryTests(TestCase):
@@ -262,8 +431,241 @@ class CVQueryTests(TestCase):
         )
 
 
+class CVEdgeTests(TestCase):
+    """_flatten_entries emits correct relationship edges."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="edgeuser")
+        cls.cert = Certification.objects.create(
+            user=cls.user, name="AWS SA", issuer="Amazon"
+        )
+        cls.skill = Skill.objects.create(
+            user=cls.user, name="Python", certification=cls.cert
+        )
+        cls.cert.skills.add(cls.skill)
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+        cls.job.skills.add(cls.skill)
+        cls.project = Project.objects.create(
+            user=cls.user, name="Side", started=date(2023, 1, 1), job=cls.job
+        )
+        cls.project.skills.add(cls.skill)
+
+    def _by_id(self):
+        return {e["id"]: e for e in CV(user_pk=self.user.pk)._flatten_entries()}
+
+    def test_job_refs_skill_and_project(self):
+        flat = self._by_id()
+        refs = set(flat[f"job:{self.job.pk}"]["refs"])
+        self.assertIn(f"skill:{self.skill.pk}", refs)
+        self.assertIn(f"project:{self.project.pk}", refs)
+
+    def test_project_refs_skill_and_job(self):
+        refs = set(self._by_id()[f"project:{self.project.pk}"]["refs"])
+        self.assertIn(f"skill:{self.skill.pk}", refs)
+        self.assertIn(f"job:{self.job.pk}", refs)
+
+    def test_skill_refs_certification(self):
+        refs = self._by_id()[f"skill:{self.skill.pk}"]["refs"]
+        self.assertIn(f"certification:{self.cert.pk}", refs)
+
+    def test_refs_pruned_to_existing_ids(self):
+        # Skill filtered out by proficiency -> job must not ref a missing skill.
+        cv = CV(user_pk=self.user.pk, min_skill_proficiency="expert")
+        flat = {e["id"]: e for e in cv._flatten_entries()}
+        if f"skill:{self.skill.pk}" not in flat:  # intermediate skill dropped
+            self.assertNotIn(
+                f"skill:{self.skill.pk}", flat[f"job:{self.job.pk}"]["refs"]
+            )
+
+
+class CVApplySelectionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="applyuser")
+        cls.s1 = Skill.objects.create(user=cls.user, name="Python")
+        cls.s2 = Skill.objects.create(user=cls.user, name="SQL")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+
+    def test_prunes_and_orders_and_scores(self):
+        cv = CV(user_pk=self.user.pk)
+        selection = {
+            "skill": [
+                {"id": f"skill:{self.s2.pk}", "score": 0.9},
+                {"id": f"skill:{self.s1.pk}", "score": 0.4},
+            ],
+            "job": [{"id": f"job:{self.job.pk}", "score": 0.7}],
+        }
+        cv.apply_selection(selection)
+        # skills kept in the selection's (ranked) order, not DB order.
+        self.assertEqual([s.pk for s in cv.entries["skills"]], [self.s2.pk, self.s1.pk])
+        self.assertEqual(cv.entries["skills"][0].relevance_score, 0.9)
+        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
+
+    def test_section_absent_from_selection_is_emptied(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.apply_selection({"job": [{"id": f"job:{self.job.pk}", "score": 1.0}]})
+        self.assertEqual(cv.entries["skills"], [])
+        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
+
+    def test_unknown_ids_are_ignored(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.apply_selection({"skill": [{"id": "skill:999999", "score": 1.0}]})
+        self.assertEqual(cv.entries["skills"], [])
+
+
+# ===========================================================================
+# CV selection — CVFilter rungs (light / standard / strong), routing, floors
+# ===========================================================================
+
+
+class CVSelectionTests(TestCase):
+    """CVFilter propagation + per-section drop (light rung), with injected scores."""
+
+    def _entries(self):
+        return [
+            _entry("job:1", "job", refs=["skill:1"]),
+            _entry("skill:1", "skill"),
+            _entry("skill:2", "skill"),
+            _entry("certification:1", "certification", refs=["skill:1"]),
+            _entry("language:1", "language"),
+        ]
+
+    def _filter(self):
+        return CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+
+    def test_propagation_lifts_low_skill_under_strong_job(self):
+        f = self._filter()
+        base = {"job:1": 0.9, "skill:1": 0.05, "skill:2": 0.05}
+        eff = f._propagate(base)
+        # skill:1 is anchored by job:1 -> lifted to 0.85 * 0.9.
+        self.assertAlmostEqual(eff["skill:1"], 0.765, places=3)
+        # skill:2 has no high-tier neighbour -> untouched.
+        self.assertAlmostEqual(eff["skill:2"], 0.05, places=3)
+
+    def test_propagation_chains_job_to_skill_to_cert(self):
+        f = self._filter()
+        eff = f._propagate({"job:1": 1.0, "skill:1": 0.0, "certification:1": 0.0})
+        # job (0.85) -> skill:1, then skill:1 (0.85) -> cert.
+        self.assertAlmostEqual(eff["skill:1"], 0.85, places=3)
+        self.assertAlmostEqual(eff["certification:1"], 0.7225, places=3)
+
+    def test_low_skill_dropped_below_floor(self):
+        f = self._filter()
+        # All scores low, no anchoring; skill floor 0.35, min_keep 5 but only 2 skills exist.
+        out = f._select({"job:1": 0.9, "skill:1": 0.10, "skill:2": 0.10})
+        kept = {e["id"] for e in out.get("skill", [])}
+        # min_keep(5) > available(2) -> both skills kept despite being below floor.
+        self.assertEqual(kept, {"skill:1", "skill:2"})
+
+    def test_skill_floor_drops_when_above_min_keep(self):
+        entries = [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
+        f = CVFilter(job_post_text="x", entries=entries, grade="light")
+        base = {f"skill:{i}": (0.9 if i <= 5 else 0.10) for i in range(1, 8)}
+        out = f._select(base)
+        kept = {e["id"] for e in out["skill"]}
+        # 5 above floor kept; the 2 below floor dropped (min_keep already satisfied).
+        self.assertEqual(kept, {f"skill:{i}" for i in range(1, 6)})
+
+    def test_languages_never_dropped(self):
+        f = self._filter()
+        out = f._select({"language:1": 0.0})
+        self.assertEqual([e["id"] for e in out["language"]], ["language:1"])
+
+    def test_empty_base_keeps_everything(self):
+        f = self._filter()
+        out = f._select({})
+        kept = {e["id"] for sect in out.values() for e in sect}
+        self.assertEqual(kept, {e["id"] for e in self._entries()})
+
+    def test_sections_ranked_descending(self):
+        entries = [_entry("job:1", "job"), _entry("job:2", "job")]
+        f = CVFilter(job_post_text="x", entries=entries, grade="light")
+        out = f._select({"job:1": 0.3, "job:2": 0.8})
+        self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:1"])
+
+
+class CVFavouriteBonusTests(TestCase):
+    """CVFilter applies a small post-propagation nudge to favourites."""
+
+    def _filter(self, entries):
+        return CVFilter(job_post_text="x", entries=entries, grade="light")
+
+    def test_bonus_added_and_reranks(self):
+        entries = [
+            _entry("job:1", "job", favourite=True),
+            _entry("job:2", "job"),
+        ]
+        out = self._filter(entries)._select({"job:1": 0.40, "job:2": 0.40})
+        scores = {e["id"]: e["score"] for e in out["job"]}
+        self.assertAlmostEqual(scores["job:1"], 0.45, places=4)
+        self.assertAlmostEqual(scores["job:2"], 0.40, places=4)
+        # tie broken in the favourite's favour.
+        self.assertEqual(out["job"][0]["id"], "job:1")
+
+    def _edus(self, fav_score):
+        # Two strong educations + one favourite at `fav_score`; education floor 0.15,
+        # min_keep 2 (already satisfied by the two strong ones).
+        return [
+            _entry("education:1", "education"),
+            _entry("education:2", "education"),
+            _entry("education:3", "education", favourite=True),
+        ], {"education:1": 0.9, "education:2": 0.9, "education:3": fav_score}
+
+    def test_bonus_cannot_resurrect_zero_scored_favourite(self):
+        entries, base = self._edus(0.0)
+        out = self._filter(entries)._select(base)
+        kept = {e["id"] for e in out["education"]}
+        # 0.0 + 0.05 = 0.05 < 0.15 floor -> stays dropped.
+        self.assertNotIn("education:3", kept)
+
+    def test_bonus_lifts_borderline_favourite(self):
+        entries, base = self._edus(0.12)
+        out = self._filter(entries)._select(base)
+        kept = {e["id"] for e in out["education"]}
+        # 0.12 + 0.05 = 0.17 >= 0.15 floor -> crosses.
+        self.assertIn("education:3", kept)
+
+
+class CVFilterFloorsTests(TestCase):
+    """CVFilter._floors merges config embed_floors over _SECTION_POLICY defaults,
+    and _select drops by the resolved floor."""
+
+    def _entries(self):
+        return [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
+
+    def test_floors_merge_config_over_defaults(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.55}):
+            floors = f._floors()
+        self.assertEqual(floors["skill"], 0.55)  # overridden by config
+        self.assertEqual(floors["job"], 0.20)  # default kept
+
+    def test_select_uses_overridden_floor(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        # 3 skills clear the default 0.35 floor; the other 4 sit at 0.20 (below default).
+        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
+        # Default would keep 3 + min_keep top-up to 5; lower the floor and all 7 clear it.
+        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.15}):
+            out = f._select(base)
+        self.assertEqual(len(out["skill"]), 7)
+
+    def test_default_floor_when_no_override(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
+        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
+        with patch("jac.filter.get_embed_floors", return_value={}):
+            out = f._select(base)
+        # 3 above the 0.35 default + min_keep(5) tops up to 5.
+        self.assertEqual(len(out["skill"]), 5)
+
+
 class CVSelectRankedTests(TestCase):
-    """CVFilter._select_ranked: keep-by-label, favourites pinned, min_keep honoured."""
+    """CVFilter._select_ranked (standard rung): keep-by-label, favourites pinned,
+    min_keep honoured."""
 
     def _filter(self, entries):
         return CVFilter(job_post_text="x", entries=entries, grade="standard")
@@ -311,103 +713,9 @@ class CVSelectRankedTests(TestCase):
         self.assertEqual(out["job"][0]["score"], 2)
 
 
-class InstructScorerParseTests(TestCase):
-    """Instruct._parse: tolerant line parsing, validating, clamping — no network."""
-
-    def _scorer(self):
-        entries = [
-            _entry("skill:1", "skill", text="Python"),
-            _entry("job:1", "job", text="Dev at X"),
-        ]
-        return Instruct("posting", entries)
-
-    def test_parses_clean_lines(self):
-        self.assertEqual(
-            self._scorer()._parse("skill:1 3\njob:1 1"),
-            {"skill:1": 3, "job:1": 1},
-        )
-
-    def test_tolerates_markdown_and_separator_drift(self):
-        # bullets, em-dash, colon, code fences, blank lines — all survive.
-        raw = "```\n- skill:1: 2\n1. job:1 — 0\n```"
-        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
-
-    def test_extracts_lines_amid_prose(self):
-        raw = "Sure! Here are the ratings:\nskill:1 2\njob:1 0\nHope that helps."
-        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
-
-    def test_partial_reply_keeps_complete_lines(self):
-        # truncated mid-reply: skill:1 parses, the dangling line is ignored.
-        self.assertEqual(self._scorer()._parse("skill:1 3\njob"), {"skill:1": 3})
-
-    def test_unknown_ids_dropped_and_labels_clamped(self):
-        raw = "skill:1 9\njob:1 0\nskill:999 2"
-        # 9 -> clamped to _LABEL_MAX(3); unknown id dropped.
-        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 3, "job:1": 0})
-
-    def test_parses_single_line_json(self):
-        # Regression: a model that ignores the line format and emits compact one-line
-        # JSON must still yield EVERY pair. The old per-line parser grabbed only the first,
-        # leaving a truthy-but-near-empty label map that masked the light fallback and
-        # collapsed selection to the min_keep skeleton for every posting.
-        raw = '{"skill:1": 2, "job:1": 0}'
-        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
-
-    def test_parses_multiple_pairs_on_one_line(self):
-        self.assertEqual(
-            self._scorer()._parse("skill:1 3 job:1 1"), {"skill:1": 3, "job:1": 1}
-        )
-
-    def test_garbage_returns_empty(self):
-        self.assertEqual(self._scorer()._parse("no ratings here at all"), {})
-
-    def test_ranked_entries_empty_on_parse_failure(self):
-        with patch("jac.llm_prompts.complete", return_value="garbage"):
-            self.assertEqual(self._scorer().ranked_entries(), [])
-
-    def test_ranked_entries_empty_on_llm_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
-            self.assertEqual(self._scorer().ranked_entries(), [])
-
-    def test_ranked_entries_maps_labels(self):
-        with patch("jac.llm_prompts.complete", return_value="skill:1 3\njob:1 1"):
-            ranked = self._scorer().ranked_entries()
-        self.assertEqual(
-            {r["id"]: r["score"] for r in ranked}, {"skill:1": 3, "job:1": 1}
-        )
-
-
-class CVFilterRoutingTests(TestCase):
-    """output() standard path: ranked selection, with light fallback."""
-
-    def _entries(self):
-        return [_entry("job:1", "job"), _entry("job:2", "job")]
-
-    def test_standard_uses_ranked_selection(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
-        with patch.object(
-            CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
-        ):
-            out = f.output()
-        # ranked by label desc; scores are the labels (not cosine).
-        self.assertEqual([e["id"] for e in out["job"]], ["job:1", "job:2"])
-        self.assertEqual(out["job"][0]["score"], 3)
-
-    def test_standard_falls_back_to_light_when_scorer_empty(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
-        with (
-            patch.object(CVFilter, "_standard_scores", return_value={}),
-            patch.object(
-                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
-            ),
-        ):
-            out = f.output()
-        # light path: floored selection, cosine scores preserved.
-        self.assertEqual(out["job"][0]["score"], 0.9)
-
-
 class CVSelectHolisticTests(TestCase):
-    """CVFilter._select_holistic: model's selection + guardrails (favourites, min_keep, langs)."""
+    """CVFilter._select_holistic (strong rung): model's selection + guardrails
+    (favourites, min_keep, langs)."""
 
     def _filter(self, entries):
         return CVFilter(job_post_text="x", entries=entries, grade="strong")
@@ -463,6 +771,144 @@ class CVSelectHolisticTests(TestCase):
         )
 
 
+class CVFilterRoutingTests(TestCase):
+    """output() routing across rungs: strong degrades to standard degrades to
+    light, and standard degrades to light, each on an empty result."""
+
+    def _entries(self):
+        return [_entry("job:1", "job"), _entry("job:2", "job")]
+
+    # -- standard grade --------------------------------------------------
+
+    def test_standard_uses_ranked_selection(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
+        with patch.object(
+            CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
+        ):
+            out = f.output()
+        # ranked by label desc; scores are the labels (not cosine).
+        self.assertEqual([e["id"] for e in out["job"]], ["job:1", "job:2"])
+        self.assertEqual(out["job"][0]["score"], 3)
+
+    def test_standard_falls_back_to_light_when_scorer_empty(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="standard")
+        with (
+            patch.object(CVFilter, "_standard_scores", return_value={}),
+            patch.object(
+                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
+            ),
+        ):
+            out = f.output()
+        # light path: floored selection, cosine scores preserved.
+        self.assertEqual(out["job"][0]["score"], 0.9)
+
+    # -- strong grade ----------------------------------------------------
+
+    def test_strong_uses_holistic_selection(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with patch.object(
+            CVFilter, "_strong_selection", return_value=[{"id": "job:2", "why": "best"}]
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["id"], "job:2")
+        self.assertEqual(out["job"][0]["reason"], "best")
+
+    def test_strong_falls_back_to_standard(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with (
+            patch.object(CVFilter, "_strong_selection", return_value=[]),
+            patch.object(
+                CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
+            ),
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["id"], "job:1")
+        self.assertEqual(out["job"][0]["score"], 3)  # standard labels, not holistic
+
+    def test_strong_falls_back_to_light_when_both_empty(self):
+        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
+        with (
+            patch.object(CVFilter, "_strong_selection", return_value=[]),
+            patch.object(CVFilter, "_standard_scores", return_value={}),
+            patch.object(
+                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
+            ),
+        ):
+            out = f.output()
+        self.assertEqual(out["job"][0]["score"], 0.9)  # cosine -> light path
+
+
+# ===========================================================================
+# LLM rungs — tolerant line-format parsers + safe public calls (no network)
+# ===========================================================================
+
+
+class InstructScorerParseTests(TestCase):
+    """Instruct._parse: tolerant line parsing, validating, clamping — no network."""
+
+    def _scorer(self):
+        entries = [
+            _entry("skill:1", "skill", text="Python"),
+            _entry("job:1", "job", text="Dev at X"),
+        ]
+        return Instruct("posting", entries)
+
+    def test_parses_clean_lines(self):
+        self.assertEqual(
+            self._scorer()._parse("skill:1 3\njob:1 1"),
+            {"skill:1": 3, "job:1": 1},
+        )
+
+    def test_tolerates_markdown_and_separator_drift(self):
+        # bullets, em-dash, colon, code fences, blank lines — all survive.
+        raw = "```\n- skill:1: 2\n1. job:1 — 0\n```"
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_extracts_lines_amid_prose(self):
+        raw = "Sure! Here are the ratings:\nskill:1 2\njob:1 0\nHope that helps."
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_partial_reply_keeps_complete_lines(self):
+        # truncated mid-reply: skill:1 parses, the dangling line is ignored.
+        self.assertEqual(self._scorer()._parse("skill:1 3\njob"), {"skill:1": 3})
+
+    def test_unknown_ids_dropped_and_labels_clamped(self):
+        raw = "skill:1 9\njob:1 0\nskill:999 2"
+        # 9 -> clamped to _LABEL_MAX(3); unknown id dropped.
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 3, "job:1": 0})
+
+    def test_parses_single_line_json(self):
+        # Regression: a model that ignores the line format and emits compact one-line
+        # JSON must still yield EVERY pair. The old per-line parser grabbed only the first,
+        # leaving a truthy-but-near-empty label map that masked the light fallback and
+        # collapsed selection to the min_keep skeleton for every posting.
+        raw = '{"skill:1": 2, "job:1": 0}'
+        self.assertEqual(self._scorer()._parse(raw), {"skill:1": 2, "job:1": 0})
+
+    def test_parses_multiple_pairs_on_one_line(self):
+        self.assertEqual(
+            self._scorer()._parse("skill:1 3 job:1 1"), {"skill:1": 3, "job:1": 1}
+        )
+
+    def test_garbage_returns_empty(self):
+        self.assertEqual(self._scorer()._parse("no ratings here at all"), {})
+
+    def test_ranked_entries_empty_on_parse_failure(self):
+        with _muted(), patch("jac.llm_prompts.complete", return_value="garbage"):
+            self.assertEqual(self._scorer().ranked_entries(), [])
+
+    def test_ranked_entries_empty_on_llm_error(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._scorer().ranked_entries(), [])
+
+    def test_ranked_entries_maps_labels(self):
+        with patch("jac.llm_prompts.complete", return_value="skill:1 3\njob:1 1"):
+            ranked = self._scorer().ranked_entries()
+        self.assertEqual(
+            {r["id"]: r["score"] for r in ranked}, {"skill:1": 3, "job:1": 1}
+        )
+
+
 class ConversationalSelectorTests(TestCase):
     """Conversational._parse / selection(): tolerant, validating, ordered — no network."""
 
@@ -502,53 +948,617 @@ class ConversationalSelectorTests(TestCase):
         self.assertEqual(self._selector()._parse("no picks here"), [])
 
     def test_selection_empty_on_llm_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
             self.assertEqual(self._selector().selection(), [])
 
 
-class CVFilterStrongRoutingTests(TestCase):
-    """output() strong path: holistic when available, else standard, else light."""
+class EmbedAliasPassthroughTests(TestCase):
+    """Embed forwards alias + user to embed() so the light rung honours --llm."""
 
     def _entries(self):
-        return [_entry("job:1", "job"), _entry("job:2", "job")]
+        return [_entry("skill:1", "skill", text="Python")]
 
-    def test_strong_uses_holistic_selection(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
-        with patch.object(
-            CVFilter, "_strong_selection", return_value=[{"id": "job:2", "why": "best"}]
+    def test_query_passes_alias_and_user(self):
+        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
+            Embed("posting", self._entries(), user=7, alias="reasoning")._query()
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["alias"], "reasoning")
+        self.assertEqual(kwargs["user"], 7)
+
+    def test_defaults_to_default_alias_no_user(self):
+        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
+            Embed("posting", self._entries())._query()
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["alias"], "default")
+        self.assertIsNone(kwargs["user"])
+
+
+class JudgeCritiqueTests(TestCase):
+    """Judge._parse / critique(): grade + id-anchored notes, tolerant, validating — no network."""
+
+    def _judge(self):
+        return TheJudge(
+            "posting",
+            kept=[{"id": "skill:1", "text": "Python"}],
+            dropped=[{"id": "job:9", "text": "old job"}],
+        )
+
+    def test_parses_grade_and_notes(self):
+        out = self._judge()._parse("GRADE B\njob:9 — required, should have stayed")
+        self.assertEqual(out["grade"], "B")
+        self.assertEqual(
+            out["notes"], [{"id": "job:9", "note": "required, should have stayed"}]
+        )
+
+    def test_grade_only_yields_no_notes(self):
+        out = self._judge()._parse("GRADE A")
+        self.assertEqual(out["grade"], "A")
+        self.assertEqual(out["notes"], [])
+
+    def test_missing_grade_is_none(self):
+        out = self._judge()._parse("skill:1 — weak match")
+        self.assertIsNone(out["grade"])
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
+
+    def test_unknown_ids_dropped_and_deduped(self):
+        out = self._judge()._parse(
+            "GRADE C\nskill:99 — not in set\nskill:1 — weak\nskill:1 — dupe"
+        )
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak"}])
+
+    def test_tolerates_separator_drift(self):
+        out = self._judge()._parse("GRADE D\njob:9: missing required stack")
+        self.assertEqual(
+            out["notes"], [{"id": "job:9", "note": "missing required stack"}]
+        )
+
+    def test_critique_safe_on_llm_error(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._judge().critique(), {"grade": None, "notes": []})
+
+    def test_critique_parses_reply(self):
+        with patch(
+            "jac.llm_prompts.complete", return_value="GRADE B\nskill:1 — weak match"
         ):
-            out = f.output()
-        self.assertEqual(out["job"][0]["id"], "job:2")
-        self.assertEqual(out["job"][0]["reason"], "best")
+            out = self._judge().critique()
+        self.assertEqual(out["grade"], "B")
+        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
 
-    def test_strong_falls_back_to_standard(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
-        with (
-            patch.object(CVFilter, "_strong_selection", return_value=[]),
-            patch.object(
-                CVFilter, "_standard_scores", return_value={"job:1": 3, "job:2": 1}
-            ),
+
+class AnalystSummaryTests(TestCase):
+    """Analyst.analyse(): free-form prose passthrough, safe on failure — no network."""
+
+    def test_prompt_includes_report(self):
+        self.assertIn("REPORT-DATA", TheAnalyst("REPORT-DATA")._prompt())
+
+    def test_analyse_returns_text(self):
+        with patch("jac.llm_prompts.complete", return_value="the analysis"):
+            self.assertEqual(TheAnalyst("r").analyse(), "the analysis")
+
+    def test_analyse_empty_on_error(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
+            self.assertEqual(TheAnalyst("r").analyse(), "")
+
+
+class AddressExtractParseTests(TestCase):
+    def setUp(self):
+        self.x = AddressExtract("posting")
+
+    def test_parses_known_fields(self):
+        raw = (
+            "company: Acme GmbH\n"
+            "contact_name: Jane Doe\n"
+            "email: jobs@acme.com\n"
+            "title: Backend Engineer\n"
+            "language: de"
+        )
+        out = self.x._parse(raw)
+        self.assertEqual(out["company"], "Acme GmbH")
+        self.assertEqual(out["email"], "jobs@acme.com")
+        self.assertEqual(out["language"], "de")
+
+    def test_skips_unknown_blank_and_placeholder(self):
+        raw = "company: Acme\nfoo: bar\ncity:\nemail: none\nphone: n/a"
+        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
+
+    def test_tolerates_surrounding_prose(self):
+        raw = "Here are the details:\ncompany: Acme\nThanks!"
+        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
+
+    def test_extract_empty_on_llm_error(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(AddressExtract("p").extract(), {})
+
+
+class CoverLetterWriterPromptTests(TestCase):
+    """The writer prompt carries the snippets + role, never the job posting."""
+
+    def _writer(self):
+        return CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            candidate_name="Ada Lovelace",
+            title="Backend Engineer",
+            language="en",
+        )
+
+    def test_prompt_includes_snippets_and_role(self):
+        p = self._writer()._prompt()
+        self.assertIn("Shipped the billing service.", p)
+        self.assertIn("Backend Engineer", p)
+        self.assertIn("Ada Lovelace", p)
+
+    def test_prompt_omits_job_posting(self):
+        p = self._writer()._prompt()
+        self.assertNotIn("JOB POSTING", p)
+
+    def test_common_clause_forbids_invention(self):
+        p = self._writer()._prompt()
+        self.assertIn("Use ONLY facts stated in the snippets", p)
+
+    def test_write_returns_empty_without_snippets(self):
+        w = CoverLetterWriter([], title="X")
+        self.assertEqual(w.write(), "")
+
+
+class FaithfulnessCheckParseTests(TestCase):
+    """FaithfulnessCheck._parse / .critique: tolerant line parsing, honest failure default."""
+
+    def _check(self):
+        return FaithfulnessCheck("some body", [_StubSnippet("A", "I ship code.")])
+
+    def test_clean_verdict_is_zero(self):
+        self.assertEqual(
+            self._check()._parse("UNSUPPORTED 0"), {"count": 0, "claims": []}
+        )
+
+    def test_lists_claims_and_counts_them(self):
+        raw = "UNSUPPORTED 2\n- Led a team of 10\n- Increased revenue 30%"
+        self.assertEqual(
+            self._check()._parse(raw),
+            {"count": 2, "claims": ["Led a team of 10", "Increased revenue 30%"]},
+        )
+
+    def test_trusts_listed_claims_over_declared_count(self):
+        # declared 1 but two bullets present -> the bullets win.
+        raw = "UNSUPPORTED 1\n- claim a\n* claim b"
+        self.assertEqual(self._check()._parse(raw)["count"], 2)
+
+    def test_tolerates_markdown_and_prose(self):
+        raw = "Here is the audit:\nUNSUPPORTED 1\n1. Managed a 5M budget\nDone."
+        self.assertEqual(
+            self._check()._parse(raw), {"count": 1, "claims": ["Managed a 5M budget"]}
+        )
+
+    def test_positive_count_but_no_claims_is_not_checked(self):
+        # truncated reply: count says 2 but no bullets parsed -> None, never a false 0.
+        self.assertEqual(
+            self._check()._parse("UNSUPPORTED 2"), {"count": None, "claims": []}
+        )
+
+    def test_garbage_is_not_checked(self):
+        self.assertEqual(
+            self._check()._parse("the letter looks fine to me"),
+            {"count": None, "claims": []},
+        )
+
+    def test_critique_none_on_llm_error(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._check().critique(), {"count": None, "claims": []})
+
+    def test_critique_parses_live_reply(self):
+        with patch(
+            "jac.llm_prompts.complete", return_value="UNSUPPORTED 1\n- Fake cert"
         ):
-            out = f.output()
-        self.assertEqual(out["job"][0]["id"], "job:1")
-        self.assertEqual(out["job"][0]["score"], 3)  # standard labels, not holistic
-
-    def test_strong_falls_back_to_light_when_both_empty(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="strong")
-        with (
-            patch.object(CVFilter, "_strong_selection", return_value=[]),
-            patch.object(CVFilter, "_standard_scores", return_value={}),
-            patch.object(
-                CVFilter, "_light_scores", return_value={"job:1": 0.9, "job:2": 0.2}
-            ),
-        ):
-            out = f.output()
-        self.assertEqual(out["job"][0]["score"], 0.9)  # cosine -> light path
+            self.assertEqual(
+                self._check().critique(), {"count": 1, "claims": ["Fake cert"]}
+            )
 
 
-# ---------------------------------------------------------------------------
-# Viewset user-scoping tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Cover-letter assembly — snippet selection, build, ai_share, grounding
+# ===========================================================================
+
+
+class SnippetSelectorTests(_CoverLetterCVMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("snipuser")
+        cls.domain = Domain.objects.create(user=cls.user, name="Backend")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        cls.job.domains.add(cls.domain)
+        cls.other_job = Job.objects.create(
+            user=cls.user, title="Old", company="Y", started=date(2010, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        cls.intro = ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="Hi", kind=K.intro
+        )
+        cls.closing = ResumeSnippet.objects.create(
+            user=cls.user, title="Bye", content="Thanks", kind=K.closing
+        )
+        cls.body_kept = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Did X",
+            kind=K.achievement,
+            job=cls.job,
+        )
+        cls.body_other = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Other",
+            content="Did Y",
+            kind=K.achievement,
+            job=cls.other_job,
+        )
+        cls.inactive_intro = ResumeSnippet.objects.create(
+            user=cls.user, title="Off", content="z", kind=K.intro, is_active=False
+        )
+
+    def test_picks_one_intro_one_closing(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertEqual(sel["intro"], self.intro)
+        self.assertEqual(sel["closing"], self.closing)
+
+    def test_body_includes_kept_job_snippet_only(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertIn(self.body_kept, sel["body"])
+        self.assertNotIn(self.body_other, sel["body"])
+
+    def test_ordered_runs_intro_first_closing_last(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertEqual(sel["ordered"][0], self.intro)
+        self.assertEqual(sel["ordered"][-1], self.closing)
+
+    def test_inactive_snippet_excluded(self):
+        sel = SnippetSelector(self._cv(), self.user.pk).select()
+        self.assertNotEqual(sel["intro"], self.inactive_intro)
+
+
+class SnippetSelectorLanguageTests(_CoverLetterCVMixin, TestCase):
+    """The native-language tie-break orders an already-in-language snippet ahead of an
+    equally-relevant one in the other language — but never resurrects a zero-relevance
+    snippet just for matching the posting language."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("snip_tb")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        # Two equally-relevant body snippets (both linked to the kept job): one DE, one EN.
+        cls.body_de = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="DE",
+            content="Ich habe X gebaut.",
+            kind=K.achievement,
+            job=cls.job,
+            language="de",
+        )
+        cls.body_en = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="EN",
+            content="I built X.",
+            kind=K.achievement,
+            job=cls.job,
+            language="en",
+        )
+        # Relevant to nothing kept (no job/project/domain/skill link) → relevance score 0.
+        cls.unlinked_de = ResumeSnippet.objects.create(
+            user=cls.user,
+            title="DEx",
+            content="Nicht relevant.",
+            kind=K.achievement,
+            language="de",
+        )
+
+    def _body(self, posting_language):
+        return SnippetSelector(
+            self._cv(), self.user.pk, posting_language=posting_language
+        ).select()["body"]
+
+    def test_native_de_snippet_ordered_first_for_de_posting(self):
+        self.assertEqual(self._body("de")[0], self.body_de)
+
+    def test_native_en_snippet_ordered_first_for_en_posting(self):
+        self.assertEqual(self._body("en")[0], self.body_en)
+
+    def test_tie_break_never_resurrects_zero_relevance_snippet(self):
+        # Posting is DE, but the irrelevant DE snippet (score 0) is still dropped while the
+        # relevant EN snippet survives — language only breaks ties, it is not relevance.
+        body = self._body("de")
+        self.assertIn(self.body_en, body)
+        self.assertNotIn(self.unlinked_de, body)
+
+
+class CoverLetterBuildTests(_CoverLetterCVMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            "cluser", email="me@example.com", first_name="Ada", last_name="Lovelace"
+        )
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="I build things.", kind=K.intro
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Shipped Y.",
+            kind=K.achievement,
+            job=cls.job,
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Bye", content="Thanks.", kind=K.closing
+        )
+
+    def test_build_uses_woven_body(self):
+        with patch("jac.llm_prompts.complete", return_value="Woven letter body."):
+            r = CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+            ).build()
+        self.assertEqual(r["body"], "Woven letter body.")
+        self.assertIn("Woven letter body.", r["text"])
+        self.assertIn("Acme", r["text"])
+        self.assertEqual(r["subject"], "Application for Backend Engineer")
+
+    def test_falls_back_to_raw_snippets_when_llm_empty(self):
+        with patch("jac.llm_prompts.complete", return_value=""):
+            r = CoverLetter(
+                self.user, self._jp(), self._cv(), address=JobPostAddress()
+            ).build()
+        self.assertIn("I build things.", r["body"])
+        self.assertIn("Thanks.", r["body"])
+
+    def test_salutation_named_when_contact_present(self):
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            r = CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(contact_name="Jane Doe"),
+            ).build()
+        self.assertEqual(r["salutation"], "Dear Jane Doe,")
+
+    def test_german_subject_and_generic_salutation(self):
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            r = CoverLetter(
+                self.user,
+                self._jp(language="de"),
+                self._cv(),
+                address=JobPostAddress(),
+            ).build()
+        self.assertEqual(r["subject"], "Bewerbung als Backend Engineer")
+        self.assertEqual(r["salutation"], "Sehr geehrte Damen und Herren,")
+
+    def test_ai_share_present_and_in_range(self):
+        with patch("jac.llm_prompts.complete", return_value="Body."):
+            r = CoverLetter(
+                self.user, self._jp(), self._cv(), address=JobPostAddress()
+            ).build()
+        self.assertIsInstance(r["ai_share"], float)
+        self.assertGreaterEqual(r["ai_share"], 0.0)
+        self.assertLessEqual(r["ai_share"], 1.0)
+
+    def test_provenance_partitions_snippets_used(self):
+        # All seeded snippets are EN; against a DE posting they are all "translated".
+        with patch("jac.llm_prompts.complete", return_value="Body."):
+            r = CoverLetter(
+                self.user,
+                self._jp(language="de"),
+                self._cv(),
+                address=JobPostAddress(),
+            ).build()
+        prov = r["snippet_provenance"]
+        self.assertEqual(
+            sorted(prov["native"] + prov["translated"]), sorted(r["snippets_used"])
+        )
+        self.assertEqual(prov["native"], [])
+        self.assertEqual(r["ai_share"], 1.0)  # nothing authored in the posting language
+
+
+class CoverLetterAiShareTests(_CoverLetterCVMixin, TestCase):
+    """`CoverLetter._ai_share`: source provenance + a per-grade rewrite tax, clamped 0.0–1.0."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("ai_share")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+
+    def _cl(self, grade="standard"):
+        return CoverLetter(self.user, self._jp(title="x", posting_text="y"), self._cv(), grade=grade)
+
+    def _snip(self, language, words=4):
+        return ResumeSnippet(content=" ".join(["w"] * words), language=language)
+
+    def test_all_native_light_is_just_the_rewrite_tax(self):
+        self.assertEqual(
+            self._cl("light")._ai_share([self._snip("en")], "en", False), 0.05
+        )
+
+    def test_all_native_strong_carries_more_tax(self):
+        self.assertEqual(
+            self._cl("strong")._ai_share([self._snip("en")], "en", False), 0.45
+        )
+
+    def test_all_translated_is_fully_ai(self):
+        self.assertEqual(
+            self._cl("light")._ai_share([self._snip("en")], "de", False), 1.0
+        )
+
+    def test_no_snippets_is_fully_ai(self):
+        self.assertEqual(self._cl()._ai_share([], "en", False), 1.0)
+
+    def test_ai_fallback_is_fully_ai(self):
+        self.assertEqual(self._cl()._ai_share([self._snip("en")], "en", True), 1.0)
+
+    def test_mixed_lands_strictly_between(self):
+        share = self._cl("light")._ai_share(
+            [self._snip("de"), self._snip("en")], "de", False
+        )
+        self.assertGreater(share, 0.0)
+        self.assertLess(share, 1.0)
+
+
+class CoverLetterGroundingTests(_CoverLetterCVMixin, TestCase):
+    """build() surfaces grounding only when asked, and never lies on the off/fallback paths."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            "cl_ground", first_name="Ada", last_name="L"
+        )
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="I build things.", kind=K.intro
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Shipped Y.",
+            kind=K.achievement,
+            job=cls.job,
+        )
+
+    def _build(self, *, verify, complete_returns):
+        with patch("jac.llm_prompts.complete", side_effect=complete_returns):
+            return CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+                verify_grounding=verify,
+            ).build()
+
+    def test_grounding_not_checked_when_disabled(self):
+        # Only the writer call happens; grounding is the 'not checked' sentinel.
+        r = self._build(verify=False, complete_returns=["Woven body."])
+        self.assertEqual(r["grounding"], {"count": None, "claims": []})
+
+    def test_grounding_runs_and_surfaces_claims_when_enabled(self):
+        # First complete() -> writer body; second -> the verifier reply.
+        r = self._build(
+            verify=True,
+            complete_returns=["Woven body.", "UNSUPPORTED 1\n- Led a team of 10"],
+        )
+        self.assertEqual(r["grounding"]["count"], 1)
+        self.assertEqual(r["grounding"]["claims"], ["Led a team of 10"])
+
+    def test_grounding_clean_when_verifier_reports_zero(self):
+        r = self._build(verify=True, complete_returns=["Woven body.", "UNSUPPORTED 0"])
+        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
+
+    def test_raw_fallback_is_grounded_without_calling_verifier(self):
+        # Writer returns '' -> raw snippet fallback; body IS the snippets, so count 0 and the
+        # verifier is never called (only the one writer complete() is consumed).
+        r = self._build(verify=True, complete_returns=[""])
+        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
+        self.assertIn("I build things.", r["body"])
+
+
+# ===========================================================================
+# Eval tooling + management commands
+# ===========================================================================
+
+
+class ResolveRunsTests(TestCase):
+    """cv_eval._resolve_runs: the grade×llm selection matrix."""
+
+    def _strength(self, alias):
+        return {"default": "light", "reasoning": "standard"}.get(alias, "strong")
+
+    def test_neither_uses_default_at_autodetected_grade(self):
+        self.assertEqual(
+            _resolve_runs(None, None, ["a", "b"], self._strength),
+            [("default", "light")],
+        )
+
+    def test_llm_only_autodetects_grade(self):
+        self.assertEqual(
+            _resolve_runs(None, "reasoning", ["a", "b"], self._strength),
+            [("reasoning", "standard")],
+        )
+
+    def test_grade_only_fans_out_over_all_models(self):
+        self.assertEqual(
+            _resolve_runs("standard", None, ["a", "b"], self._strength),
+            [("a", "standard"), ("b", "standard")],
+        )
+
+    def test_both_uses_the_exact_pair(self):
+        self.assertEqual(
+            _resolve_runs("light", "reasoning", ["a", "b"], self._strength),
+            [("reasoning", "light")],
+        )
+
+
+class CVCommandSmokeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="cmduser")
+        cls.skill = Skill.objects.create(user=cls.user, name="Python")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
+        )
+        cls.job.skills.add(cls.skill)
+
+    @patch("jac.cv.CV.filter_cv", new=_keep_all)
+    def test_cv_test_writes_one_md_per_grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command(
+                "cv_test",
+                "--user",
+                str(self.user.pk),
+                "--job",
+                "Senior Python engineer",
+                "--grades",
+                "light",
+                "standard",
+                "--out-dir",
+                tmp,
+                stdout=io.StringIO(),
+            )
+            self.assertTrue((Path(tmp) / "cv_light.md").exists())
+            self.assertTrue((Path(tmp) / "cv_standard.md").exists())
+
+    @patch("jac.cv.CV.filter_cv", new=_keep_all)
+    def test_cv_eval_writes_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = Path(tmp) / "posting.md"
+            job.write_text("Senior Python engineer")
+            # The eval user has no LLMConfig, so resolution logs an expected
+            # 'falling back to settings' warning — mute it.
+            with _muted():
+                call_command(
+                    "cv_eval",
+                    "--user",
+                    str(self.user.pk),
+                    "--job-file",
+                    str(job),
+                    "--out-dir",
+                    tmp,
+                    stdout=io.StringIO(),
+                )
+            self.assertTrue((Path(tmp) / "findings.json").exists())
+            self.assertTrue((Path(tmp) / "findings.md").exists())
+
+
+# ===========================================================================
+# API — user-scoping, CRUD behaviours, bulk actions
+# ===========================================================================
 
 
 class JobViewSetScopingTests(APITestCase):
@@ -600,61 +1610,6 @@ class JobViewSetScopingTests(APITestCase):
     def test_unauthenticated_list_is_403(self):
         r = self.client.get("/api/jac/jobs/")
         self.assertIn(r.status_code, (401, 403))
-
-
-# ---------------------------------------------------------------------------
-# Phase 3a — Skill.years_of_experience_override (model-level)
-# ---------------------------------------------------------------------------
-
-
-class SkillYearsOverrideModelTests(TestCase):
-    """The override is the escape hatch for intermittently-used skills the
-    automatic recogniser over-counts: when set, the property returns it
-    verbatim; when cleared, it falls back to the computed delta.
-    """
-
-    def setUp(self):
-        self.user = User.objects.create(username="override_user")
-
-    def test_property_uses_computed_delta_without_override(self):
-        skill = Skill.objects.create(
-            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
-        )
-        self.assertIsNone(skill.years_of_experience_override)
-        self.assertGreaterEqual(int(skill.years_of_experience), 14)
-
-    def test_override_wins_over_computed(self):
-        skill = Skill.objects.create(
-            user=self.user, name="C/C++", first_used=date(2010, 1, 1)
-        )
-        skill.years_of_experience_override = 2
-        self.assertEqual(skill.years_of_experience, 2)
-
-    def test_clearing_override_falls_back_to_computed(self):
-        skill = Skill.objects.create(
-            user=self.user,
-            name="C/C++",
-            first_used=date(2010, 1, 1),
-            years_of_experience_override=2,
-        )
-        self.assertEqual(skill.years_of_experience, 2)
-        skill.years_of_experience_override = None
-        self.assertGreaterEqual(int(skill.years_of_experience), 14)
-
-    def test_override_of_zero_is_respected(self):
-        # 0 is a legitimate override (and not None), so it must win.
-        skill = Skill.objects.create(
-            user=self.user,
-            name="COBOL",
-            first_used=date(2010, 1, 1),
-            years_of_experience_override=0,
-        )
-        self.assertEqual(skill.years_of_experience, 0)
-
-
-# ---------------------------------------------------------------------------
-# Phase 3a — Skill API: override round-trip + related_skills
-# ---------------------------------------------------------------------------
 
 
 class SkillOverrideAPITests(APITestCase):
@@ -816,14 +1771,10 @@ class SkillBuildsOnAPITests(APITestCase):
         self.assertEqual(self.drf.enables.count(), 0)
 
 
-# ---------------------------------------------------------------------------
-# Phase 3a — ResumeSnippet CRUD + scoping
-# ---------------------------------------------------------------------------
-
-
 class ResumeSnippetAPITests(APITestCase):
     """Snippets are user-scoped on create, list, and relation fields; `user`
-    is never trusted from the body and choices/ownership are validated.
+    is never trusted from the body, choices/ownership are validated, and the
+    `language` flag defaults to English and round-trips.
     """
 
     @classmethod
@@ -927,6 +1878,27 @@ class ResumeSnippetAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 400)
+
+    def test_language_defaults_to_en(self):
+        s = ResumeSnippet.objects.create(
+            user=self.user, title="x", content="y", kind="intro"
+        )
+        self.assertEqual(s.language, "en")
+
+    def test_language_round_trips_through_api(self):
+        r = self.client.post(
+            "/api/jac/resume-snippets/",
+            {
+                "title": "Hallo",
+                "content": "Ich baue Dinge.",
+                "kind": "intro",
+                "language": "de",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["language"], "de")
+        self.assertEqual(ResumeSnippet.objects.get(pk=r.data["id"]).language, "de")
 
 
 class BulkDeleteAPITests(APITestCase):
@@ -1138,11 +2110,6 @@ class DomainIsDefaultAPITests(APITestCase):
         self.assertFalse(r.data["is_default"])
 
 
-# ---------------------------------------------------------------------------
-# Phase 3a-bis — ?domains=<id> list filtering
-# ---------------------------------------------------------------------------
-
-
 class DomainFilterAPITests(APITestCase):
     """`?domains=<id>` narrows list endpoints to entries carrying that domain —
     including Education and Certification, which gained the filter in 3a-bis.
@@ -1186,9 +2153,73 @@ class DomainFilterAPITests(APITestCase):
         self.assertEqual([c["name"] for c in r.data["results"]], ["AWS"])
 
 
-# ---------------------------------------------------------------------------
-# Phase 3e — cv_export / cv_import round-trip
-# ---------------------------------------------------------------------------
+class FavouriteAPITests(APITestCase):
+    """The favourite flag at the API layer: FavouriteLimitMixin enforces the
+    per-type cap (Job limit = 4), and `ordering=-favourite` floats pinned rows
+    to the top (the table star sort)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="favapi", password="pass")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _job(self, title, *, started, favourite=False):
+        return Job.objects.create(
+            user=self.user,
+            title=title,
+            company="Acme",
+            started=started,
+            favourite=favourite,
+        )
+
+    def _fill_favourite_limit(self):
+        for i in range(4):
+            self._job(f"J{i}", started=date(2022, 1, 1), favourite=True)
+
+    def test_create_over_limit_rejected(self):
+        self._fill_favourite_limit()
+        r = self.client.post(
+            "/api/jac/jobs/",
+            {
+                "title": "Over",
+                "company": "Acme",
+                "started": "2022-01-01",
+                "favourite": True,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("favourite", r.data)
+
+    def test_create_non_favourite_allowed(self):
+        self._fill_favourite_limit()
+        r = self.client.post(
+            "/api/jac/jobs/",
+            {
+                "title": "Plain",
+                "company": "Acme",
+                "started": "2022-01-01",
+                "favourite": False,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201)
+
+    def test_favourites_first_in_ordering(self):
+        self._job("Plain", started=date(2024, 1, 1))
+        self._job("Pinned", started=date(2019, 1, 1), favourite=True)
+        r = self.client.get("/api/jac/jobs/?ordering=-favourite,-started")
+        self.assertEqual(r.status_code, 200)
+        titles = [row["title"] for row in r.data["results"]]
+        # Pinned floats above the more-recent Plain job despite the -started secondary.
+        self.assertEqual(titles[0], "Pinned")
+
+
+# ===========================================================================
+# cv_export / cv_import round-trip
+# ===========================================================================
 
 
 class CvExportImportRoundTripTests(TestCase):
@@ -1276,7 +2307,9 @@ class CvExportImportRoundTripTests(TestCase):
             fh.write(buf.getvalue())
             path = fh.name
         try:
-            call_command("cv_import", "--username", "rt_b", "--file", path)
+            call_command(
+                "cv_import", "--username", "rt_b", "--file", path, stdout=io.StringIO()
+            )
         finally:
             os.remove(path)
 
@@ -1370,7 +2403,9 @@ class CvExportImportRoundTripTests(TestCase):
             fh.write(dump)
             path = fh.name
         try:
-            call_command("cv_import", "--username", "rt_b", "--file", path)
+            call_command(
+                "cv_import", "--username", "rt_b", "--file", path, stdout=io.StringIO()
+            )
         finally:
             os.remove(path)
 
@@ -1379,1077 +2414,3 @@ class CvExportImportRoundTripTests(TestCase):
         self.assertFalse(Domain.objects.filter(user=self.b, name="finance").exists())
         b_py = Skill.objects.get(user=self.b, name="Python")
         self.assertIn(sysdom, b_py.domains.all())
-
-
-# ---------------------------------------------------------------------------
-# CV edge / selection tests
-# ---------------------------------------------------------------------------
-
-
-class CVEdgeTests(TestCase):
-    """_flatten_entries emits correct relationship edges."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="edgeuser")
-        cls.cert = Certification.objects.create(
-            user=cls.user, name="AWS SA", issuer="Amazon"
-        )
-        cls.skill = Skill.objects.create(
-            user=cls.user, name="Python", certification=cls.cert
-        )
-        cls.cert.skills.add(cls.skill)
-        cls.job = Job.objects.create(
-            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
-        )
-        cls.job.skills.add(cls.skill)
-        cls.project = Project.objects.create(
-            user=cls.user, name="Side", started=date(2023, 1, 1), job=cls.job
-        )
-        cls.project.skills.add(cls.skill)
-
-    def _by_id(self):
-        return {e["id"]: e for e in CV(user_pk=self.user.pk)._flatten_entries()}
-
-    def test_job_refs_skill_and_project(self):
-        flat = self._by_id()
-        refs = set(flat[f"job:{self.job.pk}"]["refs"])
-        self.assertIn(f"skill:{self.skill.pk}", refs)
-        self.assertIn(f"project:{self.project.pk}", refs)
-
-    def test_project_refs_skill_and_job(self):
-        refs = set(self._by_id()[f"project:{self.project.pk}"]["refs"])
-        self.assertIn(f"skill:{self.skill.pk}", refs)
-        self.assertIn(f"job:{self.job.pk}", refs)
-
-    def test_skill_refs_certification(self):
-        refs = self._by_id()[f"skill:{self.skill.pk}"]["refs"]
-        self.assertIn(f"certification:{self.cert.pk}", refs)
-
-    def test_refs_pruned_to_existing_ids(self):
-        # Skill filtered out by proficiency -> job must not ref a missing skill.
-        cv = CV(user_pk=self.user.pk, min_skill_proficiency="expert")
-        flat = {e["id"]: e for e in cv._flatten_entries()}
-        if f"skill:{self.skill.pk}" not in flat:  # intermediate skill dropped
-            self.assertNotIn(
-                f"skill:{self.skill.pk}", flat[f"job:{self.job.pk}"]["refs"]
-            )
-
-
-class CVSelectionTests(TestCase):
-    """CVFilter propagation + per-section drop, with injected fake scores."""
-
-    def _entries(self):
-        return [
-            _entry("job:1", "job", refs=["skill:1"]),
-            _entry("skill:1", "skill"),
-            _entry("skill:2", "skill"),
-            _entry("certification:1", "certification", refs=["skill:1"]),
-            _entry("language:1", "language"),
-        ]
-
-    def _filter(self):
-        return CVFilter(job_post_text="x", entries=self._entries(), grade="light")
-
-    def test_propagation_lifts_low_skill_under_strong_job(self):
-        f = self._filter()
-        base = {"job:1": 0.9, "skill:1": 0.05, "skill:2": 0.05}
-        eff = f._propagate(base)
-        # skill:1 is anchored by job:1 -> lifted to 0.85 * 0.9.
-        self.assertAlmostEqual(eff["skill:1"], 0.765, places=3)
-        # skill:2 has no high-tier neighbour -> untouched.
-        self.assertAlmostEqual(eff["skill:2"], 0.05, places=3)
-
-    def test_propagation_chains_job_to_skill_to_cert(self):
-        f = self._filter()
-        eff = f._propagate({"job:1": 1.0, "skill:1": 0.0, "certification:1": 0.0})
-        # job (0.85) -> skill:1, then skill:1 (0.85) -> cert.
-        self.assertAlmostEqual(eff["skill:1"], 0.85, places=3)
-        self.assertAlmostEqual(eff["certification:1"], 0.7225, places=3)
-
-    def test_low_skill_dropped_below_floor(self):
-        f = self._filter()
-        # All scores low, no anchoring; skill floor 0.35, min_keep 5 but only 2 skills exist.
-        out = f._select({"job:1": 0.9, "skill:1": 0.10, "skill:2": 0.10})
-        kept = {e["id"] for e in out.get("skill", [])}
-        # min_keep(5) > available(2) -> both skills kept despite being below floor.
-        self.assertEqual(kept, {"skill:1", "skill:2"})
-
-    def test_skill_floor_drops_when_above_min_keep(self):
-        entries = [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
-        f = CVFilter(job_post_text="x", entries=entries, grade="light")
-        base = {f"skill:{i}": (0.9 if i <= 5 else 0.10) for i in range(1, 8)}
-        out = f._select(base)
-        kept = {e["id"] for e in out["skill"]}
-        # 5 above floor kept; the 2 below floor dropped (min_keep already satisfied).
-        self.assertEqual(kept, {f"skill:{i}" for i in range(1, 6)})
-
-    def test_languages_never_dropped(self):
-        f = self._filter()
-        out = f._select({"language:1": 0.0})
-        self.assertEqual([e["id"] for e in out["language"]], ["language:1"])
-
-    def test_empty_base_keeps_everything(self):
-        f = self._filter()
-        out = f._select({})
-        kept = {e["id"] for sect in out.values() for e in sect}
-        self.assertEqual(kept, {e["id"] for e in self._entries()})
-
-    def test_sections_ranked_descending(self):
-        entries = [_entry("job:1", "job"), _entry("job:2", "job")]
-        f = CVFilter(job_post_text="x", entries=entries, grade="light")
-        out = f._select({"job:1": 0.3, "job:2": 0.8})
-        self.assertEqual([e["id"] for e in out["job"]], ["job:2", "job:1"])
-
-
-class EmbedAliasPassthroughTests(TestCase):
-    """Embed forwards alias + user to embed() so the light rung honours --llm."""
-
-    def _entries(self):
-        return [_entry("skill:1", "skill", text="Python")]
-
-    def test_query_passes_alias_and_user(self):
-        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
-            Embed("posting", self._entries(), user=7, alias="reasoning")._query()
-        _, kwargs = m.call_args
-        self.assertEqual(kwargs["alias"], "reasoning")
-        self.assertEqual(kwargs["user"], 7)
-
-    def test_defaults_to_default_alias_no_user(self):
-        with patch("jac.llm_prompts.embed", return_value=[[0.1]]) as m:
-            Embed("posting", self._entries())._query()
-        _, kwargs = m.call_args
-        self.assertEqual(kwargs["alias"], "default")
-        self.assertIsNone(kwargs["user"])
-
-
-class CVFilterFloorsTests(TestCase):
-    """CVFilter._floors merges config embed_floors over _SECTION_POLICY defaults,
-    and _select drops by the resolved floor."""
-
-    def _entries(self):
-        return [_entry(f"skill:{i}", "skill") for i in range(1, 8)]
-
-    def test_floors_merge_config_over_defaults(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
-        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.55}):
-            floors = f._floors()
-        self.assertEqual(floors["skill"], 0.55)  # overridden by config
-        self.assertEqual(floors["job"], 0.20)  # default kept
-
-    def test_select_uses_overridden_floor(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
-        # 3 skills clear the default 0.35 floor; the other 4 sit at 0.20 (below default).
-        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
-        # Default would keep 3 + min_keep top-up to 5; lower the floor and all 7 clear it.
-        with patch("jac.filter.get_embed_floors", return_value={"skill": 0.15}):
-            out = f._select(base)
-        self.assertEqual(len(out["skill"]), 7)
-
-    def test_default_floor_when_no_override(self):
-        f = CVFilter(job_post_text="x", entries=self._entries(), grade="light")
-        base = {f"skill:{i}": (0.5 if i <= 3 else 0.20) for i in range(1, 8)}
-        with patch("jac.filter.get_embed_floors", return_value={}):
-            out = f._select(base)
-        # 3 above the 0.35 default + min_keep(5) tops up to 5.
-        self.assertEqual(len(out["skill"]), 5)
-
-
-class ResolveRunsTests(TestCase):
-    """cv_eval._resolve_runs: the grade×llm selection matrix."""
-
-    def _strength(self, alias):
-        return {"default": "light", "reasoning": "standard"}.get(alias, "strong")
-
-    def test_neither_uses_default_at_autodetected_grade(self):
-        self.assertEqual(
-            _resolve_runs(None, None, ["a", "b"], self._strength),
-            [("default", "light")],
-        )
-
-    def test_llm_only_autodetects_grade(self):
-        self.assertEqual(
-            _resolve_runs(None, "reasoning", ["a", "b"], self._strength),
-            [("reasoning", "standard")],
-        )
-
-    def test_grade_only_fans_out_over_all_models(self):
-        self.assertEqual(
-            _resolve_runs("standard", None, ["a", "b"], self._strength),
-            [("a", "standard"), ("b", "standard")],
-        )
-
-    def test_both_uses_the_exact_pair(self):
-        self.assertEqual(
-            _resolve_runs("light", "reasoning", ["a", "b"], self._strength),
-            [("reasoning", "light")],
-        )
-
-
-class CVApplySelectionTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="applyuser")
-        cls.s1 = Skill.objects.create(user=cls.user, name="Python")
-        cls.s2 = Skill.objects.create(user=cls.user, name="SQL")
-        cls.job = Job.objects.create(
-            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
-        )
-
-    def test_prunes_and_orders_and_scores(self):
-        cv = CV(user_pk=self.user.pk)
-        selection = {
-            "skill": [
-                {"id": f"skill:{self.s2.pk}", "score": 0.9},
-                {"id": f"skill:{self.s1.pk}", "score": 0.4},
-            ],
-            "job": [{"id": f"job:{self.job.pk}", "score": 0.7}],
-        }
-        cv.apply_selection(selection)
-        # skills kept in the selection's (ranked) order, not DB order.
-        self.assertEqual([s.pk for s in cv.entries["skills"]], [self.s2.pk, self.s1.pk])
-        self.assertEqual(cv.entries["skills"][0].relevance_score, 0.9)
-        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
-
-    def test_section_absent_from_selection_is_emptied(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.apply_selection({"job": [{"id": f"job:{self.job.pk}", "score": 1.0}]})
-        self.assertEqual(cv.entries["skills"], [])
-        self.assertEqual([j.pk for j in cv.entries["jobs"]], [self.job.pk])
-
-    def test_unknown_ids_are_ignored(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.apply_selection({"skill": [{"id": "skill:999999", "score": 1.0}]})
-        self.assertEqual(cv.entries["skills"], [])
-
-
-class FavouriteLimitModelTests(TestCase):
-    """CvEntry.clean() enforces the per-type favourite cap (Education limit = 2)."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="favmodel")
-
-    def _edu(self, favourite, institution):
-        return Education.objects.create(
-            user=self.user,
-            institution=institution,
-            started=date(2020, 1, 1),
-            favourite=favourite,
-        )
-
-    def test_clean_blocks_over_limit(self):
-        self._edu(True, "A")
-        self._edu(True, "B")  # at the limit of 2
-        extra = Education(
-            user=self.user,
-            institution="C",
-            started=date(2020, 1, 1),
-            favourite=True,
-        )
-        with self.assertRaises(DjangoValidationError):
-            extra.clean()
-
-    def test_clean_allows_within_limit(self):
-        self._edu(True, "A")
-        ok = Education(
-            user=self.user,
-            institution="B",
-            started=date(2020, 1, 1),
-            favourite=True,
-        )
-        ok.clean()  # second favourite is still within the limit -> no raise
-
-    def test_clean_excludes_self_on_update(self):
-        edu = self._edu(True, "A")
-        self._edu(True, "B")
-        edu.description = "edited"
-        edu.clean()  # re-saving an existing favourite must not count itself out
-
-    def test_non_favourite_unconstrained(self):
-        for i in range(5):
-            self._edu(False, f"U{i}")  # no cap on non-favourites
-
-
-class FavouriteLimitAPITests(APITestCase):
-    """The API enforces the same cap via FavouriteLimitMixin (Job limit = 4)."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user(username="favapi", password="pass")
-
-    def setUp(self):
-        self.client.force_login(self.user)
-        for i in range(4):
-            Job.objects.create(
-                user=self.user,
-                title=f"J{i}",
-                company="Acme",
-                started=date(2022, 1, 1),
-                favourite=True,
-            )
-
-    def test_create_over_limit_rejected(self):
-        r = self.client.post(
-            "/api/jac/jobs/",
-            {
-                "title": "Over",
-                "company": "Acme",
-                "started": "2022-01-01",
-                "favourite": True,
-            },
-            format="json",
-        )
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("favourite", r.data)
-
-    def test_create_non_favourite_allowed(self):
-        r = self.client.post(
-            "/api/jac/jobs/",
-            {
-                "title": "Plain",
-                "company": "Acme",
-                "started": "2022-01-01",
-                "favourite": False,
-            },
-            format="json",
-        )
-        self.assertEqual(r.status_code, 201)
-
-
-class FavouriteOrderingAPITests(APITestCase):
-    """`ordering=-favourite,...` floats flagged entries to the top (the table star sort)."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user(username="favorder", password="pass")
-        Job.objects.create(
-            user=cls.user, title="Plain", company="Acme", started=date(2024, 1, 1)
-        )
-        Job.objects.create(
-            user=cls.user,
-            title="Pinned",
-            company="Acme",
-            started=date(2019, 1, 1),
-            favourite=True,
-        )
-
-    def setUp(self):
-        self.client.force_login(self.user)
-
-    def test_favourites_first(self):
-        r = self.client.get("/api/jac/jobs/?ordering=-favourite,-started")
-        self.assertEqual(r.status_code, 200)
-        titles = [row["title"] for row in r.data["results"]]
-        # Pinned floats above the more-recent Plain job despite the -started secondary.
-        self.assertEqual(titles[0], "Pinned")
-
-
-class CVFavouriteBonusTests(TestCase):
-    """CVFilter applies a small post-propagation nudge to favourites."""
-
-    def _filter(self, entries):
-        return CVFilter(job_post_text="x", entries=entries, grade="light")
-
-    def test_bonus_added_and_reranks(self):
-        entries = [
-            _entry("job:1", "job", favourite=True),
-            _entry("job:2", "job"),
-        ]
-        out = self._filter(entries)._select({"job:1": 0.40, "job:2": 0.40})
-        scores = {e["id"]: e["score"] for e in out["job"]}
-        self.assertAlmostEqual(scores["job:1"], 0.45, places=4)
-        self.assertAlmostEqual(scores["job:2"], 0.40, places=4)
-        # tie broken in the favourite's favour.
-        self.assertEqual(out["job"][0]["id"], "job:1")
-
-    def _edus(self, fav_score):
-        # Two strong educations + one favourite at `fav_score`; education floor 0.15,
-        # min_keep 2 (already satisfied by the two strong ones).
-        return [
-            _entry("education:1", "education"),
-            _entry("education:2", "education"),
-            _entry("education:3", "education", favourite=True),
-        ], {"education:1": 0.9, "education:2": 0.9, "education:3": fav_score}
-
-    def test_bonus_cannot_resurrect_zero_scored_favourite(self):
-        entries, base = self._edus(0.0)
-        out = self._filter(entries)._select(base)
-        kept = {e["id"] for e in out["education"]}
-        # 0.0 + 0.05 = 0.05 < 0.15 floor -> stays dropped.
-        self.assertNotIn("education:3", kept)
-
-    def test_bonus_lifts_borderline_favourite(self):
-        entries, base = self._edus(0.12)
-        out = self._filter(entries)._select(base)
-        kept = {e["id"] for e in out["education"]}
-        # 0.12 + 0.05 = 0.17 >= 0.15 floor -> crosses.
-        self.assertIn("education:3", kept)
-
-
-def _keep_all(self, job_post_text, grade=None):
-    """Stand-in for CV.filter_cv: keep every flattened entry, score 1.0."""
-    out: dict = {}
-    for e in self._flatten_entries():
-        out.setdefault(e["type"], []).append({**e, "score": 1.0})
-    return out
-
-
-class CVCommandSmokeTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="cmduser")
-        cls.skill = Skill.objects.create(user=cls.user, name="Python")
-        cls.job = Job.objects.create(
-            user=cls.user, title="Eng", company="Acme", started=date(2022, 1, 1)
-        )
-        cls.job.skills.add(cls.skill)
-
-    @patch("jac.cv.CV.filter_cv", new=_keep_all)
-    def test_cv_test_writes_one_md_per_grade(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            call_command(
-                "cv_test",
-                "--user",
-                str(self.user.pk),
-                "--job",
-                "Senior Python engineer",
-                "--grades",
-                "light",
-                "standard",
-                "--out-dir",
-                tmp,
-                stdout=io.StringIO(),
-            )
-            self.assertTrue((Path(tmp) / "cv_light.md").exists())
-            self.assertTrue((Path(tmp) / "cv_standard.md").exists())
-
-    @patch("jac.cv.CV.filter_cv", new=_keep_all)
-    def test_cv_eval_writes_findings(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            job = Path(tmp) / "posting.md"
-            job.write_text("Senior Python engineer")
-            call_command(
-                "cv_eval",
-                "--user",
-                str(self.user.pk),
-                "--job-file",
-                str(job),
-                "--out-dir",
-                tmp,
-                stdout=io.StringIO(),
-            )
-            self.assertTrue((Path(tmp) / "findings.json").exists())
-            self.assertTrue((Path(tmp) / "findings.md").exists())
-
-
-class JudgeCritiqueTests(TestCase):
-    """Judge._parse / critique(): grade + id-anchored notes, tolerant, validating — no network."""
-
-    def _judge(self):
-        return TheJudge(
-            "posting",
-            kept=[{"id": "skill:1", "text": "Python"}],
-            dropped=[{"id": "job:9", "text": "old job"}],
-        )
-
-    def test_parses_grade_and_notes(self):
-        out = self._judge()._parse("GRADE B\njob:9 — required, should have stayed")
-        self.assertEqual(out["grade"], "B")
-        self.assertEqual(
-            out["notes"], [{"id": "job:9", "note": "required, should have stayed"}]
-        )
-
-    def test_grade_only_yields_no_notes(self):
-        out = self._judge()._parse("GRADE A")
-        self.assertEqual(out["grade"], "A")
-        self.assertEqual(out["notes"], [])
-
-    def test_missing_grade_is_none(self):
-        out = self._judge()._parse("skill:1 — weak match")
-        self.assertIsNone(out["grade"])
-        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
-
-    def test_unknown_ids_dropped_and_deduped(self):
-        out = self._judge()._parse(
-            "GRADE C\nskill:99 — not in set\nskill:1 — weak\nskill:1 — dupe"
-        )
-        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak"}])
-
-    def test_tolerates_separator_drift(self):
-        out = self._judge()._parse("GRADE D\njob:9: missing required stack")
-        self.assertEqual(
-            out["notes"], [{"id": "job:9", "note": "missing required stack"}]
-        )
-
-    def test_critique_safe_on_llm_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
-            self.assertEqual(self._judge().critique(), {"grade": None, "notes": []})
-
-    def test_critique_parses_reply(self):
-        with patch(
-            "jac.llm_prompts.complete", return_value="GRADE B\nskill:1 — weak match"
-        ):
-            out = self._judge().critique()
-        self.assertEqual(out["grade"], "B")
-        self.assertEqual(out["notes"], [{"id": "skill:1", "note": "weak match"}])
-
-
-class AnalystSummaryTests(TestCase):
-    """Analyst.analyse(): free-form prose passthrough, safe on failure — no network."""
-
-    def test_prompt_includes_report(self):
-        self.assertIn("REPORT-DATA", TheAnalyst("REPORT-DATA")._prompt())
-
-    def test_analyse_returns_text(self):
-        with patch("jac.llm_prompts.complete", return_value="the analysis"):
-            self.assertEqual(TheAnalyst("r").analyse(), "the analysis")
-
-    def test_analyse_empty_on_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
-            self.assertEqual(TheAnalyst("r").analyse(), "")
-
-
-class AddressExtractParseTests(TestCase):
-    def setUp(self):
-        self.x = AddressExtract("posting")
-
-    def test_parses_known_fields(self):
-        raw = (
-            "company: Acme GmbH\n"
-            "contact_name: Jane Doe\n"
-            "email: jobs@acme.com\n"
-            "title: Backend Engineer\n"
-            "language: de"
-        )
-        out = self.x._parse(raw)
-        self.assertEqual(out["company"], "Acme GmbH")
-        self.assertEqual(out["email"], "jobs@acme.com")
-        self.assertEqual(out["language"], "de")
-
-    def test_skips_unknown_blank_and_placeholder(self):
-        raw = "company: Acme\nfoo: bar\ncity:\nemail: none\nphone: n/a"
-        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
-
-    def test_tolerates_surrounding_prose(self):
-        raw = "Here are the details:\ncompany: Acme\nThanks!"
-        self.assertEqual(self.x._parse(raw), {"company": "Acme"})
-
-    def test_extract_empty_on_llm_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
-            self.assertEqual(AddressExtract("p").extract(), {})
-
-
-class SnippetSelectorTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user("snipuser")
-        cls.domain = Domain.objects.create(user=cls.user, name="Backend")
-        cls.job = Job.objects.create(
-            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
-        )
-        cls.job.domains.add(cls.domain)
-        cls.other_job = Job.objects.create(
-            user=cls.user, title="Old", company="Y", started=date(2010, 1, 1)
-        )
-        K = ResumeSnippet.Kind
-        cls.intro = ResumeSnippet.objects.create(
-            user=cls.user, title="Intro", content="Hi", kind=K.intro
-        )
-        cls.closing = ResumeSnippet.objects.create(
-            user=cls.user, title="Bye", content="Thanks", kind=K.closing
-        )
-        cls.body_kept = ResumeSnippet.objects.create(
-            user=cls.user,
-            title="Achv",
-            content="Did X",
-            kind=K.achievement,
-            job=cls.job,
-        )
-        cls.body_other = ResumeSnippet.objects.create(
-            user=cls.user,
-            title="Other",
-            content="Did Y",
-            kind=K.achievement,
-            job=cls.other_job,
-        )
-        cls.inactive_intro = ResumeSnippet.objects.create(
-            user=cls.user, title="Off", content="z", kind=K.intro, is_active=False
-        )
-
-    def _cv(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.entries = {
-            "jobs": [self.job],
-            "projects": [],
-            "skills": [],
-            "educations": [],
-            "certifications": [],
-            "languages": [],
-        }
-        return cv
-
-    def test_picks_one_intro_one_closing(self):
-        sel = SnippetSelector(self._cv(), self.user.pk).select()
-        self.assertEqual(sel["intro"], self.intro)
-        self.assertEqual(sel["closing"], self.closing)
-
-    def test_body_includes_kept_job_snippet_only(self):
-        sel = SnippetSelector(self._cv(), self.user.pk).select()
-        self.assertIn(self.body_kept, sel["body"])
-        self.assertNotIn(self.body_other, sel["body"])
-
-    def test_ordered_runs_intro_first_closing_last(self):
-        sel = SnippetSelector(self._cv(), self.user.pk).select()
-        self.assertEqual(sel["ordered"][0], self.intro)
-        self.assertEqual(sel["ordered"][-1], self.closing)
-
-    def test_inactive_snippet_excluded(self):
-        sel = SnippetSelector(self._cv(), self.user.pk).select()
-        self.assertNotEqual(sel["intro"], self.inactive_intro)
-
-
-class CoverLetterBuildTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user(
-            "cluser", email="me@example.com", first_name="Ada", last_name="Lovelace"
-        )
-        cls.job = Job.objects.create(
-            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
-        )
-        K = ResumeSnippet.Kind
-        ResumeSnippet.objects.create(
-            user=cls.user, title="Intro", content="I build things.", kind=K.intro
-        )
-        ResumeSnippet.objects.create(
-            user=cls.user,
-            title="Achv",
-            content="Shipped Y.",
-            kind=K.achievement,
-            job=cls.job,
-        )
-        ResumeSnippet.objects.create(
-            user=cls.user, title="Bye", content="Thanks.", kind=K.closing
-        )
-
-    def _cv(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.entries = {
-            "jobs": [self.job],
-            "projects": [],
-            "skills": [],
-            "educations": [],
-            "certifications": [],
-            "languages": [],
-        }
-        return cv
-
-    def _jp(self, language="en", title="Backend Engineer"):
-        return JobPosting(
-            user=self.user,
-            title=title,
-            posting_text="We need a dev.",
-            language=language,
-        )
-
-    def test_build_uses_woven_body(self):
-        with patch("jac.llm_prompts.complete", return_value="Woven letter body."):
-            r = CoverLetter(
-                self.user,
-                self._jp(),
-                self._cv(),
-                address=JobPostAddress(company="Acme"),
-            ).build()
-        self.assertEqual(r["body"], "Woven letter body.")
-        self.assertIn("Woven letter body.", r["text"])
-        self.assertIn("Acme", r["text"])
-        self.assertEqual(r["subject"], "Application for Backend Engineer")
-
-    def test_falls_back_to_raw_snippets_when_llm_empty(self):
-        with patch("jac.llm_prompts.complete", return_value=""):
-            r = CoverLetter(
-                self.user, self._jp(), self._cv(), address=JobPostAddress()
-            ).build()
-        self.assertIn("I build things.", r["body"])
-        self.assertIn("Thanks.", r["body"])
-
-    def test_salutation_named_when_contact_present(self):
-        with patch("jac.llm_prompts.complete", return_value="x"):
-            r = CoverLetter(
-                self.user,
-                self._jp(),
-                self._cv(),
-                address=JobPostAddress(contact_name="Jane Doe"),
-            ).build()
-        self.assertEqual(r["salutation"], "Dear Jane Doe,")
-
-    def test_german_subject_and_generic_salutation(self):
-        with patch("jac.llm_prompts.complete", return_value="x"):
-            r = CoverLetter(
-                self.user,
-                self._jp(language="de"),
-                self._cv(),
-                address=JobPostAddress(),
-            ).build()
-        self.assertEqual(r["subject"], "Bewerbung als Backend Engineer")
-        self.assertEqual(r["salutation"], "Sehr geehrte Damen und Herren,")
-
-    def test_ai_share_present_and_in_range(self):
-        with patch("jac.llm_prompts.complete", return_value="Body."):
-            r = CoverLetter(
-                self.user, self._jp(), self._cv(), address=JobPostAddress()
-            ).build()
-        self.assertIsInstance(r["ai_share"], float)
-        self.assertGreaterEqual(r["ai_share"], 0.0)
-        self.assertLessEqual(r["ai_share"], 1.0)
-
-    def test_provenance_partitions_snippets_used(self):
-        # All seeded snippets are EN; against a DE posting they are all "translated".
-        with patch("jac.llm_prompts.complete", return_value="Body."):
-            r = CoverLetter(
-                self.user,
-                self._jp(language="de"),
-                self._cv(),
-                address=JobPostAddress(),
-            ).build()
-        prov = r["snippet_provenance"]
-        self.assertEqual(
-            sorted(prov["native"] + prov["translated"]), sorted(r["snippets_used"])
-        )
-        self.assertEqual(prov["native"], [])
-        self.assertEqual(r["ai_share"], 1.0)  # nothing authored in the posting language
-
-
-class ResumeSnippetLanguageTests(APITestCase):
-    """The `language` flag defaults to English and round-trips through the API."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user(username="snip_lang", password="pass")
-
-    def setUp(self):
-        self.client.force_login(self.user)
-
-    def test_language_defaults_to_en(self):
-        s = ResumeSnippet.objects.create(
-            user=self.user, title="x", content="y", kind="intro"
-        )
-        self.assertEqual(s.language, "en")
-
-    def test_language_round_trips_through_api(self):
-        r = self.client.post(
-            "/api/jac/resume-snippets/",
-            {
-                "title": "Hallo",
-                "content": "Ich baue Dinge.",
-                "kind": "intro",
-                "language": "de",
-            },
-            format="json",
-        )
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.data["language"], "de")
-        self.assertEqual(ResumeSnippet.objects.get(pk=r.data["id"]).language, "de")
-
-
-class SnippetSelectorLanguageTests(TestCase):
-    """The native-language tie-break orders an already-in-language snippet ahead of an
-    equally-relevant one in the other language — but never resurrects a zero-relevance
-    snippet just for matching the posting language."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user("snip_tb")
-        cls.job = Job.objects.create(
-            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
-        )
-        K = ResumeSnippet.Kind
-        # Two equally-relevant body snippets (both linked to the kept job): one DE, one EN.
-        cls.body_de = ResumeSnippet.objects.create(
-            user=cls.user,
-            title="DE",
-            content="Ich habe X gebaut.",
-            kind=K.achievement,
-            job=cls.job,
-            language="de",
-        )
-        cls.body_en = ResumeSnippet.objects.create(
-            user=cls.user,
-            title="EN",
-            content="I built X.",
-            kind=K.achievement,
-            job=cls.job,
-            language="en",
-        )
-        # Relevant to nothing kept (no job/project/domain/skill link) → relevance score 0.
-        cls.unlinked_de = ResumeSnippet.objects.create(
-            user=cls.user,
-            title="DEx",
-            content="Nicht relevant.",
-            kind=K.achievement,
-            language="de",
-        )
-
-    def _cv(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.entries = {
-            "jobs": [self.job],
-            "projects": [],
-            "skills": [],
-            "educations": [],
-            "certifications": [],
-            "languages": [],
-        }
-        return cv
-
-    def _body(self, posting_language):
-        return SnippetSelector(
-            self._cv(), self.user.pk, posting_language=posting_language
-        ).select()["body"]
-
-    def test_native_de_snippet_ordered_first_for_de_posting(self):
-        self.assertEqual(self._body("de")[0], self.body_de)
-
-    def test_native_en_snippet_ordered_first_for_en_posting(self):
-        self.assertEqual(self._body("en")[0], self.body_en)
-
-    def test_tie_break_never_resurrects_zero_relevance_snippet(self):
-        # Posting is DE, but the irrelevant DE snippet (score 0) is still dropped while the
-        # relevant EN snippet survives — language only breaks ties, it is not relevance.
-        body = self._body("de")
-        self.assertIn(self.body_en, body)
-        self.assertNotIn(self.unlinked_de, body)
-
-
-class CoverLetterAiShareTests(TestCase):
-    """`CoverLetter._ai_share`: source provenance + a per-grade rewrite tax, clamped 0.0–1.0."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user("ai_share")
-        cls.job = Job.objects.create(
-            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
-        )
-
-    def _cv(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.entries = {
-            "jobs": [self.job],
-            "projects": [],
-            "skills": [],
-            "educations": [],
-            "certifications": [],
-            "languages": [],
-        }
-        return cv
-
-    def _cl(self, grade="standard"):
-        jp = JobPosting(user=self.user, title="x", posting_text="y", language="en")
-        return CoverLetter(self.user, jp, self._cv(), grade=grade)
-
-    def _snip(self, language, words=4):
-        return ResumeSnippet(content=" ".join(["w"] * words), language=language)
-
-    def test_all_native_light_is_just_the_rewrite_tax(self):
-        self.assertEqual(
-            self._cl("light")._ai_share([self._snip("en")], "en", False), 0.05
-        )
-
-    def test_all_native_strong_carries_more_tax(self):
-        self.assertEqual(
-            self._cl("strong")._ai_share([self._snip("en")], "en", False), 0.45
-        )
-
-    def test_all_translated_is_fully_ai(self):
-        self.assertEqual(
-            self._cl("light")._ai_share([self._snip("en")], "de", False), 1.0
-        )
-
-    def test_no_snippets_is_fully_ai(self):
-        self.assertEqual(self._cl()._ai_share([], "en", False), 1.0)
-
-    def test_ai_fallback_is_fully_ai(self):
-        self.assertEqual(self._cl()._ai_share([self._snip("en")], "en", True), 1.0)
-
-    def test_mixed_lands_strictly_between(self):
-        share = self._cl("light")._ai_share(
-            [self._snip("de"), self._snip("en")], "de", False
-        )
-        self.assertGreater(share, 0.0)
-        self.assertLess(share, 1.0)
-
-
-class _StubSnippet:
-    """Minimal stand-in for a ResumeSnippet in writer/verifier prompt tests."""
-
-    def __init__(self, title, content, kind_display="Achievement"):
-        self.title = title
-        self.content = content
-        self._kind_display = kind_display
-
-    def get_kind_display(self):
-        return self._kind_display
-
-
-class CoverLetterWriterPromptTests(TestCase):
-    """(1) The writer prompt carries the snippets + role, never the job posting."""
-
-    def _writer(self):
-        return CoverLetterWriter(
-            [_StubSnippet("Achv", "Shipped the billing service.")],
-            candidate_name="Ada Lovelace",
-            title="Backend Engineer",
-            language="en",
-        )
-
-    def test_prompt_includes_snippets_and_role(self):
-        p = self._writer()._prompt()
-        self.assertIn("Shipped the billing service.", p)
-        self.assertIn("Backend Engineer", p)
-        self.assertIn("Ada Lovelace", p)
-
-    def test_prompt_omits_job_posting(self):
-        p = self._writer()._prompt()
-        self.assertNotIn("JOB POSTING", p)
-
-    def test_common_clause_forbids_invention(self):
-        p = self._writer()._prompt()
-        self.assertIn("Use ONLY facts stated in the snippets", p)
-
-    def test_write_returns_empty_without_snippets(self):
-        w = CoverLetterWriter([], title="X")
-        self.assertEqual(w.write(), "")
-
-
-class FaithfulnessCheckParseTests(TestCase):
-    """FaithfulnessCheck._parse / .critique: tolerant line parsing, honest failure default."""
-
-    def _check(self):
-        return FaithfulnessCheck("some body", [_StubSnippet("A", "I ship code.")])
-
-    def test_clean_verdict_is_zero(self):
-        self.assertEqual(
-            self._check()._parse("UNSUPPORTED 0"), {"count": 0, "claims": []}
-        )
-
-    def test_lists_claims_and_counts_them(self):
-        raw = "UNSUPPORTED 2\n- Led a team of 10\n- Increased revenue 30%"
-        self.assertEqual(
-            self._check()._parse(raw),
-            {"count": 2, "claims": ["Led a team of 10", "Increased revenue 30%"]},
-        )
-
-    def test_trusts_listed_claims_over_declared_count(self):
-        # declared 1 but two bullets present -> the bullets win.
-        raw = "UNSUPPORTED 1\n- claim a\n* claim b"
-        self.assertEqual(self._check()._parse(raw)["count"], 2)
-
-    def test_tolerates_markdown_and_prose(self):
-        raw = "Here is the audit:\nUNSUPPORTED 1\n1. Managed a 5M budget\nDone."
-        self.assertEqual(
-            self._check()._parse(raw), {"count": 1, "claims": ["Managed a 5M budget"]}
-        )
-
-    def test_positive_count_but_no_claims_is_not_checked(self):
-        # truncated reply: count says 2 but no bullets parsed -> None, never a false 0.
-        self.assertEqual(
-            self._check()._parse("UNSUPPORTED 2"), {"count": None, "claims": []}
-        )
-
-    def test_garbage_is_not_checked(self):
-        self.assertEqual(
-            self._check()._parse("the letter looks fine to me"),
-            {"count": None, "claims": []},
-        )
-
-    def test_critique_none_on_llm_error(self):
-        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
-            self.assertEqual(self._check().critique(), {"count": None, "claims": []})
-
-    def test_critique_parses_live_reply(self):
-        with patch(
-            "jac.llm_prompts.complete", return_value="UNSUPPORTED 1\n- Fake cert"
-        ):
-            self.assertEqual(
-                self._check().critique(), {"count": 1, "claims": ["Fake cert"]}
-            )
-
-
-class CoverLetterGroundingTests(TestCase):
-    """build() surfaces grounding only when asked, and never lies on the off/fallback paths."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create_user(
-            "cl_ground", first_name="Ada", last_name="L"
-        )
-        cls.job = Job.objects.create(
-            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
-        )
-        K = ResumeSnippet.Kind
-        ResumeSnippet.objects.create(
-            user=cls.user, title="Intro", content="I build things.", kind=K.intro
-        )
-        ResumeSnippet.objects.create(
-            user=cls.user,
-            title="Achv",
-            content="Shipped Y.",
-            kind=K.achievement,
-            job=cls.job,
-        )
-
-    def _cv(self):
-        cv = CV(user_pk=self.user.pk)
-        cv.entries = {
-            "jobs": [self.job],
-            "projects": [],
-            "skills": [],
-            "educations": [],
-            "certifications": [],
-            "languages": [],
-        }
-        return cv
-
-    def _jp(self):
-        return JobPosting(
-            user=self.user,
-            title="Backend Engineer",
-            posting_text="We need a dev.",
-            language="en",
-        )
-
-    def _build(self, *, verify, complete_returns):
-        with patch("jac.llm_prompts.complete", side_effect=complete_returns):
-            return CoverLetter(
-                self.user,
-                self._jp(),
-                self._cv(),
-                address=JobPostAddress(company="Acme"),
-                verify_grounding=verify,
-            ).build()
-
-    def test_grounding_not_checked_when_disabled(self):
-        # Only the writer call happens; grounding is the 'not checked' sentinel.
-        r = self._build(verify=False, complete_returns=["Woven body."])
-        self.assertEqual(r["grounding"], {"count": None, "claims": []})
-
-    def test_grounding_runs_and_surfaces_claims_when_enabled(self):
-        # First complete() -> writer body; second -> the verifier reply.
-        r = self._build(
-            verify=True,
-            complete_returns=["Woven body.", "UNSUPPORTED 1\n- Led a team of 10"],
-        )
-        self.assertEqual(r["grounding"]["count"], 1)
-        self.assertEqual(r["grounding"]["claims"], ["Led a team of 10"])
-
-    def test_grounding_clean_when_verifier_reports_zero(self):
-        r = self._build(verify=True, complete_returns=["Woven body.", "UNSUPPORTED 0"])
-        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
-
-    def test_raw_fallback_is_grounded_without_calling_verifier(self):
-        # Writer returns '' -> raw snippet fallback; body IS the snippets, so count 0 and the
-        # verifier is never called (only the one writer complete() is consumed).
-        r = self._build(verify=True, complete_returns=[""])
-        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
-        self.assertIn("I build things.", r["body"])

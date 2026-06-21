@@ -418,7 +418,7 @@ class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
             "skills",
             "job",
             "project",
-            "langauge",
+            "language",
             "is_active",
             "created_at",
             "updated_at",

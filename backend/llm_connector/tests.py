@@ -1,5 +1,7 @@
 import json
+import logging
 from collections.abc import Generator
+from contextlib import contextmanager
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +24,19 @@ from llm_connector.conf import (
 from llm_connector.crypto import _fernet, decrypt, encrypt
 from llm_connector.models import LLMConfig, LLMRequestLog
 from llm_connector.registry import _registry, get_adapter_class, register
+
+
+@contextmanager
+def _muted():
+    """Silence logging inside the block. Wrap ONLY the tests that deliberately
+    exercise the no-config fallback path (which logs an expected 'falling back
+    to settings' warning). Logging anywhere else still surfaces — so an
+    unexpected line in the run output always means something is genuinely off."""
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(logging.NOTSET)
 
 
 class FakeAdapter(LLMAdapter):
@@ -644,7 +659,8 @@ class UserScopedResolutionTests(TestCase):
         self.assertEqual(client.complete("hi"), "user-specific")
 
     def test_user_without_config_falls_back_to_default(self):
-        client = LLMClient("reasoning", user=self.user)
+        with _muted():
+            client = LLMClient("reasoning", user=self.user)
         self.assertEqual(client._config["model"], "fake-1")
         self.assertEqual(client.complete("hi"), "pong")
 
@@ -671,12 +687,13 @@ class UserScopedResolutionTests(TestCase):
             provider="fake",
             model="alice-model",
         )
-        client_bob = LLMClient("reasoning", user=self.other)
+        with _muted():
+            client_bob = LLMClient("reasoning", user=self.other)
         self.assertEqual(client_bob._config["model"], "fake-1")
 
     def test_missing_default_alias_raises_on_fallback(self):
         with override_settings(LLM={"other": {"provider": "fake", "model": "x"}}):
-            with self.assertRaises(ImproperlyConfigured):
+            with _muted(), self.assertRaises(ImproperlyConfigured):
                 LLMClient("anything", user=self.user)
 
     def test_complete_helper_threads_user(self):
