@@ -79,8 +79,17 @@ shipped:
   per-letter **`ai_share`** provenance metric (`_ai_share`: length-weighted native-vs-translated +
   a per-grade rewrite tax). `ResumeSnippet.language` flag + a `load_snippets` seeder (DE/EN pairs).
   `JobPosting` + `JobPostAddress` models hold the posting + `AddressExtract`-parsed employer block;
-  `cover_letter` management command smoke-tests over a corpus. *(Implemented on
-  `backend/snippet-language-ai-share`; pending the human's test run.)*
+  `cover_letter` management command smoke-tests over a corpus.
+- jac cover-letter **grounding** (`llm_prompts.FaithfulnessCheck`): the job posting is now **stripped
+  from `CoverLetterWriter`** (the main fabrication vector — a weak model mirrored the posting's
+  wish-list back as the candidate's facts; the writer weaves authored snippets only). A separate
+  opt-in `FaithfulnessCheck` (line-format, mirrors `TheJudge`) reads the woven body + snippets (never
+  the posting) and lists unsupported claims; `CoverLetter._grounding` returns `{count, claims}` with
+  the honesty rule **`count=None` on any audit failure, never `0`** (raw-fallback body → `0` without
+  an LLM call; no snippets → `None`). Run under a strong `--verifier-llm`; the `cover_letter` command
+  surfaces it beside `ai_share` (`✓ all claims supported` / `⚠ N unsupported claim(s)` / `not
+  checked`). `ai_share` = provenance; grounding = faithfulness — orthogonal axes. See
+  [[cover-letter-grounding-metric]]. *(All cover-letter work merged to `main`.)*
 
 # roadmap
 
@@ -88,22 +97,16 @@ shipped:
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **cover-letter generation** — **in progress (uncommitted on `backend/snippet-language-ai-share`).**
-   Core pipeline + `ResumeSnippet.language` flag + per-letter **`ai_share`** provenance metric are
-   implemented (see current state); pending the human's test run. **Next sub-step (guide in to-do,
-   `[backend]-cover-letter-grounding.md`, tests written):** (a) **drop the job posting from the
-   `CoverLetterWriter` prompt** — it's the main hallucination vector (a weak model mirrors the
-   posting's wish-list back as the candidate's facts); the writer weaves authored snippets only. (b)
-   add a **faithfulness/grounding check** (`FaithfulnessCheck`, mirrors `TheJudge`): reads the body +
-   snippets (not the posting) and flags claims the snippets don't support, surfaced like `ai_share`
-   ("⚠ 2 unsupported claims"), opt-in under a strong `--verifier-llm`. `ai_share` measures
-   *provenance* (how much the machine wrote); grounding measures *faithfulness* (did it lie) — these
-   are orthogonal, which is why a 5% `ai_share` letter still hallucinated. See
-   [[cover-letter-grounding-metric]].
-2. **frontend render** of the tailored CV + cover letter.
-3. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+1. **frontend render** of the tailored CV + cover letter — render `grounding` next to `ai_share`
+   (green ✓ / amber "N claims" badge with the claim list on hover; the API dict already carries it).
+2. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 
-> **CV ladder (roadmap item #1) — done.** All three rungs landed: `light` (embeddings →
+> **Cover-letter generation — done.** Selection (`SnippetSelector`) + writer (`CoverLetterWriter`,
+> posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to
+> `main`. Open: a few cover-letter tests in `jac/tests.py` fail and are deferred to a follow-up
+> fix-guide; the live pipeline was smoke-tested green.
+>
+> **CV ladder — done.** All three rungs landed: `light` (embeddings →
 > propagation + floors), `standard` (`Instruct` `0–3` labels → keep-by-verdict), `strong`
 > (`Conversational` holistic ordered selection → guardrails only). All LLM I/O is **line-format,
 > not JSON** (id-anchored, truncation-robust — see `no-json-llm-io`). Model/grade selection wired
