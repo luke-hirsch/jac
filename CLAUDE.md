@@ -79,8 +79,7 @@ shipped:
   per-letter **`ai_share`** provenance metric (`_ai_share`: length-weighted native-vs-translated +
   a per-grade rewrite tax). `ResumeSnippet.language` flag + a `load_snippets` seeder (DE/EN pairs).
   `JobPosting` + `JobPostAddress` models hold the posting + `AddressExtract`-parsed employer block;
-  `cover_letter` management command smoke-tests over a corpus. *(Implemented on
-  `backend/snippet-language-ai-share`; pending the human's test run.)*
+  `cover_letter` management command smoke-tests over a corpus. *(Merged to `main`.)*
 
 # roadmap
 
@@ -88,9 +87,9 @@ shipped:
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **cover-letter generation** — **in progress (uncommitted on `backend/snippet-language-ai-share`).**
-   Core pipeline + `ResumeSnippet.language` flag + per-letter **`ai_share`** provenance metric are
-   implemented (see current state); pending the human's test run. **Next sub-step (guide in to-do,
+1. **cover-letter generation** — **in progress (on `backend/cover-letter`).** Core pipeline +
+   `ResumeSnippet.language` flag + per-letter **`ai_share`** provenance metric have landed (merged to
+   `main`; see current state). **Next sub-step (guide in to-do,
    `[backend]-cover-letter-grounding.md`, tests written):** (a) **drop the job posting from the
    `CoverLetterWriter` prompt** — it's the main hallucination vector (a weak model mirrors the
    posting's wish-list back as the candidate's facts); the writer weaves authored snippets only. (b)
