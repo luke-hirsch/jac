@@ -75,7 +75,7 @@ class LanguageAdmin(admin.ModelAdmin):
 
 @admin.register(ResumeSnippet)
 class SnippetAdmin(admin.ModelAdmin):
-    list_display = ("title", "kind", "is_active", "updated_at")
+    list_display = ("title", "kind", "language", "is_active", "updated_at")
     list_filter = ("kind", "is_active")
     search_fields = ("title", "content")
     filter_horizontal = ("domains", "skills")

@@ -370,6 +370,7 @@ class ResumeSnippet(models.Model):
         blank=True,
         related_name="resume_snippets",
     )
+    language = models.CharField(max_length=8, default="en")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

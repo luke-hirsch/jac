@@ -142,9 +142,13 @@ class Command(BaseCommand):
         ).build()
 
         stem = f"{_safe(alias)}__{slug}"
-        (out_dir / f"{stem}.cover.md").write_text(result["text"], encoding="utf-8")
+        header = f"> AI share: {result['ai_share']:.0%}\n\n"
+        (out_dir / f"{stem}.cover.md").write_text(
+            header + result["text"], encoding="utf-8"
+        )
         write(
             f"  {slug:<28} {len(result['snippets_used'])} snippet(s), "
             f"recipient={result['recipient']['company'] or '—'}"
             + ("  [persisted]" if persist else "")
+            + f"  AI share: {result['ai_share']:.0%}"
         )

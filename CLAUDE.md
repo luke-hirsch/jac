@@ -71,21 +71,35 @@ shipped:
   drop languages — no floors / propagation / count clamp). `output()` routes strong → standard →
   light, each degrading to the next on empty.
 
+- jac cover-letter pipeline (`backend/jac/cover_letter.py`): `SnippetSelector` picks 1 intro / 1
+  closing / up-to-N body snippets from `ResumeSnippet` boilerplate by relevance to the filtered CV
+  (relevance-dominant, with a native-language tie-break that reorders but never resurrects a
+  0-score snippet); `CoverLetterWriter` (`llm_prompts.py`, writer `llama3.2:1b`) only *weaves*;
+  `CoverLetter.build()` assembles bilingual furniture (`de`/`en`) around the body and computes a
+  per-letter **`ai_share`** provenance metric (`_ai_share`: length-weighted native-vs-translated +
+  a per-grade rewrite tax). `ResumeSnippet.language` flag + a `load_snippets` seeder (DE/EN pairs).
+  `JobPosting` + `JobPostAddress` models hold the posting + `AddressExtract`-parsed employer block;
+  `cover_letter` management command smoke-tests over a corpus. *(Implemented on
+  `backend/snippet-language-ai-share`; pending the human's test run.)*
+
 # roadmap
 
 > this is the **moving part** of this file. it changes as goalposts move; keep it honest.
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **cover-letter generation** — **in progress (uncommitted on `backend/cover-letter`).**
-   `cover_letter.py` scaffolds it: `SnippetSelector` picks intro/closing/body from `ResumeSnippet`
-   boilerplate by relevance to the filtered CV; `CoverLetterWriter` (`llm_prompts.py`, writer model
-   `llama3.2:1b`) only *weaves* (snippet text stays authoritative — the anti-slop guard); `CoverLetter`
-   assembles sender/recipient/subject/salutation (bilingual furniture, `de`/`en`) around the body.
-   New `JobPosting` + `JobPostAddress` models hold the posting and the `AddressExtract`-parsed employer
-   block. **Next sub-step (guide in to-do, tests written):** `ResumeSnippet.language` flag + per-letter
-   **AI-share metric** — German postings keep selecting snippets cross-language and the writer translates
-   as needed, but the cost is *measured* (`ai_share`, e.g. "37% written by AI") rather than avoided.
+1. **cover-letter generation** — **in progress (uncommitted on `backend/snippet-language-ai-share`).**
+   Core pipeline + `ResumeSnippet.language` flag + per-letter **`ai_share`** provenance metric are
+   implemented (see current state); pending the human's test run. **Next sub-step (guide in to-do,
+   `[backend]-cover-letter-grounding.md`, tests written):** (a) **drop the job posting from the
+   `CoverLetterWriter` prompt** — it's the main hallucination vector (a weak model mirrors the
+   posting's wish-list back as the candidate's facts); the writer weaves authored snippets only. (b)
+   add a **faithfulness/grounding check** (`FaithfulnessCheck`, mirrors `TheJudge`): reads the body +
+   snippets (not the posting) and flags claims the snippets don't support, surfaced like `ai_share`
+   ("⚠ 2 unsupported claims"), opt-in under a strong `--verifier-llm`. `ai_share` measures
+   *provenance* (how much the machine wrote); grounding measures *faithfulness* (did it lie) — these
+   are orthogonal, which is why a 5% `ai_share` letter still hallucinated. See
+   [[cover-letter-grounding-metric]].
 2. **frontend render** of the tailored CV + cover letter.
 3. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 

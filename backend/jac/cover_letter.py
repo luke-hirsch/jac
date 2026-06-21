@@ -44,11 +44,14 @@ class SnippetSelector:
         ResumeSnippet.Kind.other,
     )
 
-    def __init__(self, cv, user_pk: int, max_body: int = 4):
+    def __init__(
+        self, cv, user_pk: int, max_body: int = 4, posting_language: str = "en"
+    ):
         self.cv = cv
         self.user_pk = user_pk
         self.max_body = max_body
         self._ctx = self._kept_context()
+        self.lang = posting_language
 
     def _kept_context(self) -> dict:
         """Gather the pks/domains/skills of the entries that survived filtering."""
@@ -64,6 +67,9 @@ class SnippetSelector:
             "skills": {o.pk for o in e.get("skills", [])},
             "domains": domains,
         }
+
+    def _native(self, s) -> bool:
+        return getattr(s, "language", "en") == self.lang
 
     def _score(self, s: ResumeSnippet) -> int:
         sc = 0
@@ -85,12 +91,17 @@ class SnippetSelector:
         closings = [s for s in active if s.kind == ResumeSnippet.Kind.closing]
         bodies = [s for s in active if s.kind in self._BODY_KINDS]
 
-        intro = max(intros, key=self._score, default=None)
-        closing = max(closings, key=self._score, default=None)
-        scored = sorted(
-            ((self._score(s), s) for s in bodies), key=lambda t: t[0], reverse=True
+        # Relevance dominates; posting-language breaks ties so an already-native snippet
+        # sorts ahead of an equally-relevant translated one. The > 0 keep-gate stays on
+        # relevance alone, so the tie-break reorders but never resurrects a 0-score snippet.
+        intro = max(intros, key=lambda s: (self._score(s), self._native(s)), default=None)
+        closing = max(
+            closings, key=lambda s: (self._score(s), self._native(s)), default=None
         )
-        body = [s for score, s in scored if score > 0][: self.max_body]
+        scored = sorted(
+            bodies, key=lambda s: (self._score(s), self._native(s)), reverse=True
+        )
+        body = [s for s in scored if self._score(s) > 0][: self.max_body]
 
         ordered = [s for s in (intro, *body, closing) if s is not None]
         return {"intro": intro, "body": body, "closing": closing, "ordered": ordered}
@@ -103,6 +114,8 @@ class CoverLetter:
     passed explicitly (the test command builds transient instances); otherwise it is read from
     `job_posting.address`. `build()` returns a dict of letter parts plus a rendered `text`.
     """
+
+    _REWRITE_TAX = {"light": 0.05, "standard": 0.20, "strong": 0.45}
 
     def __init__(
         self,
@@ -133,7 +146,10 @@ class CoverLetter:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
         title = getattr(self.job_posting, "title", "") or ""
         sel = SnippetSelector(
-            self.cv, self.user.pk, max_body=self.max_body_snippets
+            self.cv,
+            self.user.pk,
+            max_body=self.max_body_snippets,
+            posting_language=language,
         ).select()
 
         body = CoverLetterWriter(
@@ -150,7 +166,7 @@ class CoverLetter:
             not body
         ):  # LLM failed / no model — fall back to the raw boilerplate, no slop.
             body = "\n\n".join(s.content for s in sel["ordered"])
-
+        body_is_ai_fallback = not sel["ordered"]
         result = {
             "language": language,
             "subject": self._subject(language, title),
@@ -160,6 +176,15 @@ class CoverLetter:
             "recipient": self._recipient(),
             "date": timezone.localdate().isoformat(),
             "snippets_used": [f"{s.kind}:{s.pk}" for s in sel["ordered"]],
+            "ai_share": self._ai_share(sel["ordered"], language, body_is_ai_fallback),
+            "snippet_provenance": {
+                "native": [
+                    f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language == language
+                ],
+                "translated": [
+                    f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language != language
+                ],
+            },
         }
         result["text"] = self.render_markdown(result)
         return result
@@ -261,3 +286,28 @@ class CoverLetter:
         out.append("")
         out.append(snd["name"])
         return "\n".join(out).rstrip() + "\n"
+
+    # How much the writer reshapes even same-language prose, by grade. Native words are
+
+    def _ai_share(self, snippets, language, ai_fallback) -> float:
+        """Fraction of the body attributable to the machine, 0.0–1.0.
+
+        0.0  = every snippet authored in the posting language, lightly stitched.
+        1.0  = no snippets (body fully AI-written) — or all snippets translated at strong grade.
+        Heuristic, not exact: the writer melts snippets into prose, so we attribute by source
+        provenance + a per-grade rewrite tax rather than diffing output text.
+        """
+        if ai_fallback or not snippets:
+            return 1.0
+        tax = self._REWRITE_TAX.get(self.grade, self._REWRITE_TAX["standard"])
+        native_w = sum(
+            len(s.content.split()) for s in snippets if s.language == language
+        )
+        trans_w = sum(
+            len(s.content.split()) for s in snippets if s.language != language
+        )
+        total = native_w + trans_w
+        if not total:
+            return 1.0
+        ai_w = trans_w + tax * native_w
+        return round(ai_w / total, 2)
