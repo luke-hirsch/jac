@@ -14,7 +14,7 @@ import logging
 from django.contrib.auth.models import User
 from django.utils import timezone
 
-from jac.llm_prompts import CoverLetterWriter
+from jac.llm_prompts import CoverLetterWriter, FaithfulnessCheck
 from jac.models import ResumeSnippet
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,9 @@ class SnippetSelector:
         # Relevance dominates; posting-language breaks ties so an already-native snippet
         # sorts ahead of an equally-relevant translated one. The > 0 keep-gate stays on
         # relevance alone, so the tie-break reorders but never resurrects a 0-score snippet.
-        intro = max(intros, key=lambda s: (self._score(s), self._native(s)), default=None)
+        intro = max(
+            intros, key=lambda s: (self._score(s), self._native(s)), default=None
+        )
         closing = max(
             closings, key=lambda s: (self._score(s), self._native(s)), default=None
         )
@@ -127,6 +129,8 @@ class CoverLetter:
         grade: str = "standard",
         alias: str = "default",
         max_body_snippets: int = 4,
+        verify_grounding: bool = False,
+        verifier_alias: str | None = None,
     ):
         self.user = user if isinstance(user, User) else User.objects.get(pk=user)
         self.job_posting = job_posting
@@ -141,6 +145,8 @@ class CoverLetter:
         self.grade = grade
         self.alias = alias
         self.max_body_snippets = max_body_snippets
+        self.verify_grounding = verify_grounding
+        self.verifier_alias = verifier_alias
 
     def build(self) -> dict:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
@@ -152,8 +158,7 @@ class CoverLetter:
             posting_language=language,
         ).select()
 
-        body = CoverLetterWriter(
-            getattr(self.job_posting, "posting_text", "") or "",
+        woven = CoverLetterWriter(
             sel["ordered"],
             candidate_name=self._candidate_name(),
             title=title,
@@ -162,11 +167,12 @@ class CoverLetter:
             alias=self.alias,
             user=self.user,
         ).write()
-        if (
-            not body
-        ):  # LLM failed / no model — fall back to the raw boilerplate, no slop.
-            body = "\n\n".join(s.content for s in sel["ordered"])
+        # The writer returns '' when the LLM failed OR there were no snippets to weave. Either
+        # way fall back to the raw stitched snippets (no slop), and remember it for _grounding.
+        weave_failed = not woven
+        body = woven or "\n\n".join(s.content for s in sel["ordered"])
         body_is_ai_fallback = not sel["ordered"]
+
         result = {
             "language": language,
             "subject": self._subject(language, title),
@@ -185,6 +191,7 @@ class CoverLetter:
                     f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language != language
                 ],
             },
+            "grounding": self._grounding(body, sel["ordered"], weave_failed),
         }
         result["text"] = self.render_markdown(result)
         return result
@@ -311,3 +318,28 @@ class CoverLetter:
             return 1.0
         ai_w = trans_w + tax * native_w
         return round(ai_w / total, 2)
+
+    def _grounding(self, body, snippets, weave_failed) -> dict:
+        """Audit the woven body against the snippets. {'count': int | None, 'claims': [str]}.
+
+        count=None  -> not checked: audit off, no snippets to check against, or the audit LLM
+                       failed (FaithfulnessCheck never returns 0 on failure — see its docstring).
+        count=0     -> checked and fully grounded. Includes the raw-fallback path, where the body
+                       IS the verbatim snippet text, so by construction nothing is unsupported.
+        count>0     -> that many claims in the body the snippets do not support.
+
+        Opt-in (one extra LLM call) and run under verifier_alias — a 1B writer cannot fact-check
+        itself, so point verifier_alias at a strong model.
+        """
+        if not self.verify_grounding or not snippets:
+            return {"count": None, "claims": []}
+        if (
+            weave_failed
+        ):  # body is the verbatim snippets -> grounded by construction, no call
+            return {"count": 0, "claims": []}
+        return FaithfulnessCheck(
+            body,
+            snippets,
+            alias=self.verifier_alias or self.alias,
+            user=self.user,
+        ).critique()

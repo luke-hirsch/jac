@@ -78,6 +78,18 @@ class Command(BaseCommand):
             action="store_true",
             help="Save JobPosting + JobPostAddress rows instead of transient.",
         )
+        parser.add_argument(
+            "--verify",
+            action="store_true",
+            help="Run the faithfulness/grounding check on each generated body.",
+        )
+        parser.add_argument(
+            "--verifier-llm",
+            type=str,
+            default=None,
+            help="LLMConfig alias for the grounding check (default: same as --llm). "
+            "Point at a STRONG model — a weak writer cannot fact-check itself.",
+        )
 
     def handle(self, *args, **opts):
         write = self.stdout.write
@@ -118,9 +130,32 @@ class Command(BaseCommand):
         write(f"  user={user.pk}  → {out_dir}\n")
 
         for slug, text in postings:
-            self._one(user, slug, text, alias, grade, opts["persist"], out_dir, write)
+            self._one(
+                user,
+                slug,
+                text,
+                alias,
+                grade,
+                opts["persist"],
+                out_dir,
+                write,
+                opts["verify"],
+                opts["verifier_llm"],
+            )
 
-    def _one(self, user, slug, text, alias, grade, persist, out_dir, write):
+    def _one(
+        self,
+        user,
+        slug,
+        text,
+        alias,
+        grade,
+        persist,
+        out_dir,
+        write,
+        verify,
+        verifier_alias,
+    ):
         cv = CV(user_pk=user.pk)
         cv.apply_selection(cv.filter_cv(text, grade=grade, alias=alias))
 
@@ -138,11 +173,23 @@ class Command(BaseCommand):
             addr.save()
 
         result = CoverLetter(
-            user, jp, cv, address=addr, grade=grade, alias=alias
+            user,
+            jp,
+            cv,
+            address=addr,
+            grade=grade,
+            alias=alias,
+            verify_grounding=verify,
+            verifier_alias=verifier_alias,
         ).build()
 
+        header_lines = [f"> AI share: {result['ai_share']:.0%}"]
+        header_lines.append(self._grounding_line(result["grounding"]))
+        for claim in result["grounding"]["claims"]:
+            header_lines.append(f">   - {claim}")
+        header = "\n".join(header_lines) + "\n\n"
+
         stem = f"{_safe(alias)}__{slug}"
-        header = f"> AI share: {result['ai_share']:.0%}\n\n"
         (out_dir / f"{stem}.cover.md").write_text(
             header + result["text"], encoding="utf-8"
         )
@@ -151,4 +198,14 @@ class Command(BaseCommand):
             f"recipient={result['recipient']['company'] or '—'}"
             + ("  [persisted]" if persist else "")
             + f"  AI share: {result['ai_share']:.0%}"
+            + f"  |  {self._grounding_line(result['grounding']).lstrip('> ')}"
         )
+
+    @staticmethod
+    def _grounding_line(grounding: dict) -> str:
+        count = grounding["count"]
+        if count is None:
+            return "> Grounding: not checked"
+        if count == 0:
+            return "> Grounding: ✓ all claims supported"
+        return f"> Grounding: ⚠ {count} unsupported claim(s)"

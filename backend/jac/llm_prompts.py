@@ -445,10 +445,14 @@ class CoverLetterWriter:
     """Weave selected `ResumeSnippet`s into cover-letter body prose with the chat model.
 
     Snippet content is authoritative: the model stitches and smooths, it does not invent facts.
-    `grade` tunes only how much rewriting is allowed (light = glue; standard = smooth
-    transitions; strong = polished, reordered for impact) — never the content. Output is free
-    prose (the body), the one place structured line-format I/O does not apply. Any failure
-    -> '' so the caller falls back to the raw stitched snippets.
+    The job posting is deliberately NOT given to the writer — it tailored the *selection* upstream,
+    and feeding its wish-list here is the main way a weak model fabricates claims about the
+    candidate. The writer sees only the chosen snippets plus the role title (for tone/addressing).
+
+    `grade` tunes only how much rewriting is allowed (light = glue; standard = smooth transitions;
+    strong = polished, reordered for impact) — never the content. Output is free prose (the body),
+    the one place structured line-format I/O does not apply. Any failure -> '' so the caller falls
+    back to the raw stitched snippets.
     """
 
     _GRADE_CLAUSE = {
@@ -463,19 +467,19 @@ class CoverLetterWriter:
         ),
         "strong": (
             "Compose a polished, persuasive letter body from the snippets, ordered for impact "
-            "against THIS posting. Improve prose and transitions freely, but every factual "
-            "claim must come from the snippets — invent nothing."
+            "for THIS role. Improve prose and transitions freely, but every factual claim must "
+            "come from the snippets — invent nothing."
         ),
     }
     _COMMON = (
         "Write ONLY the body paragraphs of a cover letter — no date, no addresses, no subject "
-        "line, no salutation, no sign-off, no markdown, no placeholders. Write in {language}."
+        "line, no salutation, no sign-off, no markdown, no placeholders. Write in {language}. "
+        "Use ONLY facts stated in the snippets below; do not add skills, employers, job titles, "
+        "numbers, dates, or achievements that the snippets do not state."
     )
-    _MAX_POST_CHARS = 8000
 
     def __init__(
         self,
-        job_post_text: str,
         snippets: list,
         *,
         candidate_name: str = "",
@@ -485,7 +489,6 @@ class CoverLetterWriter:
         alias: str = "default",
         user=None,
     ):
-        self.job_post_text = job_post_text
         self.snippets = snippets
         self.candidate_name = candidate_name
         self.title = title
@@ -508,7 +511,6 @@ class CoverLetterWriter:
     def _prompt(self) -> str:
         clause = self._GRADE_CLAUSE.get(self.grade, self._GRADE_CLAUSE["standard"])
         common = self._COMMON.format(language=self.language)
-        post = self.job_post_text[: self._MAX_POST_CHARS]
         blocks = "\n\n".join(
             f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
         )
@@ -516,6 +518,97 @@ class CoverLetterWriter:
             f"{clause}\n{common}\n\n"
             f"CANDIDATE: {self.candidate_name}\n"
             f"ROLE: {self.title}\n\n"
-            f"JOB POSTING:\n{post}\n\n"
             f"SNIPPETS (in order, use them all):\n{blocks}\n\nLETTER BODY:"
         )
+
+
+class FaithfulnessCheck:
+    """Grounding auditor for a generated cover-letter body: a fixed strong LLM reads the body plus
+    the candidate's authored snippets (the ONLY permitted source of fact) and lists every claim in
+    the body the snippets do not support.
+
+    `ai_share` measures PROVENANCE (how much prose the machine produced); this measures
+    FAITHFULNESS (did the machine assert something untrue) — an orthogonal axis, which is why a 5%
+    `ai_share` letter can still hallucinate. The job posting is deliberately NOT given: a
+    requirement appearing in a posting must never be treated as a fact about the candidate.
+
+    Provider-agnostic. Line-format I/O (never JSON — see the `no-json-llm-io` memory): the reply's
+    'UNSUPPORTED <n>' line anchors the count; each following bullet line is one claim. On ANY
+    failure it returns count=None ('not checked'), NEVER 0 — a failed audit must not be mistaken for
+    a clean letter (the false-assurance trap this check exists to close).
+    """
+
+    _INSTRUCTION = (
+        "You are fact-checking a COVER LETTER BODY against the candidate's authored SNIPPETS.\n"
+        "The snippets are the ONLY permitted source of factual claims — skills, employers, job "
+        "titles, numbers, dates, achievements. A claim is UNSUPPORTED if the snippets do not state "
+        "or clearly imply it.\n"
+        "List every unsupported factual claim in the letter body.\n"
+        "Reply in this EXACT line format, nothing else:\n"
+        "  - first line: 'UNSUPPORTED <n>' — the number of unsupported claims (0 if none);\n"
+        "  - then ONE line per claim, '- <claim, quoted or paraphrased>' (<=20 words), worst "
+        "first;\n"
+        "  - if every claim is grounded, write 'UNSUPPORTED 0' and nothing else.\n"
+        "Do not flag style, tone, opinion, or first-person framing — only checkable facts. "
+        "No prose, no markdown headers, no JSON."
+    )
+
+    _COUNT_RE = re.compile(r"\bUNSUPPORTED\s+(\d+)\b", re.IGNORECASE)
+    # a claim line: an optional bullet / number marker, then the claim text.
+    _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
+
+    def __init__(self, body: str, snippets: list, user=None, alias: str = "default"):
+        self.body = body
+        self.snippets = snippets
+        self.user = user
+        self.alias = alias
+
+    def critique(self) -> dict:
+        """Return {'count': int | None, 'claims': [str]}.
+
+        count=None  -> audit failed / unreadable (surface as 'not checked', NOT clean).
+        count=0     -> audited and fully grounded.
+        count>0     -> that many claims the snippets do not support, worst first.
+        """
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("FaithfulnessCheck: LLM call failed")
+            return {"count": None, "claims": []}
+        return self._parse(raw)
+
+    def _prompt(self) -> str:
+        blocks = (
+            "\n\n".join(
+                f"[{s.get_kind_display()}] {s.title}\n{s.content}"
+                for s in self.snippets
+            )
+            or "(no snippets)"
+        )
+        return (
+            f"{self._INSTRUCTION}\n\n"
+            f"SNIPPETS (the only source of truth):\n{blocks}\n\n"
+            f"LETTER BODY:\n{self.body}\n\n"
+            f"AUDIT:"
+        )
+
+    def _parse(self, raw: str) -> dict:
+        text = raw or ""
+        cm = self._COUNT_RE.search(text)
+        claims: list[str] = []
+        for line in text.splitlines():
+            if self._COUNT_RE.search(line):  # don't read the count line as a claim
+                continue
+            m = self._CLAIM_RE.match(line)
+            if m:
+                claims.append(m.group(1).strip()[:200])
+        if (
+            claims
+        ):  # the listed claims are the truth; trust their length over the declared n
+            return {"count": len(claims), "claims": claims}
+        # No readable claim lines. Only an explicit 'UNSUPPORTED 0' counts as a clean verdict;
+        # a missing count line, or a positive count with no parseable claims (truncated reply),
+        # is an unreadable audit -> not checked.
+        if cm and cm.group(1) == "0":
+            return {"count": 0, "claims": []}
+        return {"count": None, "claims": []}

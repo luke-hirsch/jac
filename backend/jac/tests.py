@@ -2252,13 +2252,19 @@ class CoverLetterAiShareTests(TestCase):
         return ResumeSnippet(content=" ".join(["w"] * words), language=language)
 
     def test_all_native_light_is_just_the_rewrite_tax(self):
-        self.assertEqual(self._cl("light")._ai_share([self._snip("en")], "en", False), 0.05)
+        self.assertEqual(
+            self._cl("light")._ai_share([self._snip("en")], "en", False), 0.05
+        )
 
     def test_all_native_strong_carries_more_tax(self):
-        self.assertEqual(self._cl("strong")._ai_share([self._snip("en")], "en", False), 0.45)
+        self.assertEqual(
+            self._cl("strong")._ai_share([self._snip("en")], "en", False), 0.45
+        )
 
     def test_all_translated_is_fully_ai(self):
-        self.assertEqual(self._cl("light")._ai_share([self._snip("en")], "de", False), 1.0)
+        self.assertEqual(
+            self._cl("light")._ai_share([self._snip("en")], "de", False), 1.0
+        )
 
     def test_no_snippets_is_fully_ai(self):
         self.assertEqual(self._cl()._ai_share([], "en", False), 1.0)
@@ -2272,3 +2278,178 @@ class CoverLetterAiShareTests(TestCase):
         )
         self.assertGreater(share, 0.0)
         self.assertLess(share, 1.0)
+
+
+class _StubSnippet:
+    """Minimal stand-in for a ResumeSnippet in writer/verifier prompt tests."""
+
+    def __init__(self, title, content, kind_display="Achievement"):
+        self.title = title
+        self.content = content
+        self._kind_display = kind_display
+
+    def get_kind_display(self):
+        return self._kind_display
+
+
+class CoverLetterWriterPromptTests(TestCase):
+    """(1) The writer prompt carries the snippets + role, never the job posting."""
+
+    def _writer(self):
+        return CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            candidate_name="Ada Lovelace",
+            title="Backend Engineer",
+            language="en",
+        )
+
+    def test_prompt_includes_snippets_and_role(self):
+        p = self._writer()._prompt()
+        self.assertIn("Shipped the billing service.", p)
+        self.assertIn("Backend Engineer", p)
+        self.assertIn("Ada Lovelace", p)
+
+    def test_prompt_omits_job_posting(self):
+        p = self._writer()._prompt()
+        self.assertNotIn("JOB POSTING", p)
+
+    def test_common_clause_forbids_invention(self):
+        p = self._writer()._prompt()
+        self.assertIn("Use ONLY facts stated in the snippets", p)
+
+    def test_write_returns_empty_without_snippets(self):
+        w = CoverLetterWriter([], title="X")
+        self.assertEqual(w.write(), "")
+
+
+class FaithfulnessCheckParseTests(TestCase):
+    """FaithfulnessCheck._parse / .critique: tolerant line parsing, honest failure default."""
+
+    def _check(self):
+        return FaithfulnessCheck("some body", [_StubSnippet("A", "I ship code.")])
+
+    def test_clean_verdict_is_zero(self):
+        self.assertEqual(
+            self._check()._parse("UNSUPPORTED 0"), {"count": 0, "claims": []}
+        )
+
+    def test_lists_claims_and_counts_them(self):
+        raw = "UNSUPPORTED 2\n- Led a team of 10\n- Increased revenue 30%"
+        self.assertEqual(
+            self._check()._parse(raw),
+            {"count": 2, "claims": ["Led a team of 10", "Increased revenue 30%"]},
+        )
+
+    def test_trusts_listed_claims_over_declared_count(self):
+        # declared 1 but two bullets present -> the bullets win.
+        raw = "UNSUPPORTED 1\n- claim a\n* claim b"
+        self.assertEqual(self._check()._parse(raw)["count"], 2)
+
+    def test_tolerates_markdown_and_prose(self):
+        raw = "Here is the audit:\nUNSUPPORTED 1\n1. Managed a 5M budget\nDone."
+        self.assertEqual(
+            self._check()._parse(raw), {"count": 1, "claims": ["Managed a 5M budget"]}
+        )
+
+    def test_positive_count_but_no_claims_is_not_checked(self):
+        # truncated reply: count says 2 but no bullets parsed -> None, never a false 0.
+        self.assertEqual(
+            self._check()._parse("UNSUPPORTED 2"), {"count": None, "claims": []}
+        )
+
+    def test_garbage_is_not_checked(self):
+        self.assertEqual(
+            self._check()._parse("the letter looks fine to me"),
+            {"count": None, "claims": []},
+        )
+
+    def test_critique_none_on_llm_error(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            self.assertEqual(self._check().critique(), {"count": None, "claims": []})
+
+    def test_critique_parses_live_reply(self):
+        with patch(
+            "jac.llm_prompts.complete", return_value="UNSUPPORTED 1\n- Fake cert"
+        ):
+            self.assertEqual(
+                self._check().critique(), {"count": 1, "claims": ["Fake cert"]}
+            )
+
+
+class CoverLetterGroundingTests(TestCase):
+    """build() surfaces grounding only when asked, and never lies on the off/fallback paths."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            "cl_ground", first_name="Ada", last_name="L"
+        )
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="I build things.", kind=K.intro
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Shipped Y.",
+            kind=K.achievement,
+            job=cls.job,
+        )
+
+    def _cv(self):
+        cv = CV(user_pk=self.user.pk)
+        cv.entries = {
+            "jobs": [self.job],
+            "projects": [],
+            "skills": [],
+            "educations": [],
+            "certifications": [],
+            "languages": [],
+        }
+        return cv
+
+    def _jp(self):
+        return JobPosting(
+            user=self.user,
+            title="Backend Engineer",
+            posting_text="We need a dev.",
+            language="en",
+        )
+
+    def _build(self, *, verify, complete_returns):
+        with patch("jac.llm_prompts.complete", side_effect=complete_returns):
+            return CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+                verify_grounding=verify,
+            ).build()
+
+    def test_grounding_not_checked_when_disabled(self):
+        # Only the writer call happens; grounding is the 'not checked' sentinel.
+        r = self._build(verify=False, complete_returns=["Woven body."])
+        self.assertEqual(r["grounding"], {"count": None, "claims": []})
+
+    def test_grounding_runs_and_surfaces_claims_when_enabled(self):
+        # First complete() -> writer body; second -> the verifier reply.
+        r = self._build(
+            verify=True,
+            complete_returns=["Woven body.", "UNSUPPORTED 1\n- Led a team of 10"],
+        )
+        self.assertEqual(r["grounding"]["count"], 1)
+        self.assertEqual(r["grounding"]["claims"], ["Led a team of 10"])
+
+    def test_grounding_clean_when_verifier_reports_zero(self):
+        r = self._build(verify=True, complete_returns=["Woven body.", "UNSUPPORTED 0"])
+        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
+
+    def test_raw_fallback_is_grounded_without_calling_verifier(self):
+        # Writer returns '' -> raw snippet fallback; body IS the snippets, so count 0 and the
+        # verifier is never called (only the one writer complete() is consumed).
+        r = self._build(verify=True, complete_returns=[""])
+        self.assertEqual(r["grounding"], {"count": 0, "claims": []})
+        self.assertIn("I build things.", r["body"])
