@@ -105,7 +105,9 @@ shipped:
 > posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to
 > `main`. The previously-failing cover-letter tests are now green (the breakage was a missing test
 > import + a `langauge` typo in `ResumeSnippetSerializer` that 500'd every snippet endpoint — both
-> fixed). `jac` + `llm_connector` suites pass clean (279 tests, no stray log/stdout noise).
+> fixed). all suites pass clean (no stray log/stdout noise). **Tests now live in a per-app
+> `tests/` package** (`backend/<app>/tests/`), split by concern into `test_*.py` files with shared
+> fixtures in a non-collected `_helpers.py` — not the old single `tests.py` per app.
 >
 > **CV ladder — done.** All three rungs landed: `light` (embeddings →
 > propagation + floors), `standard` (`Instruct` `0–3` labels → keep-by-verdict), `strong`
@@ -124,7 +126,9 @@ conversation runs through these phases:
 3. human clarifies.
 4. AI writes a detailed, **code-bearing setup guide** (see `/setup-guide`) so an intermediate
    engineer could implement it.
-5. AI writes the tests.
+5. AI writes the tests **to disk** (real, runnable files, not just blocks in the guide) — they land
+   **before** coding and start **red**, so they double as the guide's acceptance criteria. the human
+   can adapt them but sees when the goal is met (red → green).
 6. **human types the code** (essential — this is how the human stays on top of the codebase).
 7. AI corrects and improves.
 8. **human tests and debugs.**
@@ -134,10 +138,12 @@ conversation runs through these phases:
 - **AI**: diagnoses (probes / experiments to decide *what* to build), and writes code-bearing
   setup guides + tests. AI also maintains the Claude-meta docs (this file, `.claude/skills/*`,
   memory, plan files).
-- **human (Lukas)**: types the application/repo source code, runs it, and does **all** testing
-  and verification.
-- AI does **not** edit application source or run the test suite to "prove" a change. the human
-  implements and reports results back.
+- **human (Lukas)**: types the application/repo **non-test** source code, runs it, and does **all**
+  testing and verification.
+- AI does **not** edit non-test application source, and does **not** run the test suite to "prove" a
+  change. the human implements and reports results back.
+- **tests are the AI's to write** — actual files on disk, landed before the human codes and starting
+  red (see phase 5). the human still runs and debugs them.
 
 **override**: the human can explicitly open a *volatile / exploration phase* ("just code it",
 "spike this") — then the AI may write source directly. this is opt-in per task, not the default;
