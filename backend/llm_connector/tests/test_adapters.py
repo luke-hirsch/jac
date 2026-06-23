@@ -1,4 +1,4 @@
-"""Provider adapters — native Ollama adapter behaviour."""
+"""Provider adapters — Ollama behaviour + the web-search capability (base flag, Anthropic)."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -7,7 +7,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase
 
 import llm_connector
-from llm_connector import complete
+from llm_connector import can_web_search, complete
+from llm_connector.base import LLMAdapter
+from llm_connector.providers.anthropic import AnthropicAdapter
 from llm_connector.registry import get_adapter_class
 
 
@@ -94,3 +96,89 @@ class OllamaAdapterTests(TestCase):
         from llm_connector.registry import get_adapter_class
 
         self.assertIs(get_adapter_class("ollama"), OllamaAdapter)
+
+
+# ---------------------------------------------------------------------------
+# web_search capability — base flag + Anthropic native search
+# ---------------------------------------------------------------------------
+
+
+class _Block:
+    """A bare attribute bag standing in for an Anthropic SDK response/content block."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class WebSearchCapabilityTests(TestCase):
+    def test_base_flag_false_and_method_raises(self):
+        class Dummy(LLMAdapter):
+            def complete(self, messages, **kw):
+                return ""
+
+            def stream(self, messages, **kw):
+                yield ""
+
+        d = Dummy({})
+        self.assertFalse(d.supports_web_search)
+        with self.assertRaises(NotImplementedError):
+            d.web_search([{"role": "user", "content": "x"}])
+
+    def test_anthropic_flag_true(self):
+        self.assertTrue(AnthropicAdapter.supports_web_search)
+
+    def test_can_web_search_reflects_client(self):
+        with patch("llm_connector.get_client") as gc:
+            gc.return_value.supports_web_search = True
+            self.assertTrue(can_web_search("strong"))
+            gc.return_value.supports_web_search = False
+            self.assertFalse(can_web_search("default"))
+
+
+class AnthropicWebSearchTests(TestCase):
+    def _adapter(self):
+        return AnthropicAdapter({"api_key": "test", "model": "claude-sonnet-4-6"})
+
+    def test_concats_text_and_collects_sources(self):
+        adapter = self._adapter()
+        text_block = _Block(
+            type="text",
+            text="Acme builds rockets.",
+            citations=[_Block(url="https://acme.com/about")],
+        )
+        ws_block = _Block(
+            type="web_search_tool_result",
+            content=[_Block(url="https://news.example/acme")],
+        )
+        adapter._client = MagicMock()
+        adapter._client.messages.create.return_value = _Block(
+            content=[text_block, ws_block]
+        )
+
+        out = adapter.web_search([{"role": "user", "content": "research Acme"}])
+
+        self.assertEqual(out["text"], "Acme builds rockets.")
+        self.assertIn("https://acme.com/about", out["sources"])
+        self.assertIn("https://news.example/acme", out["sources"])
+
+    def test_requests_the_web_search_tool(self):
+        adapter = self._adapter()
+        adapter._client = MagicMock()
+        adapter._client.messages.create.return_value = _Block(
+            content=[_Block(type="text", text="x", citations=[])]
+        )
+        adapter.web_search([{"role": "user", "content": "q"}])
+        kwargs = adapter._client.messages.create.call_args.kwargs
+        self.assertTrue(any(t.get("name") == "web_search" for t in kwargs["tools"]))
+
+    def test_dedupes_sources_preserving_order(self):
+        adapter = self._adapter()
+        adapter._client = MagicMock()
+        block = _Block(
+            type="text",
+            text="t",
+            citations=[_Block(url="https://a"), _Block(url="https://a")],
+        )
+        adapter._client.messages.create.return_value = _Block(content=[block])
+        out = adapter.web_search([{"role": "user", "content": "q"}])
+        self.assertEqual(out["sources"], ["https://a"])

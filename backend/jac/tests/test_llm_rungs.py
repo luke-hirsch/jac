@@ -11,6 +11,8 @@ from jac.llm_prompts import (
     Embed,
     FaithfulnessCheck,
     Instruct,
+    ParagraphGroundingCheck,
+    PersonalParagraphWriter,
     TheAnalyst,
     TheJudge,
 )
@@ -327,3 +329,59 @@ class FaithfulnessCheckParseTests(TestCase):
             self.assertEqual(
                 self._check().critique(), {"count": 1, "claims": ["Fake cert"]}
             )
+
+
+class PersonalParagraphWriterTests(TestCase):
+    def test_returns_prose_with_both_dossiers(self):
+        with patch("jac.llm_prompts.complete", return_value="  I admire Acme.  ") as m:
+            txt = PersonalParagraphWriter(
+                company_dossier="Acme builds X",
+                personality_dossier="Loves building",
+                title="Dev",
+            ).write()
+        self.assertEqual(txt, "I admire Acme.")
+        m.assert_called_once()
+
+    def test_empty_without_company_dossier(self):
+        with patch("jac.llm_prompts.complete") as m:
+            txt = PersonalParagraphWriter(
+                company_dossier="", personality_dossier="P"
+            ).write()
+        self.assertEqual(txt, "")
+        m.assert_not_called()
+
+    def test_empty_without_personality_dossier(self):
+        with patch("jac.llm_prompts.complete") as m:
+            txt = PersonalParagraphWriter(
+                company_dossier="C", personality_dossier=""
+            ).write()
+        self.assertEqual(txt, "")
+        m.assert_not_called()
+
+    def test_llm_failure_returns_empty(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
+            txt = PersonalParagraphWriter(
+                company_dossier="C", personality_dossier="P"
+            ).write()
+        self.assertEqual(txt, "")
+
+
+class ParagraphGroundingCheckTests(TestCase):
+    def test_counts_unsupported_claims(self):
+        with patch(
+            "jac.llm_prompts.complete",
+            return_value="UNSUPPORTED 1\n- invented an award",
+        ):
+            out = ParagraphGroundingCheck("para", "C", "P").critique()
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["claims"], ["invented an award"])
+
+    def test_clean_when_zero(self):
+        with patch("jac.llm_prompts.complete", return_value="UNSUPPORTED 0"):
+            out = ParagraphGroundingCheck("para", "C", "P").critique()
+        self.assertEqual(out, {"count": 0, "claims": []})
+
+    def test_failure_is_none_not_zero(self):
+        with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
+            out = ParagraphGroundingCheck("para", "C", "P").critique()
+        self.assertEqual(out, {"count": None, "claims": []})

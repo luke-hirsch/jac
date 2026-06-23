@@ -1,15 +1,17 @@
 """Cover-letter assembly — snippet selection, build, ai_share, grounding."""
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 
-from jac.cover_letter import CoverLetter, SnippetSelector
+from jac.cover_letter import PERSONAL_STUB, CoverLetter, SnippetSelector
 from jac.models import Domain, Job, JobPostAddress, ResumeSnippet
+from jac.research import CompanyResearcher
 
-from ._helpers import _CoverLetterCVMixin
+from ._helpers import _CoverLetterCVMixin, _muted
 
 
 class SnippetSelectorTests(_CoverLetterCVMixin, TestCase):
@@ -320,3 +322,178 @@ class CoverLetterGroundingTests(_CoverLetterCVMixin, TestCase):
         r = self._build(verify=True, complete_returns=[""])
         self.assertEqual(r["grounding"], {"count": 0, "claims": []})
         self.assertIn("I build things.", r["body"])
+
+
+# ===========================================================================
+# Personal paragraph — the research step feeding the cover letter's slot
+# ===========================================================================
+
+
+class CompanyResearcherTests(TestCase):
+    def test_ok_dossier_when_capable(self):
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search",
+            return_value={"text": "Acme builds X.", "sources": ["https://a"]},
+        ):
+            out = CompanyResearcher("Acme", "posting", alias="strong").research()
+        self.assertTrue(out["ok"])
+        self.assertIn("Acme", out["dossier"])
+        self.assertEqual(out["sources"], ["https://a"])
+
+    def test_empty_company_skips(self):
+        with patch("jac.research.can_web_search") as cap, patch(
+            "jac.research.web_search"
+        ) as ws:
+            out = CompanyResearcher("", "posting").research()
+        self.assertFalse(out["ok"])
+        cap.assert_not_called()
+        ws.assert_not_called()
+
+    def test_non_capable_alias_skips_without_call(self):
+        with patch("jac.research.can_web_search", return_value=False), patch(
+            "jac.research.web_search"
+        ) as ws:
+            out = CompanyResearcher("Acme", "p", alias="default").research()
+        self.assertFalse(out["ok"])
+        ws.assert_not_called()
+
+    def test_failure_returns_empty(self):
+        with _muted(), patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search", side_effect=RuntimeError("down")
+        ):
+            out = CompanyResearcher("Acme", "p").research()
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["dossier"], "")
+
+    def test_blank_text_is_not_ok(self):
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search", return_value={"text": "   ", "sources": []}
+        ):
+            out = CompanyResearcher("Acme", "p").research()
+        self.assertFalse(out["ok"])
+
+
+class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            "pp_user", email="me@example.com", first_name="Ada", last_name="Lovelace"
+        )
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Intro", content="I build things.", kind=K.intro
+        )
+        ResumeSnippet.objects.create(
+            user=cls.user,
+            title="Achv",
+            content="Shipped Y.",
+            kind=K.achievement,
+            job=cls.job,
+        )
+        # A cached, fresh personality dossier so ensure_dossier() never calls the distiller here.
+        from spa.models import PersonalityProfile
+
+        prof = PersonalityProfile.objects.get(user=cls.user)
+        prof.answers = {"values": "I value openness."}
+        prof.answers_updated_at = timezone.now() - timedelta(hours=1)
+        prof.dossier = "Ada values openness and craftsmanship."
+        prof.dossier_built_at = timezone.now()
+        prof.save()
+
+    def _build(self, **kw):
+        return CoverLetter(
+            self.user,
+            self._jp(),
+            self._cv(),
+            address=JobPostAddress(company="Acme"),
+            **kw,
+        ).build()
+
+    def test_real_paragraph_when_capable(self):
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search",
+            return_value={"text": "Acme builds rockets.", "sources": ["https://acme"]},
+        ), patch(
+            "jac.llm_prompts.complete",
+            side_effect=["Snippet body.", "I love Acme's mission."],
+        ):
+            r = self._build(grade="strong", personal_paragraph=True)
+        self.assertFalse(r["personal_paragraph_is_stub"])
+        self.assertEqual(r["personal_paragraph"], "I love Acme's mission.")
+        self.assertEqual(r["personal_paragraph_sources"], ["https://acme"])
+        self.assertIn("I love Acme's mission.", r["text"])
+
+    def test_light_grade_always_stubs(self):
+        with patch("jac.research.web_search") as ws, patch(
+            "jac.llm_prompts.complete", return_value="Body."
+        ):
+            r = self._build(grade="light", personal_paragraph=True)
+        self.assertTrue(r["personal_paragraph_is_stub"])
+        self.assertEqual(r["personal_paragraph"], PERSONAL_STUB)
+        self.assertIn(PERSONAL_STUB, r["text"])
+        ws.assert_not_called()  # light never researches
+
+    def test_non_capable_standard_stubs(self):
+        with patch("jac.research.can_web_search", return_value=False), patch(
+            "jac.research.web_search"
+        ) as ws, patch("jac.llm_prompts.complete", return_value="Body."):
+            r = self._build(grade="standard", personal_paragraph=True)
+        self.assertTrue(r["personal_paragraph_is_stub"])
+        ws.assert_not_called()  # capability pre-check short-circuits
+
+    def test_not_requested_leaves_blank(self):
+        with patch("jac.research.web_search") as ws, patch(
+            "jac.llm_prompts.complete", return_value="Body."
+        ):
+            r = self._build(grade="strong", personal_paragraph=False)
+        self.assertEqual(r["personal_paragraph"], "")
+        self.assertFalse(r["personal_paragraph_is_stub"])
+        ws.assert_not_called()
+
+    def test_missing_personality_stubs_before_research(self):
+        other = User.objects.create_user("pp_nopersona")
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search"
+        ) as ws, patch("jac.llm_prompts.complete", return_value="Body."):
+            r = CoverLetter(
+                other,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+                grade="strong",
+                personal_paragraph=True,
+            ).build()
+        self.assertTrue(r["personal_paragraph_is_stub"])
+        ws.assert_not_called()  # personality checked first, no wasted search
+
+    def test_stub_contributes_zero_to_ai_share(self):
+        with patch("jac.llm_prompts.complete", return_value="Snippet body."):
+            baseline = self._build(grade="light", personal_paragraph=False)["ai_share"]
+        with patch("jac.research.web_search"), patch(
+            "jac.llm_prompts.complete", return_value="Snippet body."
+        ):
+            stubbed = self._build(grade="light", personal_paragraph=True)
+        self.assertTrue(stubbed["personal_paragraph_is_stub"])
+        self.assertEqual(stubbed["ai_share"], baseline)
+
+    def test_paragraph_excluded_from_snippet_grounding(self):
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search",
+            return_value={"text": "Acme builds rockets.", "sources": []},
+        ), patch("jac.cover_letter.FaithfulnessCheck") as FC, patch(
+            "jac.llm_prompts.complete",
+            side_effect=["Snippet body.", "I love Acme rockets.", "UNSUPPORTED 0"],
+        ):
+            FC.return_value.critique.return_value = {"count": 0, "claims": []}
+            r = self._build(
+                grade="strong", personal_paragraph=True, verify_grounding=True
+            )
+        body_arg = (
+            FC.call_args.args[0] if FC.call_args.args else FC.call_args.kwargs["body"]
+        )
+        self.assertIn("Snippet body.", body_arg)
+        self.assertNotIn("I love Acme rockets.", body_arg)
+        self.assertEqual(r["personal_paragraph"], "I love Acme rockets.")
