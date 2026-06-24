@@ -5,6 +5,7 @@ const ITEMS = [
   { to: "/account/profile", label: "Profile" },
   { to: "/account/email", label: "Email addresses" },
   { to: "/account/security", label: "Security" },
+  { to: "/account/llm", label: "LLM providers" },
   { to: "/account/danger", label: "Danger zone" },
 ] as const;
 

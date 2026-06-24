@@ -29,6 +29,7 @@ import { Route as AuthenticatedCvEducationRouteImport } from './routes/_authenti
 import { Route as AuthenticatedCvCertificationsRouteImport } from './routes/_authenticated/cv/certifications'
 import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
 import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
+import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authenticated/account/llm'
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
 import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
 
@@ -136,6 +137,11 @@ const AuthenticatedAccountProfileRoute =
     path: '/profile',
     getParentRoute: () => AuthenticatedAccountRoute,
   } as any)
+const AuthenticatedAccountLlmRoute = AuthenticatedAccountLlmRouteImport.update({
+  id: '/llm',
+  path: '/llm',
+  getParentRoute: () => AuthenticatedAccountRoute,
+} as any)
 const AuthenticatedAccountEmailRoute =
   AuthenticatedAccountEmailRouteImport.update({
     id: '/email',
@@ -161,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
+  '/account/llm': typeof AuthenticatedAccountLlmRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByTo {
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
+  '/account/llm': typeof AuthenticatedAccountLlmRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
@@ -208,6 +216,7 @@ export interface FileRoutesById {
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
+  '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
   '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
   '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
   '/_authenticated/cv/certifications': typeof AuthenticatedCvCertificationsRoute
@@ -233,6 +242,7 @@ export interface FileRouteTypes {
     | '/auth/verify-email'
     | '/account/danger'
     | '/account/email'
+    | '/account/llm'
     | '/account/profile'
     | '/account/security'
     | '/cv/certifications'
@@ -255,6 +265,7 @@ export interface FileRouteTypes {
     | '/auth/verify-email'
     | '/account/danger'
     | '/account/email'
+    | '/account/llm'
     | '/account/profile'
     | '/account/security'
     | '/cv/certifications'
@@ -279,6 +290,7 @@ export interface FileRouteTypes {
     | '/auth/verify-email'
     | '/_authenticated/account/danger'
     | '/_authenticated/account/email'
+    | '/_authenticated/account/llm'
     | '/_authenticated/account/profile'
     | '/_authenticated/account/security'
     | '/_authenticated/cv/certifications'
@@ -439,6 +451,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountProfileRouteImport
       parentRoute: typeof AuthenticatedAccountRoute
     }
+    '/_authenticated/account/llm': {
+      id: '/_authenticated/account/llm'
+      path: '/llm'
+      fullPath: '/account/llm'
+      preLoaderRoute: typeof AuthenticatedAccountLlmRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
     '/_authenticated/account/email': {
       id: '/_authenticated/account/email'
       path: '/email'
@@ -459,6 +478,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedAccountRouteChildren {
   AuthenticatedAccountDangerRoute: typeof AuthenticatedAccountDangerRoute
   AuthenticatedAccountEmailRoute: typeof AuthenticatedAccountEmailRoute
+  AuthenticatedAccountLlmRoute: typeof AuthenticatedAccountLlmRoute
   AuthenticatedAccountProfileRoute: typeof AuthenticatedAccountProfileRoute
   AuthenticatedAccountSecurityRoute: typeof AuthenticatedAccountSecurityRoute
 }
@@ -466,6 +486,7 @@ interface AuthenticatedAccountRouteChildren {
 const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
   AuthenticatedAccountDangerRoute: AuthenticatedAccountDangerRoute,
   AuthenticatedAccountEmailRoute: AuthenticatedAccountEmailRoute,
+  AuthenticatedAccountLlmRoute: AuthenticatedAccountLlmRoute,
   AuthenticatedAccountProfileRoute: AuthenticatedAccountProfileRoute,
   AuthenticatedAccountSecurityRoute: AuthenticatedAccountSecurityRoute,
 }
