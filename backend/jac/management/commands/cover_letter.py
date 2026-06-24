@@ -90,6 +90,19 @@ class Command(BaseCommand):
             help="LLMConfig alias for the grounding check (default: same as --llm). "
             "Point at a STRONG model — a weak writer cannot fact-check itself.",
         )
+        parser.add_argument(
+            "--personal",
+            action="store_true",
+            help="Add a researched personal paragraph (company research × personality). "
+            "Real only with a web-search-capable model at grade != light; else a loud stub.",
+        )
+        parser.add_argument(
+            "--research-llm",
+            type=str,
+            default=None,
+            help="LLMConfig alias for the company web search (default: same as --llm). "
+            "Must resolve to a web-search-capable provider (anthropic/openai/google).",
+        )
 
     def handle(self, *args, **opts):
         write = self.stdout.write
@@ -141,6 +154,8 @@ class Command(BaseCommand):
                 write,
                 opts["verify"],
                 opts["verifier_llm"],
+                opts["personal"],
+                opts["research_llm"],
             )
 
     def _one(
@@ -155,6 +170,8 @@ class Command(BaseCommand):
         write,
         verify,
         verifier_alias,
+        personal,
+        research_alias,
     ):
         cv = CV(user_pk=user.pk)
         cv.apply_selection(cv.filter_cv(text, grade=grade, alias=alias))
@@ -181,12 +198,15 @@ class Command(BaseCommand):
             alias=alias,
             verify_grounding=verify,
             verifier_alias=verifier_alias,
+            personal_paragraph=personal,
+            research_alias=research_alias,
         ).build()
 
         header_lines = [f"> AI share: {result['ai_share']:.0%}"]
         header_lines.append(self._grounding_line(result["grounding"]))
         for claim in result["grounding"]["claims"]:
             header_lines.append(f">   - {claim}")
+        header_lines.extend(self._personal_lines(result))
         header = "\n".join(header_lines) + "\n\n"
 
         stem = f"{_safe(alias)}__{slug}"
@@ -209,3 +229,17 @@ class Command(BaseCommand):
         if count == 0:
             return "> Grounding: ✓ all claims supported"
         return f"> Grounding: ⚠ {count} unsupported claim(s)"
+
+    def _personal_lines(self, result: dict) -> list[str]:
+        """Header lines for the personal paragraph slot (empty when --personal was off)."""
+        if not (result.get("personal_paragraph_is_stub") or result.get("personal_paragraph")):
+            return []
+        if result["personal_paragraph_is_stub"]:
+            return ["> Personal paragraph: ⚠ STUB — no auto-research, write it by hand"]
+        n = len(result["personal_paragraph_sources"])
+        lines = [f"> Personal paragraph: ✓ ({n} source(s))"]
+        grounding = result["personal_paragraph_grounding"]
+        lines.append(self._grounding_line(grounding).replace("> Grounding:", "> Paragraph grounding:"))
+        for claim in grounding["claims"]:
+            lines.append(f">   - {claim}")
+        return lines

@@ -24,8 +24,17 @@ Roadmap: sub-item under #1 (frontend render of CV + cover letter), extending the
 cover-letter backend.
 
 Decisions (from planning): research engine = AI-only, **provider-native web search** exposed as a
-`web_search` capability on the connector, **not hardcoded to Anthropic** — adapters carry a
-`supports_web_search` flag (Anthropic is the first to flip it `True`).
+`web_search` capability on the connector, **not hardcoded to one provider** — adapters carry a
+`supports_web_search` flag. **Anthropic, OpenAI, and Google all flip it `True`**: Anthropic via its
+server-side `web_search` tool on `messages.create`; OpenAI via the **Responses API**
+(`responses.create`) `web_search` tool — recommended on `gpt-5.x` with `reasoning_effort="high"`
+(`gpt-5` with `minimal` reasoning is unsupported for web search); Google via Gemini's **Google Search
+grounding** tool (sources come from `candidates[].grounding_metadata.grounding_chunks[].web.uri`). (Ollama / open-source web search is
+deliberately **out of scope here**: a "web-search-capable" local model still doesn't search by itself
+— it only knows how to *call* a search tool, so it needs a search backend. Ollama's own backend is a
+hosted cloud API + key, which doesn't prove the self-hosted thesis. Doing it properly — a tool loop
+wiring a self-hostable model to a *self-hostable* search backend — is its own roadmap item (see Notes
+/ deferred). Until then a self-hosted standard run simply stubs, which the flow already handles.)
 
 The paragraph slot is **opt-in (`--personal`) but capability-driven, not grade-gated**: it's filled
 with a real, researched paragraph **only when the selected model can actually search the web**;
@@ -86,6 +95,12 @@ _ai_share: real paragraph words count as AI; a STUB counts 0
   `supports_web_search = False` class flag.
 - `backend/llm_connector/providers/anthropic.py` — implement `web_search()` (server-side tool;
   concat text blocks, collect citation/result URLs) + `supports_web_search = True`.
+- `backend/llm_connector/providers/openai.py` — implement `web_search()` via the **Responses API**
+  (`responses.create` with the `web_search` tool; collect `url_citation` annotation URLs) +
+  `supports_web_search = True`.
+- `backend/llm_connector/providers/google.py` — implement `web_search()` with Gemini's **Google
+  Search grounding** tool (legacy `google-generativeai` SDK; collect
+  `grounding_metadata.grounding_chunks[].web.uri`) + `supports_web_search = True`.
 - `backend/llm_connector/client.py` — `LLMClient.web_search()` (delegate + log like `complete`) +
   a `supports_web_search` property.
 - `backend/llm_connector/__init__.py` — module-level `web_search()` + `can_web_search()` shorthands.
@@ -158,6 +173,119 @@ def web_search(self, messages: list[dict], **kwargs) -> dict:
 > The existing `complete()` reads only `content[0].text`; with web search the response is a *list*
 > of blocks (text + `server_tool_use` + `web_search_tool_result`), so this needs its own method
 > rather than passing `tools=` through `complete()`.
+
+### 2b. `llm_connector/providers/openai.py` — implement it via the Responses API + set the flag
+
+The existing adapter speaks **Chat Completions** (`chat.completions.create`), but OpenAI's web search
+is a **Responses-API** server-side tool — not available on chat.completions for general models. So
+`web_search()` calls `self._client.responses.create` (the same `OpenAI()` instance exposes both).
+Set `supports_web_search = True` as a class attribute on `OpenAIAdapter`, then:
+
+```python
+def web_search(self, messages: list[dict], **kwargs) -> dict:
+    """Run a completion with OpenAI's native web search (Responses API).
+
+    Web search is a Responses-API server-side tool, not available on chat.completions
+    for general models — hence responses.create here, not the complete() path. For
+    gpt-5.x set reasoning_effort='high' in the LLMConfig (recommended for web search;
+    gpt-5 with 'minimal' reasoning is unsupported).
+    """
+    effort = kwargs.pop("reasoning_effort", self._reasoning_effort)
+    params: dict = dict(
+        model=self._model,
+        input=messages,                       # Responses API takes `input`, not `messages`
+        tools=[{"type": "web_search"}],
+        **kwargs,
+    )
+    if self._max_tokens:
+        params.setdefault("max_output_tokens", self._max_tokens)
+    if effort:
+        params.setdefault("reasoning", {"effort": effort})   # gpt-5.x reasoning models only
+    response = self._client.responses.create(**params)
+
+    sources: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for block in getattr(item, "content", None) or []:
+            for ann in getattr(block, "annotations", None) or []:
+                if getattr(ann, "type", None) == "url_citation":
+                    url = getattr(ann, "url", None)
+                    if url:
+                        sources.append(url)
+    return {
+        "text": (getattr(response, "output_text", "") or "").strip(),
+        "sources": list(dict.fromkeys(sources)),   # dedupe, keep order
+    }
+```
+
+> The Responses API returns `output` as a *list* of items; the `message` item's `content` blocks
+> carry `url_citation` annotations (`.url`, `.title`). `response.output_text` is the SDK's
+> convenience concat of the text blocks — use it for the prose, walk `output` for the citation URLs.
+> `reasoning_effort` is sent only when configured (as `reasoning={"effort": …}`), so non-reasoning
+> web-search models (`gpt-4.1`, `gpt-4.1-mini`) still work — just leave it unset for those.
+
+### 2c. `llm_connector/providers/google.py` — implement it with Gemini Search grounding + set the flag
+
+Web search *is* Google's home turf — Gemini exposes it as the **Google Search grounding** tool. The
+existing adapter uses the legacy `google-generativeai` SDK (`GenerativeModel` + `start_chat`), so
+`web_search()` mirrors `complete()` but attaches the grounding tool and harvests source URLs from the
+response's `grounding_metadata`. First widen `_make_model` to accept tools:
+
+```python
+def _make_model(self, system: str | None, tools=None):
+    """Construct a GenerativeModel with optional system instruction, token cap, and tools."""
+    kwargs = {"model_name": self._model_name}
+    if system:
+        kwargs["system_instruction"] = system
+    if self._max_tokens:
+        import google.generativeai.types as gtypes
+        kwargs["generation_config"] = gtypes.GenerationConfig(max_output_tokens=self._max_tokens)
+    if tools is not None:
+        kwargs["tools"] = tools
+    return self._genai.GenerativeModel(**kwargs)
+```
+
+Then set `supports_web_search = True` as a class attribute on `GoogleAdapter` and add:
+
+```python
+# Gemini 2.x grounding tool. (Gemini 1.5 uses the dynamic-retrieval variant
+# "google_search_retrieval"; override via the `search_tool` config key if needed.)
+def web_search(self, messages: list[dict], **kwargs) -> dict:
+    """Run a completion grounded with Google Search (Gemini). Returns {"text", "sources"}.
+
+    Uses the legacy google-generativeai SDK to match complete(); sources come from each
+    candidate's grounding_metadata.grounding_chunks[].web.uri.
+    """
+    tool = self.config.get("search_tool", "google_search")
+    history, system = _to_google_messages(messages)
+    model = self._make_model(system, tools=tool)
+    last = history.pop()
+    chat = model.start_chat(history=history)
+    response = chat.send_message(last["parts"][0], **kwargs)
+
+    sources: list[str] = []
+    for cand in getattr(response, "candidates", None) or []:
+        meta = getattr(cand, "grounding_metadata", None)
+        for chunk in getattr(meta, "grounding_chunks", None) or []:
+            web = getattr(chunk, "web", None)
+            uri = getattr(web, "uri", None)
+            if uri:
+                sources.append(uri)
+    return {
+        "text": (getattr(response, "text", "") or "").strip(),
+        "sources": list(dict.fromkeys(sources)),  # dedupe, keep order
+    }
+```
+
+> Grounding metadata lives on each *candidate* (`response.candidates[i].grounding_metadata`), not at
+> the top level — `grounding_chunks[].web.uri` (+ `.web.title`) are the cited pages. `response.text`
+> still gives the woven prose. The grounding URLs are often Vertex redirect links
+> (`vertexaisearch.cloud.google.com/...`) rather than raw publisher URLs — fine as sources, just
+> don't assume they're the bare domain. **SDK caveat:** this targets the legacy
+> `google-generativeai` package the repo uses today; the newer `google-genai` client changes both
+> the tool config (`types.Tool(google_search=types.GoogleSearch())`) and the traversal — revisit if
+> the project migrates SDKs.
 
 ### 3. `llm_connector/client.py` — `LLMClient.web_search()`
 
@@ -347,7 +475,7 @@ class ParagraphGroundingCheck:
         except Exception:
             logger.exception("ParagraphGroundingCheck: LLM call failed")
             return {"count": None, "claims": []}
-        return self._parse(raw)
+        return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
 
     def _prompt(self) -> str:
         return (
@@ -356,11 +484,44 @@ class ParagraphGroundingCheck:
             f"PERSONALITY:\n{self.personality_dossier or '(none)'}\n\n"
             f"PARAGRAPH:\n{self.paragraph}\n\nAUDIT:"
         )
-
-    # _parse: identical to FaithfulnessCheck._parse. Lift that body into a module-level
-    # `_parse_unsupported(raw, count_re, claim_re) -> dict` and have BOTH classes call it, so the
-    # "None never 0" rule (see cover-letter-grounding-metric memory) lives in one place.
 ```
+
+> **`_parse` is NOT inherited — define the shared parser, or `critique()` raises `AttributeError`.**
+> `ParagraphGroundingCheck` subclasses nothing, so there is no `_parse` to call. Lift the body of the
+> existing `FaithfulnessCheck._parse` into one **module-level** function and have *both* audits call
+> it — so the "listed-claims-win / only-explicit-0-is-clean / else-None" honesty rule (see
+> [[cover-letter-grounding-metric]]) lives in exactly one place:
+>
+> ```python
+> def _parse_unsupported(raw: str, count_re, claim_re) -> dict:
+>     """Parse a line-format faithfulness audit into {'count': int | None, 'claims': [str]}.
+>
+>     Honesty rule: listed claim lines win (trust their length over the declared n); only an
+>     explicit 'UNSUPPORTED 0' is a clean verdict; anything unreadable -> count=None ('not
+>     checked'), never 0.
+>     """
+>     text = raw or ""
+>     cm = count_re.search(text)
+>     claims: list[str] = []
+>     for line in text.splitlines():
+>         if count_re.search(line):          # don't read the count line as a claim
+>             continue
+>         m = claim_re.match(line)
+>         if m:
+>             claims.append(m.group(1).strip()[:200])
+>     if claims:
+>         return {"count": len(claims), "claims": claims}
+>     if cm and cm.group(1) == "0":
+>         return {"count": 0, "claims": []}
+>     return {"count": None, "claims": []}
+> ```
+>
+> Then **change `FaithfulnessCheck.critique()` too**: replace its `return self._parse(raw)` with
+> `return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)` and delete the now-duplicated
+> `FaithfulnessCheck._parse`. Both classes keep their own `_COUNT_RE`/`_CLAIM_RE` (identical), so the
+> only shared thing is the parse logic. (If you'd rather not touch the shipped `FaithfulnessCheck`,
+> the minimal alternative is to give `ParagraphGroundingCheck` its own `_parse` copied verbatim — but
+> that duplicates the honesty rule, which is exactly what the memory warns against.)
 
 ### 7. `jac/cover_letter.py` — integration
 
@@ -488,8 +649,12 @@ add one of:
 
 On disk (red), split by topic across the per-app `tests/` packages — **not** a single feature file
 (see the test-package convention). Covers:
-- `llm_connector/tests/test_adapters.py` — `WebSearchCapabilityTests` + `AnthropicWebSearchTests`:
-  `web_search()` parsing + tool request (SDK mocked); `supports_web_search` True; base adapter flag
+- `llm_connector/tests/test_adapters.py` — `WebSearchCapabilityTests` + `AnthropicWebSearchTests` +
+  `OpenAIWebSearchTests` + `GoogleWebSearchTests`: `web_search()` parsing + tool request (SDK mocked
+  — Anthropic via `messages.create`, OpenAI via `responses.create`, Google via
+  `GenerativeModel`/`start_chat`/`send_message` with the `google_search` tool, sources from
+  `grounding_metadata.grounding_chunks[].web.uri`); `supports_web_search` True on all three adapters;
+  OpenAI forwards a configured `reasoning_effort` as `reasoning={"effort": …}`; base adapter flag
   False + `web_search` raises `NotImplementedError`; `can_web_search()` reflects the flag.
 - `jac/tests/test_llm_rungs.py` — `PersonalParagraphWriterTests` + `ParagraphGroundingCheckTests`
   (`jac.llm_prompts` classes; None-never-0 rule).
@@ -508,8 +673,10 @@ cd backend && python manage.py test jac llm_connector
 ## Verification (end-to-end, human)
 
 1. Prerequisite guide done + migrated; the questionnaire is filled and produces a dossier.
-2. A web-search-capable alias, e.g.
-   `LLMConfig(alias="strong", provider="anthropic", model="claude-sonnet-4-6", api_key=…)`.
+2. A web-search-capable alias — any of
+   `LLMConfig(alias="strong", provider="anthropic", model="claude-sonnet-4-6", api_key=…)`,
+   `LLMConfig(alias="strong", provider="openai", model="gpt-5.4", reasoning_effort="high", api_key=…)`,
+   or `LLMConfig(alias="strong", provider="google", model="gemini-2.5-pro", api_key=…)`.
 3. **Real path:** `python manage.py cover_letter --user 1 --job-file data/test_job.md --grade strong \
    --llm strong --personal --research-llm strong --verify` →
    the `.cover.md` has a company-specific paragraph after the snippet body; header shows
@@ -527,3 +694,11 @@ cd backend && python manage.py test jac llm_connector
   sources/grounding badge — separate guide; the API dict already carries everything.
 - **Cost** — a real paragraph = 1 search + 1 write call (+1 verify); stub paths cost nothing
   (no LLM call). Opt-in via `--personal`.
+- **Open-source / self-hosted web search** (own roadmap item, parked): let a self-hosted standard
+  run produce a *real* paragraph by wiring a tool-capable local model (qwen3, gpt-oss, the
+  Ollama "web search" models) to a **self-hostable search backend** (SearXNG / Tavily / Brave /
+  Firecrawl-style) via a tool-calling loop — folding in the parked `scraper` app. Ollama's own
+  hosted `/api/web_search` (cloud + `OLLAMA_API_KEY`, free tier) is the quick alternative but is
+  *cloud* search, so it doesn't prove the self-hosted thesis — hence a dedicated agent later, not a
+  flag flip here. Adapter `supports_web_search` stays `False` for `ollama`/`custom` until then. See
+  [[project-purpose-cv-showcase]].

@@ -54,3 +54,17 @@ def embed(
     Only providers with an embedding endpoint support this (today: Ollama).
     """
     return get_client(alias, user=user).embed(inputs)
+
+
+def web_search(
+    prompt=None, *, messages=None, alias="default", user=None, **kwargs
+) -> dict:
+    """Run a single web-search-backed completion. {"text": str, "sources": [str]}."""
+    return get_client(alias, user=user).web_search(
+        prompt=prompt, messages=messages, **kwargs
+    )
+
+
+def can_web_search(alias="default", user=None) -> bool:
+    """True if the alias resolves to a provider with native web search (no call made)."""
+    return get_client(alias, user=user).supports_web_search

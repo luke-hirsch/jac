@@ -10,6 +10,8 @@ class LLMAdapter(ABC):
     layer handles logging and user resolution; adapters focus on the HTTP call.
     """
 
+    supports_web_search: bool = False
+
     def __init__(self, config: dict):
         self.config = config
 
@@ -38,3 +40,12 @@ class LLMAdapter(ABC):
         NotImplementedError otherwise.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support embeddings.")
+
+    def web_search(self, messages: list[dict], **kwargs) -> dict:
+        """Run a completion with provider-native web search.
+
+        Optional capability — only providers with supports_web_search = True implement it.
+        Returns {"text": str, "sources": [str]}. Raises NotImplementedError otherwise (mirrors
+        embed()); the flag is the clean pre-check, this is the backstop.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support web search.")

@@ -15,6 +15,7 @@ from jac.llm_prompts import (
     PersonalParagraphWriter,
     TheAnalyst,
     TheJudge,
+    _parse_unsupported,
 )
 
 from ._helpers import _muted, _entry, _StubSnippet
@@ -278,43 +279,46 @@ class CoverLetterWriterPromptTests(TestCase):
 
 
 class FaithfulnessCheckParseTests(TestCase):
-    """FaithfulnessCheck._parse / .critique: tolerant line parsing, honest failure default."""
+    """_parse_unsupported / FaithfulnessCheck.critique: tolerant line parsing, honest failure
+    default. The parse logic is shared (module-level _parse_unsupported), driven by the class's
+    own UNSUPPORTED/claim regexes."""
 
     def _check(self):
         return FaithfulnessCheck("some body", [_StubSnippet("A", "I ship code.")])
 
-    def test_clean_verdict_is_zero(self):
-        self.assertEqual(
-            self._check()._parse("UNSUPPORTED 0"), {"count": 0, "claims": []}
+    def _parse(self, raw):
+        return _parse_unsupported(
+            raw, FaithfulnessCheck._COUNT_RE, FaithfulnessCheck._CLAIM_RE
         )
+
+    def test_clean_verdict_is_zero(self):
+        self.assertEqual(self._parse("UNSUPPORTED 0"), {"count": 0, "claims": []})
 
     def test_lists_claims_and_counts_them(self):
         raw = "UNSUPPORTED 2\n- Led a team of 10\n- Increased revenue 30%"
         self.assertEqual(
-            self._check()._parse(raw),
+            self._parse(raw),
             {"count": 2, "claims": ["Led a team of 10", "Increased revenue 30%"]},
         )
 
     def test_trusts_listed_claims_over_declared_count(self):
         # declared 1 but two bullets present -> the bullets win.
         raw = "UNSUPPORTED 1\n- claim a\n* claim b"
-        self.assertEqual(self._check()._parse(raw)["count"], 2)
+        self.assertEqual(self._parse(raw)["count"], 2)
 
     def test_tolerates_markdown_and_prose(self):
         raw = "Here is the audit:\nUNSUPPORTED 1\n1. Managed a 5M budget\nDone."
         self.assertEqual(
-            self._check()._parse(raw), {"count": 1, "claims": ["Managed a 5M budget"]}
+            self._parse(raw), {"count": 1, "claims": ["Managed a 5M budget"]}
         )
 
     def test_positive_count_but_no_claims_is_not_checked(self):
         # truncated reply: count says 2 but no bullets parsed -> None, never a false 0.
-        self.assertEqual(
-            self._check()._parse("UNSUPPORTED 2"), {"count": None, "claims": []}
-        )
+        self.assertEqual(self._parse("UNSUPPORTED 2"), {"count": None, "claims": []})
 
     def test_garbage_is_not_checked(self):
         self.assertEqual(
-            self._check()._parse("the letter looks fine to me"),
+            self._parse("the letter looks fine to me"),
             {"count": None, "claims": []},
         )
 

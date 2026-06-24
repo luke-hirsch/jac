@@ -135,3 +135,28 @@ class LLMClient:
         auditing. Raises NotImplementedError for providers without an embed endpoint.
         """
         return self._adapter.embed(inputs)
+
+    def web_search(
+        self, prompt: str | None = None, *, messages: list[dict] | None = None, **kwargs
+    ) -> dict:
+        """Run a web-search-backed completion. Returns {"text": str, "sources": [str]}."""
+        msgs = _normalise_messages(prompt, messages)
+        start = time.monotonic()
+        error_text = ""
+        result: dict = {"text": "", "sources": []}
+        try:
+            result = self._adapter.web_search(msgs, **kwargs)
+            return result
+        except Exception as exc:
+            error_text = str(exc)
+            raise
+        finally:
+            latency_ms = int((time.monotonic() - start) * 1000)
+            if logging_enabled():
+                self._write_log(
+                    msgs, result.get("text", ""), error_text, None, None, latency_ms
+                )
+
+    @property
+    def supports_web_search(self) -> bool:
+        return getattr(self._adapter, "supports_web_search", False)

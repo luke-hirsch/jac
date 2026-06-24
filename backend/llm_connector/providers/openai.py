@@ -17,6 +17,8 @@ class OpenAIAdapter(LLMAdapter):
     instead of max_tokens and forwards reasoning_effort when configured.
     """
 
+    supports_web_search = True
+
     def __init__(self, config: dict):
         super().__init__(config)
         try:
@@ -44,7 +46,9 @@ class OpenAIAdapter(LLMAdapter):
     def _apply_model_params(self, params: dict) -> None:
         """Inject token-limit and reasoning-effort params appropriate for the model family."""
         if self._max_tokens:
-            key = "max_completion_tokens" if self._is_reasoning_model() else "max_tokens"
+            key = (
+                "max_completion_tokens" if self._is_reasoning_model() else "max_tokens"
+            )
             params.setdefault(key, self._max_tokens)
         if self._reasoning_effort and self._is_reasoning_model():
             params.setdefault("reasoning_effort", self._reasoning_effort)
@@ -68,3 +72,42 @@ class OpenAIAdapter(LLMAdapter):
         if usage:
             return usage.prompt_tokens, usage.completion_tokens
         return None, None
+
+    def web_search(self, messages: list[dict], **kwargs) -> dict:
+        """Run a completion with OpenAI's native web search (Responses API).
+
+        Web search is a Responses-API server-side tool, not available on chat.completions
+        for general models — hence responses.create here, not the complete() path. For
+        gpt-5.x set reasoning_effort='high' in the LLMConfig (recommended for web search;
+        gpt-5 with 'minimal' reasoning is unsupported).
+        """
+        effort = kwargs.pop("reasoning_effort", self._reasoning_effort)
+        kwargs.pop("max_uses", None)  # Anthropic-only search cap; not a Responses-API param
+        params: dict = dict(
+            model=self._model,
+            input=messages,  # Responses API takes `input`, not `messages`
+            tools=[{"type": "web_search"}],
+            **kwargs,
+        )
+        if self._max_tokens:
+            params.setdefault("max_output_tokens", self._max_tokens)
+        if effort:
+            params.setdefault(
+                "reasoning", {"effort": effort}
+            )  # gpt-5.x reasoning models only
+        response = self._client.responses.create(**params)
+
+        sources: list[str] = []
+        for item in getattr(response, "output", None) or []:
+            if getattr(item, "type", None) != "message":
+                continue
+            for block in getattr(item, "content", None) or []:
+                for ann in getattr(block, "annotations", None) or []:
+                    if getattr(ann, "type", None) == "url_citation":
+                        url = getattr(ann, "url", None)
+                        if url:
+                            sources.append(url)
+        return {
+            "text": (getattr(response, "output_text", "") or "").strip(),
+            "sources": list(dict.fromkeys(sources)),  # dedupe, keep order
+        }

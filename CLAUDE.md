@@ -38,58 +38,36 @@ don't maintain a deep file tree here — it drifts. open the dir.
 
 # current state
 
-shipped:
-- auth / MFA flow (backend + frontend).
-- jac: career-DB models (`Domain`, `Location`, `Skill`, `Job`, `Project`, `Education`,
-  `Certification`, `Language`, `ResumeSnippet`), full CRUD API + serializers, frontend CRUD UI.
-- `llm_connector`: multi-provider connector, per-user configs, native Ollama provider with `embed()`.
-
-- jac CV pipeline (`backend/jac/cv.py`, `filter.py`): `CV` loads/flattens career entries (each
-  carries a `refs` edge list); `CVFilter` is the selection layer. The `light` rung (`Embed`) does
-  propagation + per-section *floor + min-keep* drop; the `standard` rung (`Instruct`) does
-  keep-by-verdict on LLM relevance labels (`_select_ranked`). The chosen **alias** threads through
-  the pipeline (`filter_cv(alias=…)` → `CVFilter` → `Embed`/`Instruct`), so the LLM rungs use the
-  picked model and `light` embeds with that model's `embed_model`. Per-embedder cosine floors are
-  overridable via an `embed_floors` config key (merged over `_SECTION_POLICY` defaults).
-- jac eval tooling: `cv_test` / `cv_eval` management commands. `cv_eval` picks the model+grade via a
-  matrix (`--llm <alias>` and/or `--grade`; grade auto-detects from model strength when omitted, or
-  fans out over **all** configured models at a forced grade); `--all-models` runs every configured
-  model at its own grade **plus** the `default` embedding baseline; with no selection flag in a
-  terminal (or `--pick`) it opens an interactive questionnaire (models / grade / analysis). Output:
-  per-model tables in `findings.md` (colour-graded one-page targets) + per-model artifacts.
-  `--analyze` adds an AI layer (`llm_prompts.TheJudge` grades each run's kept-vs-dropped selection;
-  `TheAnalyst` writes a cross-model summary into `findings.md`), run under a fixed strong `--analyst`
-  alias. `get_alias_strength` autodetects embedders → `light`.
-- jac: **favourite** flag on every `CvEntry` — pins an entry for a small post-propagation ranking
-  nudge (`CVFilter._FAVOURITE_BONUS`, kept below the lowest section floor so it can't resurrect a
-  ~0-scored entry), capped per type (`CvEntry.FAVOURITE_LIMIT`, enforced in `model.clean` + a
-  serializer mixin). Wired through the API + CRUD UI (editor toggle + sortable star column).
-
-- jac CV ladder — **all three rungs done**. `strong` (`Conversational`, `llm_prompts.py`) reads the
-  posting + every entry and returns an *ordered, chosen set* (`<id> — <why>` lines, best first), not
-  scores; `CVFilter._select_holistic` applies guardrails only (pin favourites, hold `min_keep`, never
-  drop languages — no floors / propagation / count clamp). `output()` routes strong → standard →
-  light, each degrading to the next on empty.
-
-- jac cover-letter pipeline (`backend/jac/cover_letter.py`): `SnippetSelector` picks 1 intro / 1
-  closing / up-to-N body snippets from `ResumeSnippet` boilerplate by relevance to the filtered CV
-  (relevance-dominant, with a native-language tie-break that reorders but never resurrects a
-  0-score snippet); `CoverLetterWriter` (`llm_prompts.py`, writer `llama3.2:1b`) only *weaves*;
-  `CoverLetter.build()` assembles bilingual furniture (`de`/`en`) around the body and computes a
-  per-letter **`ai_share`** provenance metric (`_ai_share`: length-weighted native-vs-translated +
-  a per-grade rewrite tax). `ResumeSnippet.language` flag + a `load_snippets` seeder (DE/EN pairs).
-  `JobPosting` + `JobPostAddress` models hold the posting + `AddressExtract`-parsed employer block;
-  `cover_letter` management command smoke-tests over a corpus.
-- jac cover-letter **grounding** (`llm_prompts.FaithfulnessCheck`): the job posting is now **stripped
-  from `CoverLetterWriter`** (the main fabrication vector — a weak model mirrored the posting's
-  wish-list back as the candidate's facts; the writer weaves authored snippets only). A separate
-  opt-in `FaithfulnessCheck` (line-format, mirrors `TheJudge`) reads the woven body + snippets (never
-  the posting) and lists unsupported claims; `CoverLetter._grounding` returns `{count, claims}` with
-  the honesty rule **`count=None` on any audit failure, never `0`** (raw-fallback body → `0` without
-  an LLM call; no snippets → `None`). Run under a strong `--verifier-llm`; the `cover_letter` command
-  surfaces it beside `ai_share` (`✓ all claims supported` / `⚠ N unsupported claim(s)` / `not
-  checked`). `ai_share` = provenance; grounding = faithfulness — orthogonal axes. See
-  [[cover-letter-grounding-metric]]. *(All cover-letter work merged to `main`.)*
+shipped (lean inventory — mechanism + *why* live in the code and the linked memories, not here):
+- **auth / MFA** — full flow, backend + frontend.
+- **jac career DB** — models (`Domain`, `Location`, `Skill`, `Job`, `Project`, `Education`,
+  `Certification`, `Language`, `ResumeSnippet`) + full CRUD API/serializers + frontend UI.
+- **`llm_connector`** — multi-provider connector (Anthropic, OpenAI, Google, Ollama, custom),
+  per-user Fernet-encrypted configs. Optional capabilities gated by class flags: `embed()` (Ollama)
+  and `web_search()`/`supports_web_search` (Anthropic; OpenAI via Responses API; Google via Gemini
+  grounding). All LLM I/O is line-format, not JSON. See [[no-json-llm-io]].
+- **jac CV pipeline** (`cv.py`, `filter.py`) — `CV` flattens entries (`refs` edges); `CVFilter`
+  selects across **three rungs**: `light` (`Embed` → propagation + per-section floor/min-keep),
+  `standard` (`Instruct` 0–3 labels → keep-by-verdict), `strong` (`Conversational` → holistic ordered
+  set, guardrails only); `output()` degrades strong→standard→light. Alias threads through;
+  `embed_floors` overridable; **favourite** flag = small capped ranking nudge. See [[project_jac]],
+  [[selection-size-is-intentional]].
+- **jac eval tooling** — `cv_test` / `cv_eval` commands (model×grade matrix, `--all-models`,
+  interactive pick, colour-graded `findings.md` artifacts; `--analyze` → `TheJudge` + `TheAnalyst`).
+- **jac cover-letter** (`cover_letter.py`, `llm_prompts.py`) — `SnippetSelector` picks intro/body/
+  closing `ResumeSnippet`s by relevance; `CoverLetterWriter` only *weaves* (posting stripped — the
+  fabrication vector); bilingual `de`/`en` furniture; `JobPosting`/`JobPostAddress` +
+  `AddressExtract`. Two orthogonal metrics: **`ai_share`** (provenance) and **`FaithfulnessCheck`**
+  grounding (`count=None` on failure, never 0). `cover_letter` command smoke-tests a corpus.
+  See [[cover-letter-language-strategy]], [[cover-letter-grounding-metric]].
+- **spa personality questionnaire** (`PersonalityProfile`) — ~5-of-12 oblique free-text answers
+  (≤280 chars) distilled into one cached `dossier` (`ensure_dossier`, rebuilt only on change).
+- **jac cover-letter personal paragraph** (`cover_letter.py` `_personal_paragraph`, `research.py`,
+  `PersonalParagraphWriter`) — one researched, company-specific paragraph (web research × personality
+  dossier) after the body. Opt-in (`--personal`), **capability-driven not grade-gated**: real only
+  when grade≠light + alias can web-search + research ok + personality present, else a loud
+  `PERSONAL_STUB`. Own `ParagraphGroundingCheck`; words fold into `ai_share`. *(Tests green; live LLM
+  verification pending.)* See [[project-purpose-cv-showcase]].
 
 # roadmap
 
@@ -98,8 +76,16 @@ shipped:
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
 1. **frontend render** of the tailored CV + cover letter — render `grounding` next to `ai_share`
-   (green ✓ / amber "N claims" badge with the claim list on hover; the API dict already carries it).
+   (green ✓ / amber "N claims" badge with the claim list on hover) **and the `personal_paragraph`**
+   (real vs `is_stub` styled distinctly, with its sources + own grounding badge). The API dict
+   already carries everything.
 2. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+3. **self-hosted web-search agent** (parked) — let a self-hosted *standard* run produce a real
+   personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
+   (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
+   app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
+   stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
+   prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
 
 > **Cover-letter generation — done.** Selection (`SnippetSelector`) + writer (`CoverLetterWriter`,
 > posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to

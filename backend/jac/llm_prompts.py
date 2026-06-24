@@ -7,6 +7,29 @@ from llm_connector import complete, embed
 logger = logging.getLogger(__name__)
 
 
+def _parse_unsupported(raw: str, count_re, claim_re) -> dict:
+    """Parse a line-format faithfulness audit into {'count': int | None, 'claims': [str]}.
+
+    Shared by FaithfulnessCheck (snippets) and ParagraphGroundingCheck (research + personality).
+    Honesty rule: listed claim lines win (trust their length over the declared n); only an explicit
+    'UNSUPPORTED 0' is a clean verdict; anything unreadable -> count=None ('not checked'), never 0.
+    """
+    text = raw or ""
+    cm = count_re.search(text)
+    claims: list[str] = []
+    for line in text.splitlines():
+        if count_re.search(line):  # don't read the count line as a claim
+            continue
+        m = claim_re.match(line)
+        if m:
+            claims.append(m.group(1).strip()[:200])
+    if claims:
+        return {"count": len(claims), "claims": claims}
+    if cm and cm.group(1) == "0":
+        return {"count": 0, "claims": []}
+    return {"count": None, "claims": []}
+
+
 class Embed:
     _EMBED_INTSTRUCT = (
         "Given a job posting, retrieve the CV entries most relevant to it."
@@ -575,7 +598,7 @@ class FaithfulnessCheck:
         except Exception:
             logger.exception("FaithfulnessCheck: LLM call failed")
             return {"count": None, "claims": []}
-        return self._parse(raw)
+        return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
 
     def _prompt(self) -> str:
         blocks = (
@@ -592,23 +615,107 @@ class FaithfulnessCheck:
             f"AUDIT:"
         )
 
-    def _parse(self, raw: str) -> dict:
-        text = raw or ""
-        cm = self._COUNT_RE.search(text)
-        claims: list[str] = []
-        for line in text.splitlines():
-            if self._COUNT_RE.search(line):  # don't read the count line as a claim
-                continue
-            m = self._CLAIM_RE.match(line)
-            if m:
-                claims.append(m.group(1).strip()[:200])
-        if (
-            claims
-        ):  # the listed claims are the truth; trust their length over the declared n
-            return {"count": len(claims), "claims": claims}
-        # No readable claim lines. Only an explicit 'UNSUPPORTED 0' counts as a clean verdict;
-        # a missing count line, or a positive count with no parseable claims (truncated reply),
-        # is an unreadable audit -> not checked.
-        if cm and cm.group(1) == "0":
-            return {"count": 0, "claims": []}
-        return {"count": None, "claims": []}
+
+class PersonalParagraphWriter:
+    """Write ONE cover-letter paragraph on why the candidate is a genuine fit for THIS company.
+
+    Sources: the company research dossier (company facts) + the personality dossier (who they are).
+    The job posting is only light role context. Every company fact must come from RESEARCH, every
+    trait from PERSONALITY — invent nothing. Free prose; any failure -> '' (caller omits it).
+    """
+
+    _INSTRUCTION = (
+        "Write ONE short paragraph (3-5 sentences) for a cover letter: why this candidate is "
+        "personally drawn to and a strong fit for THIS company. Connect a specific thing about the "
+        "company (from RESEARCH) to who the candidate is (from PERSONALITY). Use ONLY facts from "
+        "RESEARCH for company claims and ONLY traits from PERSONALITY for the candidate — invent "
+        "nothing, add no skills/employers/numbers. First person, genuine, not fawning. No salutation, "
+        "no sign-off, no markdown, no headers — just the paragraph."
+    )
+
+    def __init__(
+        self,
+        *,
+        posting_text="",
+        title="",
+        language="en",
+        company_dossier="",
+        personality_dossier="",
+        alias="default",
+        user=None,
+    ):
+        self.posting_text = posting_text
+        self.title = title
+        self.language = language
+        self.company_dossier = company_dossier
+        self.personality_dossier = personality_dossier
+        self.alias = alias
+        self.user = user
+
+    def write(self) -> str:
+        if not self.company_dossier or not self.personality_dossier:
+            return ""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("PersonalParagraphWriter: LLM call failed")
+            return ""
+        return (raw or "").strip()
+
+    def _prompt(self) -> str:
+        return (
+            f"{self._INSTRUCTION}\nWrite in {self.language}.\n\n"
+            f"ROLE: {self.title}\n\n"
+            f"RESEARCH (company facts — the only source for company claims):\n{self.company_dossier}\n\n"
+            f"PERSONALITY (the candidate — the only source for who they are):\n{self.personality_dossier}\n\n"
+            f"PARAGRAPH:"
+        )
+
+
+class ParagraphGroundingCheck:
+    """Faithfulness audit for the personal paragraph. Mirrors FaithfulnessCheck, but the source of
+    truth is RESEARCH + PERSONALITY (never snippets, never the posting). Same line format and the
+    same honesty rule: count=None on any audit failure, never 0."""
+
+    _INSTRUCTION = (
+        "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "
+        "and PERSONALITY (the candidate). A claim is UNSUPPORTED if neither source states or clearly "
+        "implies it. List every unsupported factual claim.\n"
+        "Reply in this EXACT line format, nothing else:\n"
+        "  - first line: 'UNSUPPORTED <n>';\n"
+        "  - then ONE line per claim, '- <claim>' (<=20 words), worst first;\n"
+        "  - if all grounded, write 'UNSUPPORTED 0' and nothing else.\n"
+        "Do not flag tone, opinion, or first-person framing — only checkable facts. No prose, no JSON."
+    )
+    _COUNT_RE = re.compile(r"\bUNSUPPORTED\s+(\d+)\b", re.IGNORECASE)
+    _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
+
+    def __init__(
+        self,
+        paragraph,
+        company_dossier,
+        personality_dossier,
+        user=None,
+        alias="default",
+    ):
+        self.paragraph = paragraph
+        self.company_dossier = company_dossier
+        self.personality_dossier = personality_dossier
+        self.user = user
+        self.alias = alias
+
+    def critique(self) -> dict:
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("ParagraphGroundingCheck: LLM call failed")
+            return {"count": None, "claims": []}
+        return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
+
+    def _prompt(self) -> str:
+        return (
+            f"{self._INSTRUCTION}\n\n"
+            f"RESEARCH:\n{self.company_dossier or '(none)'}\n\n"
+            f"PERSONALITY:\n{self.personality_dossier or '(none)'}\n\n"
+            f"PARAGRAPH:\n{self.paragraph}\n\nAUDIT:"
+        )

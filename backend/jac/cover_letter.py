@@ -14,10 +14,20 @@ import logging
 from django.contrib.auth.models import User
 from django.utils import timezone
 
-from jac.llm_prompts import CoverLetterWriter, FaithfulnessCheck
+from jac.llm_prompts import (
+    CoverLetterWriter,
+    FaithfulnessCheck,
+    ParagraphGroundingCheck,
+    PersonalParagraphWriter,
+)
 from jac.models import ResumeSnippet
+from jac.research import CompanyResearcher
 
 logger = logging.getLogger(__name__)
+
+# Visible placeholder when the machine can't research the company (light grade, a non-web-capable
+# model, no research, or no personality). Deliberately jarring so it can't be sent by accident.
+PERSONAL_STUB = "⚠️⚠️ WRITE A PERSONAL PARAGRAPH YOU LAZY PIECE OF SHIT ⚠️⚠️"
 
 # Language-keyed letter furniture. English is the fallback for any unmapped code.
 _SALUTATION_NAMED = {"en": "Dear {name},", "de": "Sehr geehrte/r {name},"}
@@ -131,6 +141,8 @@ class CoverLetter:
         max_body_snippets: int = 4,
         verify_grounding: bool = False,
         verifier_alias: str | None = None,
+        personal_paragraph: bool = False,
+        research_alias: str | None = None,
     ):
         self.user = user if isinstance(user, User) else User.objects.get(pk=user)
         self.job_posting = job_posting
@@ -147,6 +159,8 @@ class CoverLetter:
         self.max_body_snippets = max_body_snippets
         self.verify_grounding = verify_grounding
         self.verifier_alias = verifier_alias
+        self.personal_paragraph = personal_paragraph
+        self.research_alias = research_alias
 
     def build(self) -> dict:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
@@ -193,6 +207,22 @@ class CoverLetter:
             },
             "grounding": self._grounding(body, sel["ordered"], weave_failed),
         }
+
+        # Personal paragraph: a researched, company-specific paragraph with zero snippet support.
+        # Real only when capable (grade != light, web-search model, research ok, personality
+        # present); otherwise a loud stub. Folds its words into ai_share (it's ~100% AI prose).
+        pp = self._personal_paragraph(language, title)
+        result["personal_paragraph"] = pp["text"]
+        result["personal_paragraph_is_stub"] = pp["is_stub"]
+        result["personal_paragraph_sources"] = pp["sources"]
+        result["personal_paragraph_grounding"] = pp["grounding"]
+        result["ai_share"] = self._ai_share(
+            sel["ordered"],
+            language,
+            body_is_ai_fallback,
+            personal_words=0 if pp["is_stub"] else len(pp["text"].split()),
+        )
+
         result["text"] = self.render_markdown(result)
         return result
 
@@ -289,6 +319,9 @@ class CoverLetter:
         out.append("")
         out.append(r["body"])
         out.append("")
+        if r.get("personal_paragraph"):
+            out.append(r["personal_paragraph"])
+            out.append("")
         out.append(_CLOSING.get(r["language"], _CLOSING["en"]))
         out.append("")
         out.append(snd["name"])
@@ -296,13 +329,15 @@ class CoverLetter:
 
     # How much the writer reshapes even same-language prose, by grade. Native words are
 
-    def _ai_share(self, snippets, language, ai_fallback) -> float:
+    def _ai_share(self, snippets, language, ai_fallback, personal_words=0) -> float:
         """Fraction of the body attributable to the machine, 0.0–1.0.
 
         0.0  = every snippet authored in the posting language, lightly stitched.
         1.0  = no snippets (body fully AI-written) — or all snippets translated at strong grade.
         Heuristic, not exact: the writer melts snippets into prose, so we attribute by source
-        provenance + a per-grade rewrite tax rather than diffing output text.
+        provenance + a per-grade rewrite tax rather than diffing output text. A real personal
+        paragraph is ~100% machine-authored, so its words count as AI in both numerator and
+        denominator; a stub contributes 0 (the caller passes personal_words=0 for it).
         """
         if ai_fallback or not snippets:
             return 1.0
@@ -313,10 +348,10 @@ class CoverLetter:
         trans_w = sum(
             len(s.content.split()) for s in snippets if s.language != language
         )
-        total = native_w + trans_w
+        total = native_w + trans_w + personal_words
         if not total:
             return 1.0
-        ai_w = trans_w + tax * native_w
+        ai_w = trans_w + tax * native_w + personal_words
         return round(ai_w / total, 2)
 
     def _grounding(self, body, snippets, weave_failed) -> dict:
@@ -343,3 +378,80 @@ class CoverLetter:
             alias=self.verifier_alias or self.alias,
             user=self.user,
         ).critique()
+
+    # --- personal paragraph (company research × personality) ----------------------------
+
+    def _stub(self) -> dict:
+        return {
+            "text": PERSONAL_STUB,
+            "is_stub": True,
+            "sources": [],
+            "grounding": {"count": None, "claims": []},
+        }
+
+    def _personal_paragraph(self, language, title) -> dict:
+        """Real-or-stub personal paragraph. Capability-driven, not grade-gated (except light,
+        which never researches). Stubs — loudly, never silently — on light grade, no personality,
+        a non-web-capable model, failed/empty research, or an empty write. Costs nothing on the
+        stub paths (the free checks run before any LLM call)."""
+        blank = {
+            "text": "",
+            "is_stub": False,
+            "sources": [],
+            "grounding": {"count": None, "claims": []},
+        }
+        if not self.personal_paragraph:
+            return blank  # slot not requested -> nothing
+        if self.grade == "light":
+            return self._stub()  # weak showcase tier never researches
+        alias = self.research_alias or self.alias
+        personality = self._personality_dossier(alias)
+        if not personality:
+            return self._stub()  # no "you" to ground -> stub (before paying)
+        company = self._recipient()["company"]
+        research = CompanyResearcher(
+            company,
+            getattr(self.job_posting, "posting_text", ""),
+            alias=alias,
+            user=self.user,
+            language=language,
+        ).research()
+        if not research["ok"]:
+            return self._stub()  # non-capable model / search failed / empty
+        text = PersonalParagraphWriter(
+            posting_text=getattr(self.job_posting, "posting_text", ""),
+            title=title,
+            language=language,
+            company_dossier=research["dossier"],
+            personality_dossier=personality,
+            alias=alias,
+            user=self.user,
+        ).write()
+        if not text:
+            return self._stub()
+        grounding = {"count": None, "claims": []}
+        if self.verify_grounding:
+            grounding = ParagraphGroundingCheck(
+                text,
+                research["dossier"],
+                personality,
+                alias=self.verifier_alias or alias,
+                user=self.user,
+            ).critique()
+        return {
+            "text": text,
+            "is_stub": False,
+            "sources": research["sources"],
+            "grounding": grounding,
+        }
+
+    def _personality_dossier(self, alias) -> str:
+        try:
+            from spa.models import PersonalityProfile
+
+            prof = PersonalityProfile.objects.filter(user=self.user).first()
+        except Exception:
+            return ""
+        if not prof or not prof.has_answers():
+            return ""
+        return prof.ensure_dossier(alias=alias, user=self.user)
