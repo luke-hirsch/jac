@@ -17,7 +17,8 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from spa.distill import PersonalityDistiller
-from spa.models import PERSONALITY_QUESTIONS, PersonalityProfile
+from spa.models import PersonalityProfile
+from spa.personality_questions import MAX_ANSWER_LEN, PERSONALITY_QUESTIONS
 
 
 @contextmanager
@@ -60,9 +61,7 @@ class PersonalityProfileModelTests(TestCase):
 
 class EnsureDossierTests(TestCase):
     def setUp(self):
-        self.prof = PersonalityProfile.objects.get(
-            user=User.objects.create_user("ed")
-        )
+        self.prof = PersonalityProfile.objects.get(user=User.objects.create_user("ed"))
         self.prof.answers = {"values": "openness"}
         self.prof.answers_updated_at = timezone.now()
         self.prof.save()
@@ -113,9 +112,7 @@ class PersonalityDistillerTests(TestCase):
 
     def test_failure_returns_empty(self):
         with _muted(), patch("spa.distill.complete", side_effect=RuntimeError("x")):
-            self.assertEqual(
-                PersonalityDistiller({"values": "openness"}).distill(), ""
-            )
+            self.assertEqual(PersonalityDistiller({"values": "openness"}).distill(), "")
 
 
 # ===========================================================================
@@ -142,10 +139,26 @@ class PersonalityAPITests(APITestCase):
         self.assertEqual(prof.answers, {"values": "x"})
         self.assertIsNotNone(prof.answers_updated_at)
 
-    def test_dossier_is_read_only(self):
-        self.client.patch(
-            "/api/spa/personality/", {"dossier": "hacked"}, format="json"
+    def test_answer_over_cap_rejected(self):
+        r = self.client.patch(
+            "/api/spa/personality/",
+            {"answers": {"flow": "x" * (MAX_ANSWER_LEN + 1)}},
+            format="json",
         )
+        self.assertEqual(r.status_code, 400)
+
+    def test_blank_answers_dropped(self):
+        r = self.client.patch(
+            "/api/spa/personality/",
+            {"answers": {"flow": "  ", "childhood": "an astronaut"}},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        prof = PersonalityProfile.objects.get(user=self.user)
+        self.assertEqual(prof.answers, {"childhood": "an astronaut"})
+
+    def test_dossier_is_read_only(self):
+        self.client.patch("/api/spa/personality/", {"dossier": "hacked"}, format="json")
         prof = PersonalityProfile.objects.get(user=self.user)
         self.assertNotEqual(prof.dossier, "hacked")
 

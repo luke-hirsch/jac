@@ -7,8 +7,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from spa.models import UserProfile
-from spa.serializers import UserProfileSerializer
+from spa.models import PersonalityProfile, UserProfile
+from spa.serializers import PersonalityProfileSerializer, UserProfileSerializer
 
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
@@ -45,3 +45,25 @@ class AccountDeleteView(APIView):
         logout(request)
         user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PersonalityProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = PersonalityProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return PersonalityProfile.objects.get(user=self.request.user)
+
+
+class PersonalityDossierRebuildView(APIView):
+    """POST: force-rebuild + return the dossier (preview the distilled text). ?alias= (default)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        prof = PersonalityProfile.objects.get(user=request.user)
+        prof.dossier_built_at = None  # force stale -> always re-distils
+        text = prof.ensure_dossier(
+            alias=request.query_params.get("alias", "default"), user=request.user
+        )
+        return Response({"dossier": text})

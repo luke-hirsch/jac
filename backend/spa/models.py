@@ -7,10 +7,10 @@ notification settings that don't belong on the auth.User model itself.
 
 from pathlib import Path
 
-from django.contrib.auth import get_user_model
+
 from django.db import models
-from django.db.models.signals import post_save
-from django.dispatch import receiver
+
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -76,7 +76,46 @@ class UserProfile(models.Model):
         return f"Profile({self.user})"
 
 
-@receiver(post_save, sender=get_user_model())
-def _create_profile_on_user_creation(sender, instance, created, **kwargs):
-    if created:
-        UserProfile.objects.create(user=instance)
+class PersonalityProfile(models.Model):
+    """Per-user personality questionnaire + a cached, LLM-distilled dossier.
+
+    Answers are free text keyed by question id; the dossier is regenerated when answers change
+    (dossier_stale). Used by the JAC cover-letter personal paragraph and (later) the portfolio.
+    """
+
+    user = models.OneToOneField(
+        "auth.User", on_delete=models.CASCADE, related_name="personality"
+    )
+    answers = models.JSONField(default=dict, blank=True)  # {question_id: text}
+    dossier = models.TextField(blank=True)  # distilled, cached
+    answers_updated_at = models.DateTimeField(null=True, blank=True)
+    dossier_built_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Personality({self.user})"
+
+    def has_answers(self) -> bool:
+        return any((self.answers or {}).values())
+
+    def dossier_stale(self) -> bool:
+        if self.dossier_built_at is None:
+            return True
+        return bool(
+            self.answers_updated_at and self.answers_updated_at > self.dossier_built_at
+        )
+
+    def ensure_dossier(self, *, alias: str = "default", user=None) -> str:
+        """Return the dossier, distilling (1 LLM call) if missing or stale. '' if no answers."""
+        if not self.has_answers():
+            return ""
+        if self.dossier and not self.dossier_stale():
+            return self.dossier
+        from spa.distill import PersonalityDistiller
+
+        text = PersonalityDistiller(self.answers, alias=alias, user=user).distill()
+        if text:
+            self.dossier = text
+            self.dossier_built_at = timezone.now()
+            self.save(update_fields=["dossier", "dossier_built_at", "updated_at"])
+        return self.dossier or ""
