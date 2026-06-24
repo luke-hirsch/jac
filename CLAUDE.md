@@ -68,6 +68,13 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   when grade≠light + alias can web-search + research ok + personality present, else a loud
   `PERSONAL_STUB`. Own `ParagraphGroundingCheck`; words fold into `ai_share`. *(Tests green; live LLM
   verification pending.)* See [[project-purpose-cv-showcase]].
+- **jac frontend LLM-config tab** (`frontend/src/lib/queries/llm.ts`,
+  `frontend/src/routes/_authenticated/account/llm.tsx`) — account tab doing owner-scoped CRUD over
+  `/api/llm/configs/` (the aliases the pipeline resolves through). Picking a commercial provider
+  opens a **structured mask** that assembles the `extra` JSON from discrete inputs; `custom`/`ollama`
+  get a raw JSON textarea. `api_key` is write-only — the server only ever returns `has_api_key`. The
+  pure form↔payload helpers (`toPayload`/`rowToState`/`switchProvider`/…) are unit-tested. See
+  [[frontend-test-layout]].
 
 # roadmap
 
@@ -86,6 +93,11 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
+
+> **Frontend LLM-config tab — done.** Owner-scoped CRUD UI over `/api/llm/configs/` (provider masks
+> for the commercial providers, JSON textarea for `custom`/`ollama`; write-only `api_key`). Landed
+> with the **first frontend test harness**: vitest, tests in a separate `frontend/tests/` tree that
+> mirrors `src/` (not colocated) and is excluded from the `tsc -b` build. See [[frontend-test-layout]].
 
 > **Cover-letter generation — done.** Selection (`SnippetSelector`) + writer (`CoverLetterWriter`,
 > posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to

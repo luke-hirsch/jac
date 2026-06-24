@@ -1,0 +1,17 @@
+{
+  // Editor-only project for the test tree. It inherits the app's compiler
+  // settings (DOM lib, strictness, bundler resolution) but adds Node types
+  // (for `Buffer`) and re-points the `@/` alias one level up into `src`.
+  //
+  // Deliberately NOT referenced by the root tsconfig.json, so `tsc -b`
+  // (the `npm run build` step) never type-checks tests. Vitest runs them
+  // regardless via esbuild + the vite.config `@` alias.
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@/*": ["../src/*"]
+    }
+  },
+  "include": ["."]
+}
