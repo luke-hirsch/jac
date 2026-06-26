@@ -21,7 +21,7 @@ from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
-from rest_framework import serializers, status, viewsets
+from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -32,7 +32,9 @@ from jac.models import (
     Certification,
     Domain,
     Education,
+    GenerationRun,
     Job,
+    JobPosting,
     Language,
     Location,
     Project,
@@ -44,6 +46,8 @@ from jac.serializers import (
     CvSerializer,
     DomainSerializer,
     EducationSerializer,
+    GenerationRunCreateSerializer,
+    GenerationRunSerializer,
     JobSerializer,
     LanguageSerializer,
     LocationSerializer,
@@ -51,6 +55,7 @@ from jac.serializers import (
     ResumeSnippetSerializer,
     SkillSerializer,
 )
+from jac.tasks import generate_run
 
 
 class BulkActionMixin:
@@ -80,7 +85,7 @@ class BulkActionMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        qs = self.get_queryset().filter(pk__in=ids)
+        qs = self.get_queryset().filter(pk__in=ids)  # type: ignore[]
         found = {obj.pk for obj in qs}
         missing = [i for i in ids if i not in found]
         if missing:
@@ -95,7 +100,7 @@ class BulkActionMixin:
             return Response({"deleted": len(found)})
 
         if op == "patch_domains":
-            model = self.get_queryset().model
+            model = self.get_queryset().model  # type: ignore[]
             if not hasattr(model, "domains"):
                 return Response(
                     {"action": ["patch_domains not supported for this resource."]},
@@ -313,3 +318,41 @@ class ResumeSnippetViewSet(BulkActionMixin, viewsets.ModelViewSet):
         return ResumeSnippet.objects.filter(user=self.request.user).order_by(
             "kind", "title"
         )
+
+
+class GenerationRunViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Create + read async generation runs. Create persists a JobPosting + a pending run and
+    enqueues the Celery task; the SPA then streams progress over the WebSocket. Retrieve is the
+    snapshot used to rehydrate after a refresh."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return GenerationRun.objects.filter(user=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return GenerationRunCreateSerializer
+        return GenerationRunSerializer
+
+    def perform_create(self, serializer):
+        run = serializer.save()
+        jp = JobPosting.objects.create(
+            user=self.request.user, posting_text=run.posting_text, language="en"
+        )
+        run.job_posting = jp
+        run.save(update_fields=["job_posting", "updated_at"])
+        generate_run.delay(run.pk)
+        self._created = run
+
+    def create(self, request, *args, **kwargs):
+        ser = self.get_serializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        self.perform_create(ser)
+        out = GenerationRunSerializer(self._created)
+        return Response(out.data, status=status.HTTP_201_CREATED)

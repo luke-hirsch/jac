@@ -432,3 +432,65 @@ class JobPostAddress(models.Model):
 
     def __str__(self) -> str:
         return self.company or f"Address for posting {self.job_posting.pk}"
+
+
+class GenerationRun(models.Model):
+    """One async CV + cover-letter generation. The view persists it `pending` and enqueues the
+    Celery task (`jac.tasks.generate_run`), which streams progress over the `gen_<pk>` channel
+    group and writes the final `result`. The SPA subscribes by WebSocket; a REST GET rehydrates
+    the snapshot on refresh.
+    """
+
+    class Status(models.TextChoices):
+        pending = "pending", _("Pending")
+        running = "running", _("Running")
+        done = "done", _("Done")
+        failed = "failed", _("Failed")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="generation_runs"
+    )
+    job_posting = models.ForeignKey(
+        JobPosting,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generation_runs",
+    )
+
+    class GradeChoice(models.TextChoices):
+        light = "light", _("Light")
+        standard = "standard", _("Standard")
+        high = "strong", _("Strong")
+
+    posting_text = models.TextField()
+    grade = models.CharField(max_length=10, default="light")
+    alias = models.CharField(max_length=100, default="default")
+    verify_grounding = models.BooleanField(default=True)
+    verifier_alias = models.CharField(max_length=100, blank=True)
+    personal_paragraph = models.BooleanField(default=True)
+    research_alias = models.CharField(max_length=100, blank=True)
+    max_body_snippets = models.PositiveSmallIntegerField(default=5)
+    # CV scoping (all optional; map onto CV.__init__).
+    domains = models.JSONField(default=list, blank=True)  # list[str] domain names
+    started = models.DateField(null=True, blank=True)
+    ended = models.DateField(null=True, blank=True)
+    min_skill_proficiency = models.CharField(max_length=12, blank=True)
+
+    # Lifecycle.
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.pending
+    )
+    stage = models.CharField(
+        max_length=80, blank=True
+    )  # last human-readable progress label
+    result = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"GenerationRun {self.pk} ({self.status})"

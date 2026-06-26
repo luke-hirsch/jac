@@ -75,6 +75,14 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   get a raw JSON textarea. `api_key` is write-only — the server only ever returns `has_api_key`. The
   pure form↔payload helpers (`toPayload`/`rowToState`/`switchProvider`/…) are unit-tested. See
   [[frontend-test-layout]].
+- **jac async generation plumbing** (`lukehirsch/celery.py`, `lukehirsch/asgi.py`, `jac/models.py`
+  `GenerationRun`, `jac/tasks.py`, `jac/consumers.py`, `jac/ws_routing.py`, viewset in `jac/views.py`)
+  — the async loop carrying a generation to the SPA: REST `POST` persists a `pending` `GenerationRun`
+  + `JobPosting` and enqueues a Celery task; the task streams progress to the `gen_<pk>` channel
+  group; a Channels WS (`GenerationConsumer`, session-auth + ownership) forwards events and pushes a
+  snapshot on connect; a REST `GET` rehydrates on refresh. **Stub task body** for now — guide 2 swaps
+  the real pipeline in behind the stable event contract (`snapshot`/`progress`/`done`/`failed`).
+  Channel layer + Celery broker run on Redis/Valkey even in `DEBUG`. See [[generation-async-loop]].
 
 # roadmap
 
@@ -82,10 +90,15 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **frontend render** of the tailored CV + cover letter — render `grounding` next to `ai_share`
-   (green ✓ / amber "N claims" badge with the claim list on hover) **and the `personal_paragraph`**
-   (real vs `is_stub` styled distinctly, with its sources + own grounding badge). The API dict
-   already carries everything.
+1. **wire the pipeline to the frontend** — a 3-guide effort: (1) async generation plumbing
+   **[done — see current state]**; (2) **generation pipeline** — swap the stub `generate_run` body
+   for the real CV + cover-letter run (`jac.generation_result.serialize_cv_selection`, patched
+   `CV`/`CoverLetter`/`AddressExtract`/`get_alias_strength`), producing the real `result` shape;
+   (3) **frontend render** of the tailored CV + cover letter — `grounding` next to `ai_share`
+   (green ✓ / amber "N claims" badge, claim list on hover) **and the `personal_paragraph`** (real
+   vs `is_stub` styled distinctly, sources + own grounding badge). The result dict already carries
+   everything. Guides 2 + 3 plans live in `to-do/`; pre-written red tests already on disk
+   (`test_generation_task.py`, `frontend/tests/lib/generations.test.ts`).
 2. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 3. **self-hosted web-search agent** (parked) — let a self-hosted *standard* run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
@@ -94,6 +107,11 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
 
+> **Async generation plumbing — done (guide 1 of 3).** End-to-end REST→Celery→Channels-WS loop with
+> a **stub** task body, proving Redis/Valkey + Celery + Channels + WS session-auth + ownership before
+> the slow LLM pipeline goes on top (guide 2). Unknown `grade` is **coerced to `light` + warned**, not
+> rejected (a 400 would punish a typo; the run still succeeds). See [[generation-async-loop]].
+>
 > **Frontend LLM-config tab — done.** Owner-scoped CRUD UI over `/api/llm/configs/` (provider masks
 > for the commercial providers, JSON textarea for `custom`/`ollama`; write-only `api_key`). Landed
 > with the **first frontend test harness**: vitest, tests in a separate `frontend/tests/` tree that

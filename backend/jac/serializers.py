@@ -1,3 +1,6 @@
+import logging
+from typing import TypeVar
+
 from django.conf import settings
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
@@ -7,6 +10,7 @@ from jac.models import (
     Certification,
     Domain,
     Education,
+    GenerationRun,
     Job,
     Language,
     Location,
@@ -14,6 +18,11 @@ from jac.models import (
     ResumeSnippet,
     Skill,
 )
+
+logger = logging.getLogger()
+
+
+T = TypeVar("T", bound=serializers.Serializer)
 
 
 class FavouriteLimitMixin:
@@ -24,9 +33,10 @@ class FavouriteLimitMixin:
     Mix in *before* the ModelSerializer base so `super().validate` chains correctly.
     """
 
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-        model = self.Meta.model
+    def validate(self: serializers.Serializer, attrs):  # type: ignore[attr-defined]
+        attrs = super().validate(attrs)  # type: ignore[attr-defined]
+        model = self.Meta.model  # type: ignore[attr-defined]
+
         limit = getattr(model, "FAVOURITE_LIMIT", None)
         favourite = attrs.get("favourite", getattr(self.instance, "favourite", False))
         if favourite and limit is not None:
@@ -425,3 +435,55 @@ class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
             "user",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class GenerationRunCreateSerializer(serializers.ModelSerializer):
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+
+    class Meta:
+        model = GenerationRun
+        fields = [
+            "user",
+            "posting_text",
+            "grade",
+            "alias",
+            "verify_grounding",
+            "verifier_alias",
+            "personal_paragraph",
+            "research_alias",
+            "max_body_snippets",
+            "domains",
+            "started",
+            "ended",
+            "min_skill_proficiency",
+        ]
+
+    def validate_grade(self, value):
+        if value and value not in ("light", "standard", "strong"):
+            logger.warning(f"Invalid grade: {value}")
+            value = "light"
+        return value
+
+
+class GenerationRunSerializer(serializers.ModelSerializer):
+    job_posting_title = serializers.CharField(
+        source="job_posting.title", read_only=True, default=""
+    )
+
+    class Meta:
+        model = GenerationRun
+        fields = [
+            "id",
+            "status",
+            "stage",
+            "error",
+            "result",
+            "grade",
+            "alias",
+            "personal_paragraph",
+            "verify_grounding",
+            "job_posting_title",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

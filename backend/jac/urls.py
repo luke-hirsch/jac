@@ -15,6 +15,7 @@ from jac.views import (
     CVEntryListView,
     DomainViewSet,
     EducationViewSet,
+    GenerationRunViewSet,
     JobViewSet,
     LanguageViewSet,
     LocationViewSet,
@@ -33,6 +34,7 @@ router.register("jobs", JobViewSet, basename="job")
 router.register("projects", ProjectViewSet, basename="project")
 router.register("languages", LanguageViewSet, basename="language")
 router.register("resume-snippets", ResumeSnippetViewSet, basename="resume-snippet")
+router.register("generations", GenerationRunViewSet, basename="generation")
 
 urlpatterns = router.urls + [
     path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),
