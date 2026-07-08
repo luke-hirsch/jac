@@ -112,6 +112,20 @@ export type LanguageRow = {
   favourite: boolean;
 };
 
+export type ResumeSnippetRow = {
+  id: number;
+  title: string;
+  content: string;
+  kind: "intro" | "achievement" | "value_statement" | "closing" | "other";
+  domains: number[];
+  skills: number[];
+  job: number | null;
+  project: number | null;
+  language: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
 // factory
 
 type Resource = {
@@ -128,6 +142,7 @@ const R = {
   jobs: { key: "jobs", url: "/api/jac/jobs/" },
   projects: { key: "projects", url: "/api/jac/projects/" },
   languages: { key: "languages", url: "/api/jac/languages/" },
+  snippets: { key: "snippets", url: "/api/jac/resume-snippets/" },
 } as const satisfies Record<string, Resource>;
 
 function bulkUrl(key: ResourceKey) {
@@ -256,7 +271,7 @@ export function useBulkDestroy(key: ResourceKey) {
 }
 
 export function useBulkPatchDomains(
-  key: Extract<ResourceKey, "skills" | "jobs" | "projects">,
+  key: Extract<ResourceKey, "skills" | "jobs" | "projects" | "snippets">,
 ) {
   const qc = useQueryClient();
   return useMutation({

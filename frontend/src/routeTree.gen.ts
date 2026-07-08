@@ -23,6 +23,7 @@ import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedCvIndexRouteImport } from './routes/_authenticated/cv/index'
 import { Route as AuthenticatedApplicationsIndexRouteImport } from './routes/_authenticated/applications/index'
 import { Route as AuthResetPasswordKeyRouteImport } from './routes/auth/reset-password.$key'
+import { Route as AuthenticatedCvSnippetsRouteImport } from './routes/_authenticated/cv/snippets'
 import { Route as AuthenticatedCvSkillsRouteImport } from './routes/_authenticated/cv/skills'
 import { Route as AuthenticatedCvProjectsRouteImport } from './routes/_authenticated/cv/projects'
 import { Route as AuthenticatedCvLanguagesRouteImport } from './routes/_authenticated/cv/languages'
@@ -106,6 +107,11 @@ const AuthResetPasswordKeyRoute = AuthResetPasswordKeyRouteImport.update({
   id: '/reset-password/$key',
   path: '/reset-password/$key',
   getParentRoute: () => AuthRoute,
+} as any)
+const AuthenticatedCvSnippetsRoute = AuthenticatedCvSnippetsRouteImport.update({
+  id: '/snippets',
+  path: '/snippets',
+  getParentRoute: () => AuthenticatedCvRoute,
 } as any)
 const AuthenticatedCvSkillsRoute = AuthenticatedCvSkillsRouteImport.update({
   id: '/skills',
@@ -199,6 +205,7 @@ export interface FileRoutesByFullPath {
   '/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/cv/snippets': typeof AuthenticatedCvSnippetsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/cv/': typeof AuthenticatedCvIndexRoute
@@ -224,6 +231,7 @@ export interface FileRoutesByTo {
   '/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/cv/snippets': typeof AuthenticatedCvSnippetsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/applications': typeof AuthenticatedApplicationsIndexRoute
   '/cv': typeof AuthenticatedCvIndexRoute
@@ -253,6 +261,7 @@ export interface FileRoutesById {
   '/_authenticated/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/_authenticated/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/_authenticated/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/_authenticated/cv/snippets': typeof AuthenticatedCvSnippetsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/_authenticated/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/_authenticated/cv/': typeof AuthenticatedCvIndexRoute
@@ -282,6 +291,7 @@ export interface FileRouteTypes {
     | '/cv/languages'
     | '/cv/projects'
     | '/cv/skills'
+    | '/cv/snippets'
     | '/auth/reset-password/$key'
     | '/applications/'
     | '/cv/'
@@ -307,6 +317,7 @@ export interface FileRouteTypes {
     | '/cv/languages'
     | '/cv/projects'
     | '/cv/skills'
+    | '/cv/snippets'
     | '/auth/reset-password/$key'
     | '/applications'
     | '/cv'
@@ -335,6 +346,7 @@ export interface FileRouteTypes {
     | '/_authenticated/cv/languages'
     | '/_authenticated/cv/projects'
     | '/_authenticated/cv/skills'
+    | '/_authenticated/cv/snippets'
     | '/auth/reset-password/$key'
     | '/_authenticated/applications/'
     | '/_authenticated/cv/'
@@ -445,6 +457,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/auth/reset-password/$key'
       preLoaderRoute: typeof AuthResetPasswordKeyRouteImport
       parentRoute: typeof AuthRoute
+    }
+    '/_authenticated/cv/snippets': {
+      id: '/_authenticated/cv/snippets'
+      path: '/snippets'
+      fullPath: '/cv/snippets'
+      preLoaderRoute: typeof AuthenticatedCvSnippetsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
     }
     '/_authenticated/cv/skills': {
       id: '/_authenticated/cv/skills'
@@ -576,6 +595,7 @@ interface AuthenticatedCvRouteChildren {
   AuthenticatedCvLanguagesRoute: typeof AuthenticatedCvLanguagesRoute
   AuthenticatedCvProjectsRoute: typeof AuthenticatedCvProjectsRoute
   AuthenticatedCvSkillsRoute: typeof AuthenticatedCvSkillsRoute
+  AuthenticatedCvSnippetsRoute: typeof AuthenticatedCvSnippetsRoute
   AuthenticatedCvIndexRoute: typeof AuthenticatedCvIndexRoute
 }
 
@@ -586,6 +606,7 @@ const AuthenticatedCvRouteChildren: AuthenticatedCvRouteChildren = {
   AuthenticatedCvLanguagesRoute: AuthenticatedCvLanguagesRoute,
   AuthenticatedCvProjectsRoute: AuthenticatedCvProjectsRoute,
   AuthenticatedCvSkillsRoute: AuthenticatedCvSkillsRoute,
+  AuthenticatedCvSnippetsRoute: AuthenticatedCvSnippetsRoute,
   AuthenticatedCvIndexRoute: AuthenticatedCvIndexRoute,
 }
 
