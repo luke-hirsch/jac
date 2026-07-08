@@ -24,6 +24,7 @@ export default defineConfig({
       "/admin": BACKEND,
       "/media": BACKEND,
       "/static": BACKEND,
+      "/ws": { target: BACKEND, ws: true },
     },
   },
 });

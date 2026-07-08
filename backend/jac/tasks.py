@@ -1,9 +1,9 @@
 """Celery tasks for async generation.
 
 `generate_run` owns the run lifecycle and streams progress to the `gen_<run_id>` channel group;
-the WebSocket consumer forwards those to the browser. THIS GUIDE ships a stub body — guide 2 swaps
-it for the real CV + cover-letter pipeline. The lifecycle / event contract here is the part the
-consumer + frontend depend on, so keep it stable.
+the WebSocket consumer forwards those to the browser. The lifecycle / event contract
+(`snapshot`/`progress`/`done`/`failed`) is the part the consumer + frontend depend on, so keep
+it stable. Ownership and the posting are derived through `run.job_application`.
 """
 
 import logging
@@ -53,7 +53,13 @@ def _progress(run: GenerationRun, stage: str) -> None:
 
 @shared_task
 def generate_run(run_id: int) -> None:
-    run = GenerationRun.objects.filter(pk=run_id).first()
+    run = (
+        GenerationRun.objects.select_related(
+            "job_application__user", "job_application__posting"
+        )
+        .filter(pk=run_id)
+        .first()
+    )
     if run is None:
         logger.warning("generate_run: no run %s", run_id)
         return
@@ -63,7 +69,9 @@ def generate_run(run_id: int) -> None:
     publish_event(run.pk, {"event": "progress", "status": run.status, "stage": ""})
 
     try:
-        user = run.user
+        application = run.job_application
+        user = application.user
+        jp = application.posting
         alias = run.alias or "default"
         grade = run.grade or get_alias_strength(alias, user=user)
 
@@ -76,16 +84,14 @@ def generate_run(run_id: int) -> None:
             ended=run.ended,
             min_skill_proficiency=run.min_skill_proficiency or None,
         )
-        cv.apply_selection(cv.filter_cv(run.posting_text, grade=grade, alias=alias))
+        cv.apply_selection(cv.filter_cv(jp.posting_text, grade=grade, alias=alias))
 
         # 2. Extract the recipient address; refresh the persisted JobPosting.
         _progress(run, "reading posting")
-        extracted = AddressExtract(run.posting_text, alias=alias, user=user).extract()
-        jp = run.job_posting
-        if jp is not None:
-            jp.title = extracted.get("title", "") or jp.title
-            jp.language = extracted.get("language", "en") or "en"
-            jp.save(update_fields=["title", "language", "updated_at"])
+        extracted = AddressExtract(jp.posting_text, alias=alias, user=user).extract()
+        jp.title = extracted.get("title", "") or jp.title
+        jp.language = extracted.get("language", "en") or "en"
+        jp.save(update_fields=["title", "language", "updated_at"])
         addr = JobPostAddress(**{f: extracted.get(f, "") for f in _ADDRESS_FIELDS})
 
         # 3. Build the cover letter.
@@ -114,6 +120,16 @@ def generate_run(run_id: int) -> None:
         run.status = GenerationRun.Status.done
         run.stage = "done"
         run.save(update_fields=["result", "status", "stage", "updated_at"])
+
+        # Auto-fill the application only while it's still untouched; afterwards the user
+        # applies a run's result explicitly from the SPA, so re-runs never clobber edits.
+        if not application.cv_content and not application.cover_letter:
+            application.cv_content = run.result["cv"]
+            application.cover_letter = letter.get("text", "")
+            application.save(
+                update_fields=["cv_content", "cover_letter", "updated_at"]
+            )
+
         publish_event(
             run.pk, {"event": "done", "status": run.status, "result": run.result}
         )

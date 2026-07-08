@@ -1,5 +1,14 @@
 # [frontend] Tailored CV + cover-letter render
 
+> **SUPERSEDED (2026-07-08).** Shipped in a different shape during the volatile
+> model-restructure session: the posting-text-first `/cv/tailored` tab became an
+> **application-centric `/applications` section** (list + detail) after `JobApplication`/
+> `ApplicationLayout` landed and `GenerationRun` moved under the application. The reusable
+> pieces of this guide (WS proxy, `ws.ts`, `generations.ts` helpers/badges/reducer, the
+> result render + badges) were implemented as specified; the page/flow parts were replaced by
+> `routes/_authenticated/applications/` + `lib/queries/applications.ts` (apply-run PATCH,
+> editable cover letter, run history). Kept for reference only.
+
 > Guide 3 of 3 for **roadmap #1**. Branch: `frontend/tailored-render` (cut off `main` after the
 > backend guides merge). Depends on both `[backend]` guides.
 

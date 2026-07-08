@@ -29,12 +29,13 @@ from rest_framework.views import APIView
 
 from jac.cv import CV
 from jac.models import (
+    ApplicationLayout,
     Certification,
     Domain,
     Education,
     GenerationRun,
     Job,
-    JobPosting,
+    JobApplication,
     Language,
     Location,
     Project,
@@ -42,12 +43,14 @@ from jac.models import (
     Skill,
 )
 from jac.serializers import (
+    ApplicationLayoutSerializer,
     CertificationSerializer,
     CvSerializer,
     DomainSerializer,
     EducationSerializer,
     GenerationRunCreateSerializer,
     GenerationRunSerializer,
+    JobApplicationSerializer,
     JobSerializer,
     LanguageSerializer,
     LocationSerializer,
@@ -320,20 +323,55 @@ class ResumeSnippetViewSet(BulkActionMixin, viewsets.ModelViewSet):
         )
 
 
+class ApplicationLayoutViewSet(viewsets.ModelViewSet):
+    """Render layouts: reads include the system defaults (same split as `DomainViewSet`),
+    writes are restricted to the user's own rows."""
+
+    serializer_class = ApplicationLayoutSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+    search_fields = ["name"]
+    ordering_fields = ["name"]
+
+    def get_queryset(self):
+        if self.action in ("list", "retrieve"):
+            return ApplicationLayout.objects.for_user(self.request.user)
+        return ApplicationLayout.objects.filter(user=self.request.user)
+
+
+class JobApplicationViewSet(viewsets.ModelViewSet):
+    """The user-facing applications. Create binds (or inline-creates) the posting; the
+    tailored content (`cv_content`/`cover_letter`) stays editable via PATCH — that's also
+    how the SPA "applies" a finished generation run."""
+
+    serializer_class = JobApplicationSerializer
+    permission_classes = [IsAuthenticated, IsOwner]
+    filterset_fields = ["status"]
+    ordering_fields = ["created_at", "updated_at", "status"]
+
+    def get_queryset(self):
+        return (
+            JobApplication.objects.filter(user=self.request.user)
+            .select_related("posting", "layout")
+            .prefetch_related("runs")
+        )
+
+
 class GenerationRunViewSet(
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
     mixins.ListModelMixin,
     viewsets.GenericViewSet,
 ):
-    """Create + read async generation runs. Create persists a JobPosting + a pending run and
-    enqueues the Celery task; the SPA then streams progress over the WebSocket. Retrieve is the
-    snapshot used to rehydrate after a refresh."""
+    """Create + read async generation runs. Create attaches a pending run to one of the
+    user's applications and enqueues the Celery task; the SPA then streams progress over
+    the WebSocket. Retrieve is the snapshot used to rehydrate after a refresh."""
 
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return GenerationRun.objects.filter(user=self.request.user)
+        return GenerationRun.objects.filter(
+            job_application__user=self.request.user
+        ).select_related("job_application__posting")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -342,11 +380,6 @@ class GenerationRunViewSet(
 
     def perform_create(self, serializer):
         run = serializer.save()
-        jp = JobPosting.objects.create(
-            user=self.request.user, posting_text=run.posting_text, language="en"
-        )
-        run.job_posting = jp
-        run.save(update_fields=["job_posting", "updated_at"])
         generate_run.delay(run.pk)
         self._created = run
 

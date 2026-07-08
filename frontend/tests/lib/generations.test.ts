@@ -10,14 +10,15 @@ import {
 } from "@/lib/queries/generations";
 
 /**
- * Red-first unit tests for the pure helpers behind the tailored-render tab.
+ * Unit tests for the pure helpers behind the application detail page.
  * No DOM, no network, no WebSocket — just the form→payload, badge, and
- * WS-event→state contracts the page relies on.
+ * WS-event→state contracts the page relies on. Application-centric: a run
+ * is created against a JobApplication pk, not raw posting text.
  */
 
 function form(over: Partial<GenerationForm> = {}): GenerationForm {
   return {
-    posting_text: "  hi  ",
+    job_application: 7,
     grade: "",
     alias: "default",
     verify_grounding: false,
@@ -30,9 +31,9 @@ const EMPTY: RunState = { status: "pending", stage: "", result: null, error: "" 
 const RESULT = { meta: { grade: "light", alias: "default" }, cv: {}, cover_letter: {} } as unknown as TailoredResult;
 
 describe("toPayload", () => {
-  it("trims the posting and omits grade when blank", () => {
+  it("passes the application pk and omits grade when blank (server auto-detects)", () => {
     const p = toPayload(form());
-    expect(p.posting_text).toBe("hi");
+    expect(p.job_application).toBe(7);
     expect("grade" in p).toBe(false);
   });
 

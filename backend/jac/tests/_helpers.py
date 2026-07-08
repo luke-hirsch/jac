@@ -9,7 +9,7 @@ import logging
 from contextlib import contextmanager
 
 from jac.cv import CV
-from jac.models import JobPosting
+from jac.models import JobApplication, JobPosting
 
 
 @contextmanager
@@ -57,6 +57,15 @@ def _job_posting(user, *, language="en", title="Backend Engineer", posting_text=
     return JobPosting(
         user=user, title=title, posting_text=posting_text, language=language
     )
+
+
+def _application(user, *, posting_text="We need a dev.", title="", **kw):
+    """A persisted JobPosting + JobApplication pair — the fixture every
+    generation/application test hangs its `GenerationRun`s off."""
+    posting = JobPosting.objects.create(
+        user=user, posting_text=posting_text, title=title
+    )
+    return JobApplication.objects.create(user=user, posting=posting, **kw)
 
 
 class _CoverLetterCVMixin:

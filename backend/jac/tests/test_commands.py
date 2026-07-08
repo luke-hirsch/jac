@@ -10,11 +10,11 @@ from unittest.mock import patch
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from jac.cv import CV
 from jac.management.commands.cv_eval import _resolve_runs
-from jac.models import Job, Skill
+from jac.models import ApplicationLayout, Domain, Job, Skill
 
 from ._helpers import _muted, _keep_all
 
@@ -99,3 +99,25 @@ class CVCommandSmokeTests(TestCase):
                 )
             self.assertTrue((Path(tmp) / "findings.json").exists())
             self.assertTrue((Path(tmp) / "findings.md").exists())
+
+
+class SeedDefaultsTests(TestCase):
+    """seed_default_domains: system domains + the default ApplicationLayout (idempotent)."""
+
+    def test_seeds_domains_and_default_layout_with_template(self):
+        with tempfile.TemporaryDirectory() as media:
+            with override_settings(MEDIA_ROOT=media):
+                call_command("seed_default_domains", stdout=io.StringIO())
+                system = User.objects.get(username=settings.SYSTEM_USER_USERNAME)
+                self.assertTrue(Domain.objects.filter(user=system).exists())
+                layout = ApplicationLayout.objects.get(user=system, name="default")
+                self.assertTrue(layout.template)
+                with layout.template.open() as fh:
+                    spec = json.load(fh)
+                self.assertIn("cv", spec)
+
+                # Re-run: no duplicate layout, template stays attached once.
+                call_command("seed_default_domains", stdout=io.StringIO())
+                self.assertEqual(
+                    ApplicationLayout.objects.filter(user=system).count(), 1
+                )

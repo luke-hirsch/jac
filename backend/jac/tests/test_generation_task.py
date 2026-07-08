@@ -1,23 +1,22 @@
 """Async generation — the Celery task body + CV-selection serializer.
 
-Red until `[backend]-generation-pipeline` lands `jac.generation_result.serialize_cv_selection`
-and swaps the stub `generate_run` body for the real pipeline. The pipeline collaborators
-(`CV`, `CoverLetter`, `AddressExtract`) are patched, so no Ollama/LLM is needed; we assert the
-task's lifecycle + result shape. Runs under an in-memory channel layer (no Redis).
+The pipeline collaborators (`CV`, `CoverLetter`, `AddressExtract`) are patched, so no
+Ollama/LLM is needed; we assert the task's lifecycle, result shape, and the fill-if-empty
+hand-off into the owning `JobApplication`. Runs under an in-memory channel layer (no Redis).
 """
 
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
-from jac.models import GenerationRun, Job, JobPosting
+from jac.models import GenerationRun, Job
 from jac.tasks import generate_run
 
-from ._helpers import _muted
+from ._helpers import _application, _muted
 
 IN_MEMORY = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
@@ -65,11 +64,9 @@ class GenerateRunTaskTests(TestCase):
     def setUpTestData(cls):
         cls.user = User.objects.create_user(username="task_user", password="pass")
 
-    def _run(self):
-        jp = JobPosting.objects.create(user=self.user, posting_text="x")
-        return GenerationRun.objects.create(
-            user=self.user, job_posting=jp, posting_text="We need a dev.", alias="default"
-        )
+    def _run(self, **application_kwargs):
+        app = _application(self.user, **application_kwargs)
+        return GenerationRun.objects.create(job_application=app, alias="default")
 
     @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
@@ -90,6 +87,49 @@ class GenerateRunTaskTests(TestCase):
         self.assertIn("cover_letter", run.result)
         self.assertIn("cv", run.result)
         self.assertEqual(run.result["cover_letter"]["ai_share"], 0.1)
+        # The extracted title/language land on the posting.
+        posting = run.job_application.posting
+        posting.refresh_from_db()
+        self.assertEqual(posting.title, "Dev")
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_done_autofills_empty_application(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+
+        run = self._run()
+        generate_run(run.pk)
+
+        run.refresh_from_db()
+        app = run.job_application
+        app.refresh_from_db()
+        self.assertEqual(app.cover_letter, _LETTER["text"])
+        self.assertEqual(app.cv_content, run.result["cv"])
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_done_never_clobbers_edited_application(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+
+        run = self._run(cover_letter="my hand-written letter")
+        generate_run(run.pk)
+
+        app = run.job_application
+        app.refresh_from_db()
+        self.assertEqual(app.cover_letter, "my hand-written letter")
+        self.assertEqual(app.cv_content, {})
 
     @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")

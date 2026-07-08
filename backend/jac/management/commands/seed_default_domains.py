@@ -1,27 +1,38 @@
-"""Seed the shared system-default Domain taxonomy.
+"""Seed the shared system defaults: the Domain taxonomy + the "default" ApplicationLayout.
 
-Domains owned by the ``settings.SYSTEM_USER_USERNAME`` user are read-only
-defaults visible to every user (see ``Domain.objects.for_user`` /
-``DomainManager.defaults``). There is no fixture or data migration for them —
-this command is the single, idempotent source of truth, so a freshly deployed
-box gets the same picker defaults as dev.
+Rows owned by the ``settings.SYSTEM_USER_USERNAME`` user are read-only defaults
+visible to every user (see ``SystemScopedManager.for_user``). There is no fixture
+or data migration for them — this command is the single, idempotent source of
+truth, so a freshly deployed box gets the same picker defaults as dev.
+
+The default layout also carries its template file (``jac/resources/default_layout.json``,
+a declarative spec the frontend react-pdf renderer consumes); it backs the
+``JobApplication.layout`` field default / SET_DEFAULT target.
 
 Usage:
-    python manage.py seed_default_domains          # create any that are missing
-    python manage.py seed_default_domains --prune   # also delete defaults not in this list
+    python manage.py seed_default_domains          # create anything that is missing
+    python manage.py seed_default_domains --prune   # also delete default domains not in this list
 
-Re-runnable: existing domains are left untouched; only missing ones are created.
-Kept deliberately *broad* (industries / sectors) — a user adds their own narrower
-tags on top.
+Re-runnable: existing rows are left untouched; only missing ones are created.
+Domains are kept deliberately *broad* (industries / sectors) — a user adds their
+own narrower tags on top.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 
-from jac.models import Domain
+from jac.models import ApplicationLayout, Domain
+
+DEFAULT_LAYOUT_NAME = "default"
+DEFAULT_LAYOUT_TEMPLATE = (
+    Path(__file__).resolve().parents[2] / "resources" / "default_layout.json"
+)
 
 
 # Broad industry / sector defaults. Lowercase to match the existing rows
@@ -72,7 +83,7 @@ DEFAULT_DOMAINS = [
 
 
 class Command(BaseCommand):
-    help = "Create the shared system-default Domain rows (idempotent)."
+    help = "Create the shared system defaults: Domain rows + the default ApplicationLayout (idempotent)."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -108,6 +119,18 @@ class Command(BaseCommand):
                 pruned.append(d.name)
                 d.delete()
 
+        layout, layout_created = ApplicationLayout.objects.get_or_create(
+            user=system, name=DEFAULT_LAYOUT_NAME
+        )
+        if not layout.template:
+            layout.template.save(
+                DEFAULT_LAYOUT_TEMPLATE.name,
+                ContentFile(DEFAULT_LAYOUT_TEMPLATE.read_bytes()),
+            )
+            layout_action = "created" if layout_created else "template attached"
+        else:
+            layout_action = "created" if layout_created else "unchanged"
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"System defaults: {Domain.objects.filter(user=system).count()} total, "
@@ -120,3 +143,8 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING("  pruned: " + ", ".join(pruned))
             )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Default layout {layout.name!r}: {layout_action} ({layout.template.name})"
+            )
+        )

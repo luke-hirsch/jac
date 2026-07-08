@@ -16,6 +16,8 @@ from jac.models import GenerationRun
 from jac.tasks import publish_event
 from jac.ws_routing import websocket_urlpatterns
 
+from ._helpers import _application
+
 IN_MEMORY = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 
@@ -24,7 +26,9 @@ class GenerationConsumerTests(TransactionTestCase):
     def setUp(self):
         self.alice = User.objects.create_user(username="ws_alice", password="pass")
         self.bob = User.objects.create_user(username="ws_bob", password="pass")
-        self.gen = GenerationRun.objects.create(user=self.alice, posting_text="x")
+        self.gen = GenerationRun.objects.create(
+            job_application=_application(self.alice, posting_text="x")
+        )
 
     def _communicator(self, pk, user):
         comm = WebsocketCommunicator(

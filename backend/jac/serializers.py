@@ -7,11 +7,14 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 
 from jac.models import (
+    ApplicationLayout,
     Certification,
     Domain,
     Education,
     GenerationRun,
     Job,
+    JobApplication,
+    JobPosting,
     Language,
     Location,
     Project,
@@ -437,14 +440,35 @@ class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializ
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class GenerationRunCreateSerializer(serializers.ModelSerializer):
+class ApplicationLayoutSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    is_default = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ApplicationLayout
+        fields = ["id", "name", "template", "is_default", "user"]
+        read_only_fields = ["id", "is_default"]
+        validators = [
+            UniqueTogetherValidator(
+                queryset=ApplicationLayout.objects.all(),
+                fields=["user", "name"],
+            )
+        ]
+
+    def get_is_default(self, obj) -> bool:
+        return obj.user.username == settings.SYSTEM_USER_USERNAME
+
+
+class GenerationRunCreateSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+    user_scoped_fields = ("job_application",)
+    # Blank = auto-detect from the alias strength in the task (`run.grade or
+    # get_alias_strength(...)`); the model default "light" only applies to direct ORM creates.
+    grade = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = GenerationRun
         fields = [
-            "user",
-            "posting_text",
+            "job_application",
             "grade",
             "alias",
             "verify_grounding",
@@ -466,14 +490,15 @@ class GenerationRunCreateSerializer(serializers.ModelSerializer):
 
 
 class GenerationRunSerializer(serializers.ModelSerializer):
-    job_posting_title = serializers.CharField(
-        source="job_posting.title", read_only=True, default=""
+    posting_title = serializers.CharField(
+        source="job_application.posting.title", read_only=True, default=""
     )
 
     class Meta:
         model = GenerationRun
         fields = [
             "id",
+            "job_application",
             "status",
             "stage",
             "error",
@@ -482,8 +507,100 @@ class GenerationRunSerializer(serializers.ModelSerializer):
             "alias",
             "personal_paragraph",
             "verify_grounding",
-            "job_posting_title",
+            "evaluation",
+            "score",
+            "posting_title",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class GenerationRunSummarySerializer(serializers.ModelSerializer):
+    """Compact nested shape for `JobApplicationSerializer.runs` — no `result` payload,
+    the SPA fetches a run's detail (or subscribes to its socket) separately."""
+
+    class Meta:
+        model = GenerationRun
+        fields = ["id", "status", "stage", "grade", "alias", "created_at"]
+        read_only_fields = fields
+
+
+class JobPostingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JobPosting
+        fields = [
+            "id",
+            "title",
+            "posting_text",
+            "language",
+            "source_url",
+            "active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+    """CRUD for applications. Create takes either an owned `posting` pk or a raw
+    `posting_text` (creating the JobPosting inline) — exactly one of the two; both are
+    create-only. `layout` may reference the user's own layouts or the system defaults.
+    """
+
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    user_scoped_fields = ("posting",)
+    posting_text = serializers.CharField(write_only=True, required=False)
+    posting_detail = JobPostingSerializer(source="posting", read_only=True)
+    runs = GenerationRunSummarySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = JobApplication
+        fields = [
+            "id",
+            "posting",
+            "posting_text",
+            "posting_detail",
+            "cv_content",
+            "cover_letter",
+            "layout",
+            "status",
+            "runs",
+            "created_at",
+            "updated_at",
+            "user",
+        ]
+        read_only_fields = ["id", "posting_detail", "runs", "created_at", "updated_at"]
+        extra_kwargs = {"posting": {"required": False}}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `layout` needs own + system rows, so the plain user-scope rewrite doesn't fit.
+        request = self.context.get("request")
+        if request is not None and request.user.is_authenticated:
+            self.fields["layout"].queryset = ApplicationLayout.objects.for_user(
+                request.user
+            )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        has_posting = attrs.get("posting") is not None
+        has_text = bool(attrs.get("posting_text", "").strip())
+        if self.instance is None:
+            if has_posting == has_text:
+                raise serializers.ValidationError(
+                    {"posting": "Provide exactly one of `posting` or `posting_text`."}
+                )
+        elif has_posting or "posting_text" in attrs:
+            raise serializers.ValidationError(
+                {"posting": "The posting is bound on create and cannot be changed."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        text = validated_data.pop("posting_text", "").strip()
+        if text:
+            validated_data["posting"] = JobPosting.objects.create(
+                user=validated_data["user"], posting_text=text
+            )
+        return super().create(validated_data)

@@ -1,4 +1,5 @@
-"""Celery tasks for async generation. (stub)"""
+"""Channels consumer for async generation: session-auth + ownership gate, then forwards
+`gen_<pk>` group events to the browser and pushes a snapshot on connect."""
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -33,7 +34,9 @@ class GenerationConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _snapshot(self, user_id: int, pk: int):
-        run = GenerationRun.objects.filter(pk=pk, user_id=user_id).first()
+        run = GenerationRun.objects.filter(
+            pk=pk, job_application__user_id=user_id
+        ).first()
         if run is None:
             return None
         return {

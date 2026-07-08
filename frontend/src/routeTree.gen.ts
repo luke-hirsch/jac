@@ -18,8 +18,10 @@ import { Route as AuthRequestResetRouteImport } from './routes/auth/request-rese
 import { Route as AuthMfaChallengeRouteImport } from './routes/auth/mfa-challenge'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
 import { Route as AuthenticatedCvRouteImport } from './routes/_authenticated/cv'
+import { Route as AuthenticatedApplicationsRouteImport } from './routes/_authenticated/applications'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
 import { Route as AuthenticatedCvIndexRouteImport } from './routes/_authenticated/cv/index'
+import { Route as AuthenticatedApplicationsIndexRouteImport } from './routes/_authenticated/applications/index'
 import { Route as AuthResetPasswordKeyRouteImport } from './routes/auth/reset-password.$key'
 import { Route as AuthenticatedCvSkillsRouteImport } from './routes/_authenticated/cv/skills'
 import { Route as AuthenticatedCvProjectsRouteImport } from './routes/_authenticated/cv/projects'
@@ -27,6 +29,7 @@ import { Route as AuthenticatedCvLanguagesRouteImport } from './routes/_authenti
 import { Route as AuthenticatedCvJobsRouteImport } from './routes/_authenticated/cv/jobs'
 import { Route as AuthenticatedCvEducationRouteImport } from './routes/_authenticated/cv/education'
 import { Route as AuthenticatedCvCertificationsRouteImport } from './routes/_authenticated/cv/certifications'
+import { Route as AuthenticatedApplicationsApplicationIdRouteImport } from './routes/_authenticated/applications/$applicationId'
 import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
 import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
 import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authenticated/account/llm'
@@ -77,6 +80,12 @@ const AuthenticatedCvRoute = AuthenticatedCvRouteImport.update({
   path: '/cv',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedApplicationsRoute =
+  AuthenticatedApplicationsRouteImport.update({
+    id: '/applications',
+    path: '/applications',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   id: '/account',
   path: '/account',
@@ -87,6 +96,12 @@ const AuthenticatedCvIndexRoute = AuthenticatedCvIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedCvRoute,
 } as any)
+const AuthenticatedApplicationsIndexRoute =
+  AuthenticatedApplicationsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedApplicationsRoute,
+  } as any)
 const AuthResetPasswordKeyRoute = AuthResetPasswordKeyRouteImport.update({
   id: '/reset-password/$key',
   path: '/reset-password/$key',
@@ -125,6 +140,12 @@ const AuthenticatedCvCertificationsRoute =
     path: '/certifications',
     getParentRoute: () => AuthenticatedCvRoute,
   } as any)
+const AuthenticatedApplicationsApplicationIdRoute =
+  AuthenticatedApplicationsApplicationIdRouteImport.update({
+    id: '/$applicationId',
+    path: '/$applicationId',
+    getParentRoute: () => AuthenticatedApplicationsRoute,
+  } as any)
 const AuthenticatedAccountSecurityRoute =
   AuthenticatedAccountSecurityRouteImport.update({
     id: '/security',
@@ -159,6 +180,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
   '/account': typeof AuthenticatedAccountRouteWithChildren
+  '/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/cv': typeof AuthenticatedCvRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
@@ -170,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/account/llm': typeof AuthenticatedAccountLlmRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/cv/education': typeof AuthenticatedCvEducationRoute
   '/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -177,6 +200,7 @@ export interface FileRoutesByFullPath {
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/cv/': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRoutesByTo {
@@ -193,6 +217,7 @@ export interface FileRoutesByTo {
   '/account/llm': typeof AuthenticatedAccountLlmRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/cv/education': typeof AuthenticatedCvEducationRoute
   '/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -200,6 +225,7 @@ export interface FileRoutesByTo {
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/applications': typeof AuthenticatedApplicationsIndexRoute
   '/cv': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRoutesById {
@@ -208,6 +234,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/auth': typeof AuthRouteWithChildren
   '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
+  '/_authenticated/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/_authenticated/cv': typeof AuthenticatedCvRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
@@ -219,6 +246,7 @@ export interface FileRoutesById {
   '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
   '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
   '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
+  '/_authenticated/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
   '/_authenticated/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/_authenticated/cv/education': typeof AuthenticatedCvEducationRoute
   '/_authenticated/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -226,6 +254,7 @@ export interface FileRoutesById {
   '/_authenticated/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/_authenticated/cv/skills': typeof AuthenticatedCvSkillsRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
+  '/_authenticated/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/_authenticated/cv/': typeof AuthenticatedCvIndexRoute
 }
 export interface FileRouteTypes {
@@ -234,6 +263,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/account'
+    | '/applications'
     | '/cv'
     | '/auth/login'
     | '/auth/mfa-challenge'
@@ -245,6 +275,7 @@ export interface FileRouteTypes {
     | '/account/llm'
     | '/account/profile'
     | '/account/security'
+    | '/applications/$applicationId'
     | '/cv/certifications'
     | '/cv/education'
     | '/cv/jobs'
@@ -252,6 +283,7 @@ export interface FileRouteTypes {
     | '/cv/projects'
     | '/cv/skills'
     | '/auth/reset-password/$key'
+    | '/applications/'
     | '/cv/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -268,6 +300,7 @@ export interface FileRouteTypes {
     | '/account/llm'
     | '/account/profile'
     | '/account/security'
+    | '/applications/$applicationId'
     | '/cv/certifications'
     | '/cv/education'
     | '/cv/jobs'
@@ -275,6 +308,7 @@ export interface FileRouteTypes {
     | '/cv/projects'
     | '/cv/skills'
     | '/auth/reset-password/$key'
+    | '/applications'
     | '/cv'
   id:
     | '__root__'
@@ -282,6 +316,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/auth'
     | '/_authenticated/account'
+    | '/_authenticated/applications'
     | '/_authenticated/cv'
     | '/auth/login'
     | '/auth/mfa-challenge'
@@ -293,6 +328,7 @@ export interface FileRouteTypes {
     | '/_authenticated/account/llm'
     | '/_authenticated/account/profile'
     | '/_authenticated/account/security'
+    | '/_authenticated/applications/$applicationId'
     | '/_authenticated/cv/certifications'
     | '/_authenticated/cv/education'
     | '/_authenticated/cv/jobs'
@@ -300,6 +336,7 @@ export interface FileRouteTypes {
     | '/_authenticated/cv/projects'
     | '/_authenticated/cv/skills'
     | '/auth/reset-password/$key'
+    | '/_authenticated/applications/'
     | '/_authenticated/cv/'
   fileRoutesById: FileRoutesById
 }
@@ -374,6 +411,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedCvRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/applications': {
+      id: '/_authenticated/applications'
+      path: '/applications'
+      fullPath: '/applications'
+      preLoaderRoute: typeof AuthenticatedApplicationsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/account': {
       id: '/_authenticated/account'
       path: '/account'
@@ -387,6 +431,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/cv/'
       preLoaderRoute: typeof AuthenticatedCvIndexRouteImport
       parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/applications/': {
+      id: '/_authenticated/applications/'
+      path: '/'
+      fullPath: '/applications/'
+      preLoaderRoute: typeof AuthenticatedApplicationsIndexRouteImport
+      parentRoute: typeof AuthenticatedApplicationsRoute
     }
     '/auth/reset-password/$key': {
       id: '/auth/reset-password/$key'
@@ -436,6 +487,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/cv/certifications'
       preLoaderRoute: typeof AuthenticatedCvCertificationsRouteImport
       parentRoute: typeof AuthenticatedCvRoute
+    }
+    '/_authenticated/applications/$applicationId': {
+      id: '/_authenticated/applications/$applicationId'
+      path: '/$applicationId'
+      fullPath: '/applications/$applicationId'
+      preLoaderRoute: typeof AuthenticatedApplicationsApplicationIdRouteImport
+      parentRoute: typeof AuthenticatedApplicationsRoute
     }
     '/_authenticated/account/security': {
       id: '/_authenticated/account/security'
@@ -494,6 +552,23 @@ const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
 const AuthenticatedAccountRouteWithChildren =
   AuthenticatedAccountRoute._addFileChildren(AuthenticatedAccountRouteChildren)
 
+interface AuthenticatedApplicationsRouteChildren {
+  AuthenticatedApplicationsApplicationIdRoute: typeof AuthenticatedApplicationsApplicationIdRoute
+  AuthenticatedApplicationsIndexRoute: typeof AuthenticatedApplicationsIndexRoute
+}
+
+const AuthenticatedApplicationsRouteChildren: AuthenticatedApplicationsRouteChildren =
+  {
+    AuthenticatedApplicationsApplicationIdRoute:
+      AuthenticatedApplicationsApplicationIdRoute,
+    AuthenticatedApplicationsIndexRoute: AuthenticatedApplicationsIndexRoute,
+  }
+
+const AuthenticatedApplicationsRouteWithChildren =
+  AuthenticatedApplicationsRoute._addFileChildren(
+    AuthenticatedApplicationsRouteChildren,
+  )
+
 interface AuthenticatedCvRouteChildren {
   AuthenticatedCvCertificationsRoute: typeof AuthenticatedCvCertificationsRoute
   AuthenticatedCvEducationRoute: typeof AuthenticatedCvEducationRoute
@@ -520,11 +595,13 @@ const AuthenticatedCvRouteWithChildren = AuthenticatedCvRoute._addFileChildren(
 
 interface AuthenticatedRouteChildren {
   AuthenticatedAccountRoute: typeof AuthenticatedAccountRouteWithChildren
+  AuthenticatedApplicationsRoute: typeof AuthenticatedApplicationsRouteWithChildren
   AuthenticatedCvRoute: typeof AuthenticatedCvRouteWithChildren
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAccountRoute: AuthenticatedAccountRouteWithChildren,
+  AuthenticatedApplicationsRoute: AuthenticatedApplicationsRouteWithChildren,
   AuthenticatedCvRoute: AuthenticatedCvRouteWithChildren,
 }
 

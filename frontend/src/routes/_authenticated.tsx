@@ -51,9 +51,27 @@ function AuthedLayout() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between border-b px-4 py-2">
-        <Link to="/" className="font-semibold">
-          lukehirsch
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link to="/" className="font-semibold">
+            lukehirsch
+          </Link>
+          <nav className="flex items-center gap-3 text-sm">
+            <Link
+              to="/cv"
+              className="hover:underline"
+              activeProps={{ className: "font-medium underline" }}
+            >
+              CV
+            </Link>
+            <Link
+              to="/applications"
+              className="hover:underline"
+              activeProps={{ className: "font-medium underline" }}
+            >
+              Applications
+            </Link>
+          </nav>
+        </div>
         <div className="flex items-center gap-3 text-sm">
           <Link to="/account/profile" className="hover:underline">
             {user?.email}

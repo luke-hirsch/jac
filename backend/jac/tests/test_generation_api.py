@@ -1,8 +1,9 @@
 """Async generation — REST surface (create/retrieve/list, scoping, validation).
 
-Red until `[backend]-generation-async-plumbing` lands the `GenerationRun` model, the
-`GenerationRunViewSet`, and its serializers. The Celery enqueue is patched out — these tests
-cover the HTTP contract, not the worker (see test_generation_task.py for the task body).
+Application-centric: a run is created against one of the user's `JobApplication`s
+(`job_application` pk); the posting comes from the application, ownership is derived through
+it. The Celery enqueue is patched out — these tests cover the HTTP contract, not the worker
+(see test_generation_task.py for the task body).
 """
 
 from unittest.mock import patch
@@ -10,41 +11,73 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from rest_framework.test import APITestCase
 
-from jac.models import GenerationRun, JobPosting
+from jac.models import GenerationRun
+
+from ._helpers import _application
 
 
 class GenerationRunModelTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(username="gen_model", password="pass")
+        cls.app = _application(cls.user)
 
     def test_defaults_to_pending(self):
-        run = GenerationRun.objects.create(user=self.user, posting_text="x")
+        run = GenerationRun.objects.create(job_application=self.app)
         self.assertEqual(run.status, "pending")
         self.assertEqual(run.result, None)
         self.assertEqual(run.alias, "default")
+
+    def test_user_and_posting_derive_through_application(self):
+        run = GenerationRun.objects.create(job_application=self.app)
+        self.assertEqual(run.user, self.user)
+        self.assertEqual(run.posting, self.app.posting)
 
 
 class GenerationRunCreateTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(username="gen_create", password="pass")
+        cls.app = _application(cls.user, posting_text="We need a backend dev.")
 
     @patch("jac.views.generate_run")
-    def test_create_persists_run_and_posting_and_enqueues(self, mock_task):
+    def test_create_attaches_run_and_enqueues(self, mock_task):
         self.client.force_login(self.user)
         r = self.client.post(
             "/api/jac/generations/",
-            {"posting_text": "We need a backend dev.", "alias": "default"},
+            {"job_application": self.app.pk, "alias": "default"},
             format="json",
         )
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(r.data["status"], "pending")
         run = GenerationRun.objects.get(pk=r.data["id"])
-        self.assertEqual(run.user, self.user)
-        self.assertIsNotNone(run.job_posting_id)
-        self.assertTrue(JobPosting.objects.filter(pk=run.job_posting_id).exists())
+        self.assertEqual(run.job_application_id, self.app.pk)
         mock_task.delay.assert_called_once_with(run.pk)
+
+    @patch("jac.views.generate_run")
+    def test_cannot_create_for_another_users_application(self, mock_task):
+        other = User.objects.create_user(username="gen_other", password="pass")
+        other_app = _application(other)
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/api/jac/generations/",
+            {"job_application": other_app.pk},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        mock_task.delay.assert_not_called()
+
+    @patch("jac.views.generate_run")
+    def test_omitted_grade_means_autodetect(self, _mock_task):
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/api/jac/generations/",
+            {"job_application": self.app.pk},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        # Blank grade → the task derives it from the alias strength.
+        self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).grade, "")
 
     @patch("jac.views.generate_run")
     def test_unknown_grade_is_coerced_to_light(self, _mock_task):
@@ -52,7 +85,7 @@ class GenerationRunCreateTests(APITestCase):
         with self.assertLogs(level="WARNING") as logs:
             r = self.client.post(
                 "/api/jac/generations/",
-                {"posting_text": "x", "grade": "nonsense"},
+                {"job_application": self.app.pk, "grade": "nonsense"},
                 format="json",
             )
         self.assertEqual(r.status_code, 201, r.data)
@@ -66,8 +99,7 @@ class GenerationRunReadTests(APITestCase):
         cls.alice = User.objects.create_user(username="gen_alice", password="pass")
         cls.bob = User.objects.create_user(username="gen_bob", password="pass")
         cls.gen = GenerationRun.objects.create(
-            user=cls.alice,
-            posting_text="x",
+            job_application=_application(cls.alice, title="Backend dev"),
             status=GenerationRun.Status.done,
             stage="done",
             result={"meta": {"grade": "light"}, "cv": {}, "cover_letter": {}},
@@ -79,6 +111,7 @@ class GenerationRunReadTests(APITestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["status"], "done")
         self.assertEqual(r.data["result"]["meta"]["grade"], "light")
+        self.assertEqual(r.data["posting_title"], "Backend dev")
 
     def test_other_user_cannot_read(self):
         self.client.force_login(self.bob)

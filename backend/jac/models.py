@@ -44,10 +44,11 @@ class SkillManager(models.Manager):
         )
 
 
-class DomainManager(models.Manager):
-    """Domain manager. `for_user(user)` returns the user's own domains plus
-    the system defaults in a single query, so viewsets and the CV pipeline
-    don't have to repeat the union.
+class SystemScopedManager(models.Manager):
+    """Manager for user-owned models that also ship read-only system defaults
+    (rows owned by the `SYSTEM_USER_USERNAME` sentinel). `for_user(user)`
+    returns the user's own rows plus the system defaults in a single query,
+    so viewsets and the pipeline don't have to repeat the union.
     """
 
     def for_user(self, user):
@@ -57,6 +58,52 @@ class DomainManager(models.Manager):
 
     def defaults(self):
         return self.filter(user__username=settings.SYSTEM_USER_USERNAME)
+
+
+class DomainManager(SystemScopedManager):
+    """Domain manager — system-default scoping, see `SystemScopedManager`."""
+
+
+class ApplicationLayout(models.Model):
+    """Render layout for a `JobApplication` (page geometry, fonts, section order).
+
+    `template` holds a declarative JSON spec consumed by the frontend react-pdf
+    renderer. Rows owned by the system user are shared read-only defaults
+    (same pattern as `Domain`); users add their own on top.
+    """
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="layouts"
+    )
+    name = models.CharField(max_length=50)
+    template = models.FileField(upload_to="application_layouts", blank=True)
+
+    if TYPE_CHECKING:
+        objects: SystemScopedManager
+    else:
+        objects = SystemScopedManager()
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [UniqueConstraint("user", "name", name="unique_layout_per_user")]
+
+    def __str__(self):
+        return self.name
+
+
+def default_application_layout():
+    """Pk of the system "default" layout, creating the sentinel user + row if missing.
+
+    Doubles as the `JobApplication.layout` field default and the SET_DEFAULT target
+    when a user deletes one of their own layouts.
+    """
+    from django.contrib.auth.models import User
+
+    system, _ = User.objects.get_or_create(
+        username=settings.SYSTEM_USER_USERNAME, defaults={"is_active": False}
+    )
+    layout, _ = ApplicationLayout.objects.get_or_create(user=system, name="default")
+    return layout.pk
 
 
 class Domain(models.Model):
@@ -401,6 +448,9 @@ class JobPosting(models.Model):
     source_url = models.URLField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Soft-delete: postings are never hard-deleted (applications hang off them);
+    # deactivating one flips its applications to `inactive` via JobApplication.clean().
+    active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -434,6 +484,54 @@ class JobPostAddress(models.Model):
         return self.company or f"Address for posting {self.job_posting.pk}"
 
 
+class JobApplication(models.Model):
+    """The user-facing application for a posting.
+
+    Holds the (editable) tailored CV JSON + cover-letter text and the chosen render layout.
+    Generation runs attach to it (`runs` reverse); a finished run auto-fills
+    `cv_content`/`cover_letter` only while both are still empty — after that the user applies
+    a run's result explicitly (a PATCH from the SPA), so re-runs never clobber edits.
+    """
+
+    class StatusChoices(models.TextChoices):
+        draft = "draft", _("Draft")
+        sent = "sent", _("Sent")
+        response = "response", _("Response from Posting")
+        follow_up_sent = "follow_up", _("Follow-up sent")
+        inactive = "inactive", _("Inactive")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="job_applications"
+    )
+    posting = models.ForeignKey(
+        JobPosting, on_delete=models.CASCADE, related_name="applications"
+    )
+    cv_content = models.JSONField(default=dict, blank=True)
+    cover_letter = models.TextField(blank=True)
+    layout = models.ForeignKey(
+        ApplicationLayout,
+        on_delete=models.SET_DEFAULT,
+        default=default_application_layout,
+        related_name="applications",
+    )
+    status = models.CharField(
+        max_length=12, choices=StatusChoices.choices, default=StatusChoices.draft
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Application for {self.posting.title or 'posting'} ({self.status})"
+
+    def clean(self) -> None:
+        if self.posting_id is not None and not self.posting.active:
+            self.status = self.StatusChoices.inactive
+        return super().clean()
+
+
 class GenerationRun(models.Model):
     """One async CV + cover-letter generation. The view persists it `pending` and enqueues the
     Celery task (`jac.tasks.generate_run`), which streams progress over the `gen_<pk>` channel
@@ -447,23 +545,14 @@ class GenerationRun(models.Model):
         done = "done", _("Done")
         failed = "failed", _("Failed")
 
-    user = models.ForeignKey(
-        "auth.User", on_delete=models.CASCADE, related_name="generation_runs"
-    )
-    job_posting = models.ForeignKey(
-        JobPosting,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="generation_runs",
-    )
-
     class GradeChoice(models.TextChoices):
         light = "light", _("Light")
         standard = "standard", _("Standard")
         high = "strong", _("Strong")
 
-    posting_text = models.TextField()
+    job_application = models.ForeignKey(
+        JobApplication, on_delete=models.CASCADE, related_name="runs"
+    )
     grade = models.CharField(max_length=10, default="light")
     alias = models.CharField(max_length=100, default="default")
     verify_grounding = models.BooleanField(default=True)
@@ -471,6 +560,9 @@ class GenerationRun(models.Model):
     personal_paragraph = models.BooleanField(default=True)
     research_alias = models.CharField(max_length=100, blank=True)
     max_body_snippets = models.PositiveSmallIntegerField(default=5)
+    evaluation = models.TextField(blank=True)
+    score = models.CharField(max_length=50, blank=True)
+
     # CV scoping (all optional; map onto CV.__init__).
     domains = models.JSONField(default=list, blank=True)  # list[str] domain names
     started = models.DateField(null=True, blank=True)
@@ -494,3 +586,12 @@ class GenerationRun(models.Model):
 
     def __str__(self) -> str:
         return f"GenerationRun {self.pk} ({self.status})"
+
+    # Ownership and posting are derived through the application — single source of truth.
+    @property
+    def user(self):
+        return self.job_application.user
+
+    @property
+    def posting(self) -> JobPosting:
+        return self.job_application.posting
