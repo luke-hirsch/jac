@@ -110,6 +110,27 @@ export type RunState = {
   error: string;
 };
 
+/** A run still `pending` after this long was never picked up — the worker is
+ *  probably down (the enqueued task itself expires server-side after 15 min). */
+export const STALE_PENDING_AFTER_S = 30;
+
+export function pendingAgeSeconds(createdAt: string, now: Date): number {
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return 0;
+  return Math.max(0, Math.floor((now.getTime() - created) / 1000));
+}
+
+export function isStalePending(
+  status: RunStatus,
+  createdAt: string,
+  now: Date,
+): boolean {
+  return (
+    status === "pending" &&
+    pendingAgeSeconds(createdAt, now) > STALE_PENDING_AFTER_S
+  );
+}
+
 export function runReducer(state: RunState, e: WsEvent): RunState {
   switch (e.event) {
     case "snapshot":
@@ -139,5 +160,12 @@ export function useGeneration(id: number | null) {
     queryKey: ["jac", "generations", id],
     queryFn: () => api<GenerationRun>(`${URL}${id}/`),
     enabled: id != null,
+  });
+}
+
+export function useCancelGeneration() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<GenerationRun>(`${URL}${id}/cancel/`, { method: "POST" }),
   });
 }

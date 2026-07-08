@@ -1,8 +1,33 @@
+import contextvars
 import time
 from collections.abc import Generator
+from contextlib import contextmanager
 
+from .base import LLMTransportError
 from .conf import get_alias_config, logging_enabled
 from .registry import get_adapter_class
+
+# One retry for connection-level failures (host unreachable / timeout) — enough to ride
+# out a model server that is briefly busy, without double-billing HTTP-level errors.
+RETRY_DELAY_S = 2.0
+
+# Lets a caller observe retries without threading a callback through every prompt helper:
+# the generation task sets a reporter for its own execution context and surfaces
+# "timed out, retrying in Ns" to its progress channel.
+_retry_reporter: contextvars.ContextVar = contextvars.ContextVar(
+    "llm_retry_reporter", default=None
+)
+
+
+@contextmanager
+def retry_reporter(callback):
+    """Scope a `callback(operation: str, delay_s: float, error: str)` to this context;
+    it fires once per transport-level retry made by any LLMClient inside the block."""
+    token = _retry_reporter.set(callback)
+    try:
+        yield
+    finally:
+        _retry_reporter.reset(token)
 
 
 def _normalise_messages(prompt: str | None, messages: list[dict] | None) -> list[dict]:
@@ -36,6 +61,22 @@ class LLMClient:
         adapter_cls = get_adapter_class(self._config["provider"])
         self._adapter = adapter_cls(self._config)
 
+    def _with_retry(self, operation: str, call):
+        """Run an adapter call, retrying once on a transport failure. Notifies the
+        context's retry reporter (if any) before sleeping, so long-running callers
+        can tell their user what is happening instead of silently stalling."""
+        try:
+            return call()
+        except LLMTransportError as exc:
+            reporter = _retry_reporter.get()
+            if reporter is not None:
+                try:
+                    reporter(operation, RETRY_DELAY_S, str(exc))
+                except Exception:  # noqa: BLE001 — a broken reporter must not kill the call
+                    pass
+            time.sleep(RETRY_DELAY_S)
+            return call()
+
     def complete(
         self,
         prompt: str | None = None,
@@ -51,7 +92,9 @@ class LLMClient:
         prompt_tokens = completion_tokens = None
 
         try:
-            response_text = self._adapter.complete(msgs, **kwargs)
+            response_text = self._with_retry(
+                "completion", lambda: self._adapter.complete(msgs, **kwargs)
+            )
             return response_text
         except Exception as exc:
             error_text = str(exc)
@@ -134,7 +177,7 @@ class LLMClient:
         Not logged: embeddings are high-volume and carry no completion text worth
         auditing. Raises NotImplementedError for providers without an embed endpoint.
         """
-        return self._adapter.embed(inputs)
+        return self._with_retry("embedding", lambda: self._adapter.embed(inputs))
 
     def web_search(
         self, prompt: str | None = None, *, messages: list[dict] | None = None, **kwargs

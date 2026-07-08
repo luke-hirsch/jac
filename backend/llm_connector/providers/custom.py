@@ -9,7 +9,7 @@ from urllib import error, request
 
 from django.core.exceptions import ImproperlyConfigured
 
-from ..base import LLMAdapter
+from ..base import LLMAdapter, LLMTransportError
 from ..registry import register
 
 
@@ -80,7 +80,7 @@ class CustomHTTPAdapter(LLMAdapter):
                 f"LLM custom provider HTTP {exc.code} at {self._endpoint}: {body}"
             ) from exc
         except error.URLError as exc:
-            raise RuntimeError(
+            raise LLMTransportError(
                 f"LLM custom provider could not reach {self._endpoint}: {exc.reason}"
             ) from exc
 

@@ -33,7 +33,10 @@ import {
 import {
   aiShareBadge,
   groundingBadge,
+  isStalePending,
+  pendingAgeSeconds,
   runReducer,
+  useCancelGeneration,
   useCreateGeneration,
   useGeneration,
   type CoverLetterResult,
@@ -42,7 +45,7 @@ import {
   type RunState,
   type WsEvent,
 } from "@/lib/queries/generations";
-import { openGenerationSocket } from "@/lib/ws";
+import { openGenerationSocket, type SocketStatus } from "@/lib/ws";
 
 export const Route = createFileRoute("/_authenticated/applications/$applicationId")({
   component: ApplicationDetailPage,
@@ -60,7 +63,21 @@ function ApplicationDetailPage() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const runId = selectedRunId ?? app.data?.runs[0]?.id ?? null;
   const [state, dispatch] = useReducer(runReducer, INITIAL);
+  // Starts as "connecting" so the closed-socket notice never flashes before the
+  // socket effect has run.
+  const [socket, setSocket] = useState<SocketStatus>({ kind: "connecting" });
   const snapshot = useGeneration(runId); // REST rehydrate (refresh-safe)
+  const cancel = useCancelGeneration();
+
+  // A 1s clock while a run is in flight, for the elapsed/stale-queue display.
+  const active =
+    runId != null && (state.status === "pending" || state.status === "running");
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
 
   // Seed from the REST snapshot whenever it (re)loads.
   useEffect(() => {
@@ -79,14 +96,36 @@ function ApplicationDetailPage() {
   // application — the fill-if-empty hand-off may have landed content.
   useEffect(() => {
     if (runId == null) return;
-    return openGenerationSocket(runId, (d) => {
-      const e = d as WsEvent;
-      dispatch(e);
-      if (e.event === "done" || e.event === "failed") {
-        qc.invalidateQueries({ queryKey: ["jac", "applications"] });
-      }
-    });
+    return openGenerationSocket(
+      runId,
+      (d) => {
+        const e = d as WsEvent;
+        dispatch(e);
+        if (e.event === "done" || e.event === "failed") {
+          qc.invalidateQueries({ queryKey: ["jac", "applications"] });
+        }
+      },
+      setSocket,
+    );
   }, [runId, qc]);
+
+  function onAbort() {
+    if (runId == null) return;
+    cancel.mutate(runId, {
+      onSuccess: (run) => {
+        dispatch({
+          event: "snapshot",
+          status: run.status,
+          stage: run.stage,
+          result: run.result,
+          error: run.error,
+        });
+        qc.invalidateQueries({ queryKey: ["jac", "applications"] });
+        qc.invalidateQueries({ queryKey: ["jac", "generations", runId] });
+      },
+      onError: () => toast.error("Could not cancel the run"),
+    });
+  }
 
   if (app.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!app.data) return <p className="text-sm text-destructive">Application not found.</p>;
@@ -108,6 +147,11 @@ function ApplicationDetailPage() {
         activeRunId={runId}
         onRunSelected={setSelectedRunId}
         runState={state}
+        runCreatedAt={snapshot.data?.created_at ?? null}
+        now={now}
+        socket={socket}
+        onAbort={onAbort}
+        aborting={cancel.isPending}
       />
       {state.result && (
         <ResultView
@@ -160,11 +204,21 @@ function GeneratePanel({
   activeRunId,
   onRunSelected,
   runState,
+  runCreatedAt,
+  now,
+  socket,
+  onAbort,
+  aborting,
 }: {
   app: ApplicationRow;
   activeRunId: number | null;
   onRunSelected: (id: number) => void;
   runState: RunState;
+  runCreatedAt: string | null;
+  now: Date;
+  socket: SocketStatus;
+  onAbort: () => void;
+  aborting: boolean;
 }) {
   const configs = useLLMConfigs();
   const create = useCreateGeneration();
@@ -179,6 +233,9 @@ function GeneratePanel({
   const running =
     activeRunId != null &&
     (runState.status === "pending" || runState.status === "running");
+  const ageSeconds = runCreatedAt ? pendingAgeSeconds(runCreatedAt, now) : 0;
+  const staleQueue =
+    running && runCreatedAt != null && isStalePending(runState.status, runCreatedAt, now);
 
   async function onGenerate() {
     try {
@@ -249,9 +306,35 @@ function GeneratePanel({
             Personal paragraph
           </label>
           <Button onClick={onGenerate} disabled={running || create.isPending}>
-            {running ? `Generating… ${runState.stage}` : "Generate"}
+            {running
+              ? `Generating… ${runState.stage || "queued"} · ${ageSeconds}s`
+              : "Generate"}
           </Button>
+          {running && (
+            <Button variant="outline" onClick={onAbort} disabled={aborting}>
+              {aborting ? "Aborting…" : "Abort"}
+            </Button>
+          )}
         </div>
+
+        {staleQueue && (
+          <p className="text-sm text-amber-700">
+            Queued for {ageSeconds}s with no progress — the generation worker may
+            not be running. Abort and retry, or start the worker.
+          </p>
+        )}
+
+        {running && socket.kind === "retrying" && (
+          <p className="text-sm text-amber-700">
+            Live connection lost — retrying in{" "}
+            {Math.max(1, Math.round(socket.delayMs / 1000))}s…
+          </p>
+        )}
+        {running && socket.kind === "closed" && (
+          <p className="text-sm text-muted-foreground">
+            Live updates unavailable — refresh the page to see progress.
+          </p>
+        )}
 
         {runState.status === "failed" && activeRunId != null && (
           <p className="text-sm text-destructive">

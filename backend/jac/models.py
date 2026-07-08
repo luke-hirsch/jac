@@ -590,6 +590,9 @@ class GenerationRun(models.Model):
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.pending
     )
+    task_id = models.CharField(
+        max_length=64, blank=True
+    )  # Celery task id — lets cancel() revoke the queued/running task
     stage = models.CharField(
         max_length=80, blank=True
     )  # last human-readable progress label

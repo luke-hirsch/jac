@@ -1,16 +1,28 @@
 """Celery tasks for async generation.
 
-`generate_run` owns the run lifecycle and streams progress to the `gen_<run_id>` channel group;
-the WebSocket consumer forwards those to the browser. The lifecycle / event contract
+`generate_run` owns the run lifecycle and streams progress to the `gen_<run_id>` channel
+group; the WebSocket consumer forwards those to the browser. The lifecycle / event contract
 (`snapshot`/`progress`/`done`/`failed`) is the part the consumer + frontend depend on, so keep
 it stable. Ownership and the posting are derived through `run.job_application`.
+
+Lifecycle rules (cancel-safe):
+  - the task only *claims* a `pending` run (conditional update) — a run cancelled while
+    queued, or one another worker already handled, is skipped;
+  - terminal writes (`done`/`failed`) only land while the run is still `running`, so a
+    user cancel can never be overwritten by a slow task finishing afterwards;
+  - transient LLM transport failures retry once (see `llm_connector.client.retry_reporter`)
+    and surface as a progress event while they do.
 """
 
 import logging
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
+from django.utils import timezone
+from llm_connector.base import LLMTransportError
+from llm_connector.client import retry_reporter
 from llm_connector.conf import get_alias_strength
 
 from jac.cover_letter import CoverLetter
@@ -20,6 +32,15 @@ from jac.llm_prompts import AddressExtract
 from jac.models import GenerationRun, JobPostAddress
 
 logger = logging.getLogger(__name__)
+
+# A task that no worker picked up within this window is dropped at delivery instead of
+# firing hours later when a worker finally comes back (the run then reads as stale-pending
+# in the UI and can be cancelled from there).
+GENERATION_EXPIRES_S = 15 * 60
+
+# Soft cap for one whole generation; the hard CELERY_TASK_TIME_LIMIT (30 min) stays the
+# backstop. On the soft limit the run fails loudly instead of dying without a trace.
+GENERATION_SOFT_TIME_LIMIT_S = 25 * 60
 
 
 _ADDRESS_FIELDS = (
@@ -46,12 +67,33 @@ def publish_event(run_id: int, payload: dict) -> None:
 
 
 def _progress(run: GenerationRun, stage: str) -> None:
+    # Conditional on `running` so a cancelled run stops emitting progress mid-pipeline.
     run.stage = stage
-    run.save(update_fields=["stage", "updated_at"])
-    publish_event(run.pk, {"event": "progress", "status": run.status, "stage": stage})
+    updated = GenerationRun.objects.filter(
+        pk=run.pk, status=GenerationRun.Status.running
+    ).update(stage=stage, updated_at=timezone.now())
+    if updated:
+        publish_event(
+            run.pk, {"event": "progress", "status": run.status, "stage": stage}
+        )
 
 
-@shared_task
+def _fail(run: GenerationRun, error: str) -> None:
+    """Mark a still-running run failed and publish the terminal event. A run already
+    terminal (e.g. cancelled by the user) is left untouched."""
+    updated = GenerationRun.objects.filter(
+        pk=run.pk, status=GenerationRun.Status.running
+    ).update(
+        status=GenerationRun.Status.failed, error=error, updated_at=timezone.now()
+    )
+    if updated:
+        publish_event(
+            run.pk,
+            {"event": "failed", "status": GenerationRun.Status.failed, "error": error},
+        )
+
+
+@shared_task(soft_time_limit=GENERATION_SOFT_TIME_LIMIT_S)
 def generate_run(run_id: int) -> None:
     run = (
         GenerationRun.objects.select_related(
@@ -64,81 +106,127 @@ def generate_run(run_id: int) -> None:
         logger.warning("generate_run: no run %s", run_id)
         return
 
+    # Claim the run: only a pending one is ours to execute. Anything else was cancelled
+    # while queued, already ran, or is owned by another worker — skip silently.
+    claimed = GenerationRun.objects.filter(
+        pk=run_id, status=GenerationRun.Status.pending
+    ).update(status=GenerationRun.Status.running, updated_at=timezone.now())
+    if not claimed:
+        logger.info(
+            "generate_run %s: status %r not claimable — skipping", run_id, run.status
+        )
+        return
     run.status = GenerationRun.Status.running
-    run.save(update_fields=["status", "updated_at"])
     publish_event(run.pk, {"event": "progress", "status": run.status, "stage": ""})
 
+    def notify_retry(operation: str, delay_s: float, error: str) -> None:
+        # Transient, not persisted: the DB keeps the real stage; the browser just gets
+        # told why nothing is moving right now.
+        publish_event(
+            run.pk,
+            {
+                "event": "progress",
+                "status": run.status,
+                "stage": f"LLM {operation} failed — retrying in {delay_s:.0f}s",
+            },
+        )
+
     try:
-        application = run.job_application
-        user = application.user
-        jp = application.posting
-        alias = run.alias or "default"
-        grade = run.grade or get_alias_strength(alias, user=user)
+        with retry_reporter(notify_retry):
+            application = run.job_application
+            user = application.user
+            jp = application.posting
+            alias = run.alias or "default"
+            grade = run.grade or get_alias_strength(alias, user=user)
 
-        # 1. Tailor the CV.
-        _progress(run, "filtering CV")
-        cv = CV(
-            user_pk=user.pk,
-            domains=run.domains or None,
-            started=run.started,
-            ended=run.ended,
-            min_skill_proficiency=run.min_skill_proficiency or None,
-        )
-        cv.apply_selection(cv.filter_cv(jp.posting_text, grade=grade, alias=alias))
+            # 1. Tailor the CV.
+            _progress(run, "filtering CV")
+            cv = CV(
+                user_pk=user.pk,
+                domains=run.domains or None,
+                started=run.started,
+                ended=run.ended,
+                min_skill_proficiency=run.min_skill_proficiency or None,
+            )
+            cv.apply_selection(cv.filter_cv(jp.posting_text, grade=grade, alias=alias))
 
-        # 2. Extract the recipient address; refresh the persisted JobPosting.
-        _progress(run, "reading posting")
-        extracted = AddressExtract(jp.posting_text, alias=alias, user=user).extract()
-        jp.title = extracted.get("title", "") or jp.title
-        jp.language = extracted.get("language", "en") or "en"
-        jp.save(update_fields=["title", "language", "updated_at"])
-        addr = JobPostAddress(**{f: extracted.get(f, "") for f in _ADDRESS_FIELDS})
+            # 2. Extract the recipient address; refresh the persisted JobPosting.
+            _progress(run, "reading posting")
+            extracted = AddressExtract(jp.posting_text, alias=alias, user=user).extract()
+            jp.title = extracted.get("title", "") or jp.title
+            jp.language = extracted.get("language", "en") or "en"
+            jp.save(update_fields=["title", "language", "updated_at"])
+            addr = JobPostAddress(**{f: extracted.get(f, "") for f in _ADDRESS_FIELDS})
 
-        # 3. Build the cover letter.
-        _progress(
-            run, "researching company" if run.personal_paragraph else "writing letter"
-        )
-        letter = CoverLetter(
-            user,
-            jp,
-            cv,
-            address=addr,
-            grade=grade,
-            alias=alias,
-            max_body_snippets=run.max_body_snippets,
-            verify_grounding=run.verify_grounding,
-            verifier_alias=run.verifier_alias or None,
-            personal_paragraph=run.personal_paragraph,
-            research_alias=run.research_alias or None,
-        ).build()
+            # 3. Build the cover letter.
+            _progress(
+                run,
+                "researching company" if run.personal_paragraph else "writing letter",
+            )
+            letter = CoverLetter(
+                user,
+                jp,
+                cv,
+                address=addr,
+                grade=grade,
+                alias=alias,
+                max_body_snippets=run.max_body_snippets,
+                verify_grounding=run.verify_grounding,
+                verifier_alias=run.verifier_alias or None,
+                personal_paragraph=run.personal_paragraph,
+                research_alias=run.research_alias or None,
+            ).build()
 
-        run.result = {
+        result = {
             "meta": {"grade": grade, "alias": alias},
             "cv": serialize_cv_selection(cv),
             "cover_letter": letter,
         }
+        # Terminal write, conditional on still running: a cancel that landed mid-pipeline
+        # wins, and its result is discarded.
+        finished = GenerationRun.objects.filter(
+            pk=run.pk, status=GenerationRun.Status.running
+        ).update(
+            result=result,
+            status=GenerationRun.Status.done,
+            stage="done",
+            updated_at=timezone.now(),
+        )
+        if not finished:
+            logger.info(
+                "generate_run %s: cancelled while running — result discarded", run_id
+            )
+            return
+        run.result = result
         run.status = GenerationRun.Status.done
-        run.stage = "done"
-        run.save(update_fields=["result", "status", "stage", "updated_at"])
 
         # Auto-fill the application only while it's still untouched; afterwards the user
         # applies a run's result explicitly from the SPA, so re-runs never clobber edits.
         if not application.cv_content and not application.cover_letter:
-            application.cv_content = run.result["cv"]
+            application.cv_content = result["cv"]
             application.cover_letter = letter.get("text", "")
             application.save(
                 update_fields=["cv_content", "cover_letter", "updated_at"]
             )
 
         publish_event(
-            run.pk, {"event": "done", "status": run.status, "result": run.result}
+            run.pk, {"event": "done", "status": run.status, "result": result}
         )
 
+    except SoftTimeLimitExceeded:
+        logger.warning("generate_run %s hit the soft time limit", run_id)
+        _fail(
+            run,
+            "generation timed out — the model took too long; "
+            "try again or pick a lighter grade",
+        )
+    except LLMTransportError as exc:
+        logger.exception("generate_run %s: LLM unreachable", run_id)
+        _fail(
+            run,
+            f"could not reach the language model ({exc}) — "
+            "check that the model server is running",
+        )
     except Exception as exc:  # noqa: BLE001 — surface any pipeline failure to the client
         logger.exception("generate_run %s failed", run_id)
-        run.status = GenerationRun.Status.failed
-        run.error = str(exc)
-        run.save(update_fields=["status", "error", "updated_at"])
-        publish_event(
-            run.pk, {"event": "failed", "status": run.status, "error": run.error}
-        )
+        _fail(run, str(exc))

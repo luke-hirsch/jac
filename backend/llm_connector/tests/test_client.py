@@ -11,8 +11,13 @@ from django.test import TestCase, override_settings
 
 import llm_connector
 from llm_connector import complete, get_client, stream
-from llm_connector.base import LLMAdapter
-from llm_connector.client import LLMClient, _normalise_messages
+from llm_connector.base import LLMAdapter, LLMTransportError
+from llm_connector.client import (
+    RETRY_DELAY_S,
+    LLMClient,
+    _normalise_messages,
+    retry_reporter,
+)
 from llm_connector.conf import (
     get_alias_config,
     get_alias_strength,
@@ -238,6 +243,85 @@ class LLMClientTests(TestCase):
     def test_unknown_alias_raises_at_construction(self):
         with self.assertRaises(ImproperlyConfigured):
             LLMClient("missing")
+
+
+@override_settings(LLM_LOGGING=False)
+class LLMClientRetryTests(TestCase):
+    """The client retries once on a transport failure (host unreachable/timeout) and
+    tells the context's retry reporter; HTTP-level errors are never retried."""
+
+    def setUp(self):
+        FakeAdapter.instances.clear()
+
+    def _transient_llm(self, times=1):
+        return {
+            "default": {
+                "provider": "fake",
+                "model": "fake-1",
+                "_raise": LLMTransportError("could not reach host: timed out"),
+                "_raise_times": times,
+            }
+        }
+
+    @patch("llm_connector.client.time.sleep")
+    def test_transport_error_is_retried_once(self, mock_sleep):
+        with override_settings(LLM=self._transient_llm(times=1)):
+            self.assertEqual(LLMClient("default").complete("hi"), "pong")
+        adapter = FakeAdapter.instances[-1]
+        self.assertEqual(len(adapter.complete_calls), 2)
+        mock_sleep.assert_called_once_with(RETRY_DELAY_S)
+
+    @patch("llm_connector.client.time.sleep")
+    def test_second_transport_failure_propagates(self, _mock_sleep):
+        with override_settings(LLM=self._transient_llm(times=2)):
+            with self.assertRaises(LLMTransportError):
+                LLMClient("default").complete("hi")
+        self.assertEqual(len(FakeAdapter.instances[-1].complete_calls), 2)
+
+    @patch("llm_connector.client.time.sleep")
+    def test_plain_runtime_error_is_not_retried(self, mock_sleep):
+        llm = {
+            "default": {
+                "provider": "fake",
+                "_raise": RuntimeError("HTTP 400: bad request"),
+                "_raise_times": 1,
+            }
+        }
+        with override_settings(LLM=llm):
+            with self.assertRaises(RuntimeError):
+                LLMClient("default").complete("hi")
+        self.assertEqual(len(FakeAdapter.instances[-1].complete_calls), 1)
+        mock_sleep.assert_not_called()
+
+    @patch("llm_connector.client.time.sleep")
+    def test_retry_reporter_is_notified(self, _mock_sleep):
+        seen = []
+        with override_settings(LLM=self._transient_llm(times=1)):
+            with retry_reporter(lambda op, delay, err: seen.append((op, delay, err))):
+                LLMClient("default").complete("hi")
+        self.assertEqual(len(seen), 1)
+        op, delay, err = seen[0]
+        self.assertEqual(op, "completion")
+        self.assertEqual(delay, RETRY_DELAY_S)
+        self.assertIn("could not reach", err)
+
+    @patch("llm_connector.client.time.sleep")
+    def test_broken_reporter_does_not_kill_the_call(self, _mock_sleep):
+        def bad_reporter(*_args):
+            raise ValueError("reporter bug")
+
+        with override_settings(LLM=self._transient_llm(times=1)):
+            with retry_reporter(bad_reporter):
+                self.assertEqual(LLMClient("default").complete("hi"), "pong")
+
+    @patch("llm_connector.client.time.sleep")
+    def test_reporter_scope_ends_with_the_context(self, _mock_sleep):
+        seen = []
+        with override_settings(LLM=self._transient_llm(times=1)):
+            with retry_reporter(lambda *a: seen.append(a)):
+                pass  # reporter installed and removed without any call
+            LLMClient("default").complete("hi")  # retries, but no reporter anymore
+        self.assertEqual(seen, [])
 
 
 @override_settings(LLM=FAKE_LLM, LLM_LOGGING=True)

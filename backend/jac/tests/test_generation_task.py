@@ -8,8 +8,10 @@ hand-off into the owning `JobApplication`. Runs under an in-memory channel layer
 from datetime import date
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
+from llm_connector.base import LLMTransportError
 
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
@@ -149,3 +151,92 @@ class GenerateRunTaskTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, "failed")
         self.assertIn("boom", run.error)
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_soft_time_limit_reads_as_timeout(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.side_effect = SoftTimeLimitExceeded()
+
+        run = self._run()
+        with _muted():
+            generate_run(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        self.assertIn("timed out", run.error)
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_transport_error_hints_at_the_model_server(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.side_effect = LLMTransportError(
+            "could not reach http://localhost:11434/api/chat: timed out"
+        )
+
+        run = self._run()
+        with _muted():
+            generate_run(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        self.assertIn("could not reach", run.error)
+        self.assertIn("model server is running", run.error)
+
+    @patch("jac.tasks.CV")
+    def test_terminal_run_is_not_claimed(self, mock_cv):
+        """A run cancelled while still queued (or one already handled) is skipped —
+        the stale Celery delivery must not resurrect it."""
+        app = _application(self.user)
+        cancelled = GenerationRun.objects.create(
+            job_application=app,
+            status=GenerationRun.Status.failed,
+            error="cancelled by user",
+        )
+        generate_run(cancelled.pk)
+
+        cancelled.refresh_from_db()
+        self.assertEqual(cancelled.status, "failed")
+        self.assertEqual(cancelled.error, "cancelled by user")
+        mock_cv.assert_not_called()
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_cancel_during_run_wins_over_done(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        """A cancel landing mid-pipeline keeps the run failed: the finishing task must
+        not overwrite it with `done`, and must not auto-fill the application."""
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        run = self._run()
+
+        def cancel_then_finish():
+            GenerationRun.objects.filter(pk=run.pk).update(
+                status=GenerationRun.Status.failed, error="cancelled by user"
+            )
+            return _LETTER
+
+        mock_letter.return_value.build.side_effect = cancel_then_finish
+        generate_run(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.error, "cancelled by user")
+        self.assertIsNone(run.result)
+        app = run.job_application
+        app.refresh_from_db()
+        self.assertEqual(app.cover_letter, "")
+        self.assertEqual(app.cv_content, {})

@@ -3,7 +3,10 @@ import {
   toPayload,
   aiShareBadge,
   groundingBadge,
+  isStalePending,
+  pendingAgeSeconds,
   runReducer,
+  STALE_PENDING_AFTER_S,
   type GenerationForm,
   type RunState,
   type TailoredResult,
@@ -93,5 +96,35 @@ describe("runReducer", () => {
     const s = runReducer(EMPTY, { event: "failed", status: "failed", error: "boom" });
     expect(s.status).toBe("failed");
     expect(s.error).toBe("boom");
+  });
+});
+
+describe("pendingAgeSeconds", () => {
+  const now = new Date("2026-07-09T12:00:00Z");
+
+  it("counts whole seconds since creation", () => {
+    expect(pendingAgeSeconds("2026-07-09T11:59:15Z", now)).toBe(45);
+  });
+  it("clamps future timestamps and garbage to 0", () => {
+    expect(pendingAgeSeconds("2026-07-09T12:00:05Z", now)).toBe(0);
+    expect(pendingAgeSeconds("not a date", now)).toBe(0);
+  });
+});
+
+describe("isStalePending", () => {
+  const now = new Date("2026-07-09T12:00:00Z");
+  const oldEnough = new Date(
+    now.getTime() - (STALE_PENDING_AFTER_S + 5) * 1000,
+  ).toISOString();
+  const fresh = new Date(now.getTime() - 2000).toISOString();
+
+  it("flags a pending run older than the threshold (worker likely down)", () => {
+    expect(isStalePending("pending", oldEnough, now)).toBe(true);
+  });
+  it("never flags fresh pending runs or runs that made it past pending", () => {
+    expect(isStalePending("pending", fresh, now)).toBe(false);
+    expect(isStalePending("running", oldEnough, now)).toBe(false);
+    expect(isStalePending("done", oldEnough, now)).toBe(false);
+    expect(isStalePending("failed", oldEnough, now)).toBe(false);
   });
 });

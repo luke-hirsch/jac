@@ -2,6 +2,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 
 
+class LLMTransportError(RuntimeError):
+    """The provider host could not be reached (connection refused, DNS, timeout).
+
+    Distinct from an HTTP error response: nothing reached the model, so the call is
+    safe to retry once. A RuntimeError subclass so existing broad handlers keep working.
+    """
+
+
 class LLMAdapter(ABC):
     """Interface every provider adapter must implement.
 

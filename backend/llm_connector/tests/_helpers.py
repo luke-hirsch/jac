@@ -37,11 +37,18 @@ class FakeAdapter(LLMAdapter):
         self.response = config.get("_response", "pong")
         self.chunks = config.get("_chunks", ["pi", "ng"])
         self.raise_on_complete: Exception | None = config.get("_raise")
+        # None = raise on every call (legacy semantics); an int = raise on the first
+        # N calls only, then succeed — for exercising the client's transport retry.
+        self.raise_times: int | None = config.get("_raise_times")
+        self._raised = 0
         FakeAdapter.instances.append(self)
 
     def complete(self, messages: list[dict], **kwargs) -> str:
         self.complete_calls.append((messages, kwargs))
-        if self.raise_on_complete:
+        if self.raise_on_complete and (
+            self.raise_times is None or self._raised < self.raise_times
+        ):
+            self._raised += 1
             raise self.raise_on_complete
         return self.response
 

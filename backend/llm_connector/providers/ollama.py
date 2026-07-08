@@ -23,7 +23,7 @@ from urllib import error, request
 
 from django.core.exceptions import ImproperlyConfigured
 
-from ..base import LLMAdapter
+from ..base import LLMAdapter, LLMTransportError
 from ..registry import register
 
 _KNOWN = {
@@ -109,7 +109,7 @@ class OllamaAdapter(LLMAdapter):
                 f"LLM ollama provider HTTP {exc.code} at {self._endpoint}: {body}"
             ) from exc
         except error.URLError as exc:
-            raise RuntimeError(
+            raise LLMTransportError(
                 f"LLM ollama provider could not reach {self._endpoint}: {exc.reason}"
             ) from exc
 
@@ -155,7 +155,7 @@ class OllamaAdapter(LLMAdapter):
                 f"LLM ollama provider HTTP {exc.code} at {self._embed_endpoint}: {detail}"
             ) from exc
         except error.URLError as exc:
-            raise RuntimeError(
+            raise LLMTransportError(
                 f"LLM ollama provider could not reach {self._embed_endpoint}: {exc.reason}"
             ) from exc
         return body.get("embeddings") or []

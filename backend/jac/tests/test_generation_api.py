@@ -12,8 +12,9 @@ from django.contrib.auth.models import User
 from rest_framework.test import APITestCase
 
 from jac.models import GenerationRun
+from jac.tasks import GENERATION_EXPIRES_S
 
-from ._helpers import _application
+from ._helpers import _application, _muted
 
 
 class GenerationRunModelTests(APITestCase):
@@ -42,6 +43,7 @@ class GenerationRunCreateTests(APITestCase):
 
     @patch("jac.views.generate_run")
     def test_create_attaches_run_and_enqueues(self, mock_task):
+        mock_task.apply_async.return_value.id = "task-abc"
         self.client.force_login(self.user)
         r = self.client.post(
             "/api/jac/generations/",
@@ -52,7 +54,12 @@ class GenerationRunCreateTests(APITestCase):
         self.assertEqual(r.data["status"], "pending")
         run = GenerationRun.objects.get(pk=r.data["id"])
         self.assertEqual(run.job_application_id, self.app.pk)
-        mock_task.delay.assert_called_once_with(run.pk)
+        # Enqueued with an expiry (a task nobody picks up must not fire hours later)
+        # and the task id persisted so cancel() can revoke it.
+        mock_task.apply_async.assert_called_once_with(
+            args=[run.pk], expires=GENERATION_EXPIRES_S
+        )
+        self.assertEqual(run.task_id, "task-abc")
 
     @patch("jac.views.generate_run")
     def test_cannot_create_for_another_users_application(self, mock_task):
@@ -65,10 +72,11 @@ class GenerationRunCreateTests(APITestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 400)
-        mock_task.delay.assert_not_called()
+        mock_task.apply_async.assert_not_called()
 
     @patch("jac.views.generate_run")
     def test_omitted_grade_means_autodetect(self, _mock_task):
+        _mock_task.apply_async.return_value.id = "task-1"
         self.client.force_login(self.user)
         r = self.client.post(
             "/api/jac/generations/",
@@ -81,6 +89,7 @@ class GenerationRunCreateTests(APITestCase):
 
     @patch("jac.views.generate_run")
     def test_unknown_grade_is_coerced_to_light(self, _mock_task):
+        _mock_task.apply_async.return_value.id = "task-2"
         self.client.force_login(self.user)
         with self.assertLogs(level="WARNING") as logs:
             r = self.client.post(
@@ -127,3 +136,99 @@ class GenerationRunReadTests(APITestCase):
         r = self.client.get("/api/jac/generations/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.data["results"]), 0)
+
+
+@patch("jac.views.publish_event")
+@patch("jac.views.celery_current_app")
+class GenerationRunCancelTests(APITestCase):
+    """POST /generations/<pk>/cancel/ — revoke the task, mark the run failed, publish
+    the terminal event. Idempotent on finished runs; resilient to a dead broker."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="gen_cancel", password="pass")
+        cls.app = _application(cls.user)
+
+    def _cancel(self, run):
+        return self.client.post(f"/api/jac/generations/{run.pk}/cancel/")
+
+    def test_cancel_pending_run_revokes_and_fails_it(self, mock_celery, mock_publish):
+        run = GenerationRun.objects.create(
+            job_application=self.app, task_id="task-xyz"
+        )
+        self.client.force_login(self.user)
+        r = self._cancel(run)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["status"], "failed")
+        self.assertEqual(r.data["error"], "cancelled by user")
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        mock_celery.control.revoke.assert_called_once_with(
+            "task-xyz", terminate=True
+        )
+        event = mock_publish.call_args.args[1]
+        self.assertEqual(event["event"], "failed")
+        self.assertEqual(event["error"], "cancelled by user")
+
+    def test_cancel_running_run_also_works(self, mock_celery, _mock_publish):
+        run = GenerationRun.objects.create(
+            job_application=self.app,
+            task_id="task-run",
+            status=GenerationRun.Status.running,
+        )
+        self.client.force_login(self.user)
+        r = self._cancel(run)
+        self.assertEqual(r.status_code, 200)
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        mock_celery.control.revoke.assert_called_once()
+
+    def test_cancel_finished_run_is_a_noop(self, mock_celery, mock_publish):
+        run = GenerationRun.objects.create(
+            job_application=self.app,
+            status=GenerationRun.Status.done,
+            result={"cv": {}},
+        )
+        self.client.force_login(self.user)
+        r = self._cancel(run)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "done")
+        run.refresh_from_db()
+        self.assertEqual(run.status, "done")
+        mock_celery.control.revoke.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_cancel_without_task_id_still_fails_the_run(
+        self, mock_celery, _mock_publish
+    ):
+        run = GenerationRun.objects.create(job_application=self.app)  # task_id ""
+        self.client.force_login(self.user)
+        r = self._cancel(run)
+        self.assertEqual(r.status_code, 200)
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+        mock_celery.control.revoke.assert_not_called()
+
+    def test_broker_failure_does_not_block_the_cancel(
+        self, mock_celery, _mock_publish
+    ):
+        mock_celery.control.revoke.side_effect = OSError("broker down")
+        run = GenerationRun.objects.create(
+            job_application=self.app, task_id="task-dead"
+        )
+        self.client.force_login(self.user)
+        with _muted():  # the revoke failure is logged deliberately
+            r = self._cancel(run)
+        self.assertEqual(r.status_code, 200)
+        run.refresh_from_db()
+        self.assertEqual(run.status, "failed")
+
+    def test_other_user_cannot_cancel(self, mock_celery, _mock_publish):
+        other = User.objects.create_user(username="gen_intruder", password="pass")
+        run = GenerationRun.objects.create(job_application=self.app)
+        self.client.force_login(other)
+        r = self._cancel(run)
+        self.assertEqual(r.status_code, 404)
+        run.refresh_from_db()
+        self.assertEqual(run.status, "pending")
+        mock_celery.control.revoke.assert_not_called()

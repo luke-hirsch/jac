@@ -15,8 +15,10 @@ The `user` FK on writes is injected by the serializers via
 `HiddenField(default=CurrentUserDefault())`, so we don't need to set it here.
 """
 
+import logging
 from datetime import date
 
+from celery import current_app as celery_current_app
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
@@ -58,7 +60,9 @@ from jac.serializers import (
     ResumeSnippetSerializer,
     SkillSerializer,
 )
-from jac.tasks import generate_run
+from jac.tasks import GENERATION_EXPIRES_S, generate_run, publish_event
+
+logger = logging.getLogger(__name__)
 
 
 class BulkActionMixin:
@@ -380,7 +384,13 @@ class GenerationRunViewSet(
 
     def perform_create(self, serializer):
         run = serializer.save()
-        generate_run.delay(run.pk)
+        # `expires` keeps a task queued while no worker is up from firing hours later;
+        # the task id is what cancel() revokes.
+        async_result = generate_run.apply_async(
+            args=[run.pk], expires=GENERATION_EXPIRES_S
+        )
+        run.task_id = async_result.id
+        run.save(update_fields=["task_id"])
         self._created = run
 
     def create(self, request, *args, **kwargs):
@@ -389,3 +399,28 @@ class GenerationRunViewSet(
         self.perform_create(ser)
         out = GenerationRunSerializer(self._created)
         return Response(out.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Abort a queued or running run: revoke the Celery task, mark the run failed,
+        and publish the terminal event so open sockets update. Idempotent — cancelling
+        a finished run returns it unchanged. The task side never resurrects a cancelled
+        run (it only claims `pending` and only finishes `running` ones)."""
+        run = self.get_object()
+        if run.status in (GenerationRun.Status.done, GenerationRun.Status.failed):
+            return Response(GenerationRunSerializer(run).data)
+        if run.task_id:
+            try:
+                celery_current_app.control.revoke(run.task_id, terminate=True)
+            except Exception:  # noqa: BLE001 — broker down must not block the cancel
+                logger.warning(
+                    "cancel run %s: revoke of task %s failed", run.pk, run.task_id,
+                    exc_info=True,
+                )
+        run.status = GenerationRun.Status.failed
+        run.error = "cancelled by user"
+        run.save(update_fields=["status", "error", "updated_at"])
+        publish_event(
+            run.pk, {"event": "failed", "status": run.status, "error": run.error}
+        )
+        return Response(GenerationRunSerializer(run).data)

@@ -28,8 +28,8 @@ Job hunting is repetitive. You copy-paste your CV, tweak bullet points, forget t
 | Backend | Django 6, Django REST Framework |
 | Frontend | React 19 + Vite + TypeScript |
 | Database | SQLite → PostgreSQL |
-| LLM | Multi-provider connector (Anthropic, OpenAI, Ollama) |
-| Task queue | Celery + Redis *(planned)* |
+| LLM | Multi-provider connector (Anthropic, OpenAI, Google, Ollama) |
+| Task queue | Celery + Redis/Valkey (async CV/letter generation) |
 
 ---
 
@@ -97,9 +97,26 @@ cp .env.example .env   # fill in SECRET_KEY, API keys
 cd backend
 python manage.py migrate
 python manage.py createsuperuser
+```
 
-# Run
-python manage.py runserver
+### Run (dev)
+
+The dev stack is **four processes** — generation runs are async, so the web server alone
+is not enough. A run created without a worker sits `pending` until the UI flags it stale
+(~30 s) and offers Abort; the queued task expires after 15 min.
+
+```bash
+# 1. Redis/Valkey — Celery broker + Channels layer (once, keeps running)
+brew services start valkey
+
+# 2. Ollama — the zero-cost default LLM (the desktop app also works)
+ollama serve
+
+# 3. Web + WebSockets (daphne rides on runserver)
+cd backend && python manage.py runserver
+
+# 4. Generation worker — REQUIRED for CV / cover-letter runs
+cd backend && celery -A lukehirsch worker -l info
 ```
 
 ```bash
