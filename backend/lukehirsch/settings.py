@@ -118,7 +118,10 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        # MUST stay the pub/sub layer: the classic core.RedisChannelLayer block-polls
+        # with bzpopmin and redis-py >= 5.1 raises TimeoutError on that read after 5s
+        # idle — killing the socket of every generation run that thinks for a while.
+        "BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer",
         "CONFIG": {
             "hosts": [REDIS_URL],
         },
