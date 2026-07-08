@@ -80,14 +80,20 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   get a raw JSON textarea. `api_key` is write-only — the server only ever returns `has_api_key`. The
   pure form↔payload helpers (`toPayload`/`rowToState`/`switchProvider`/…) are unit-tested. See
   [[frontend-test-layout]].
-- **jac async generation plumbing** (`lukehirsch/celery.py`, `lukehirsch/asgi.py`, `jac/models.py`
-  `GenerationRun`, `jac/tasks.py`, `jac/consumers.py`, `jac/ws_routing.py`, viewset in `jac/views.py`)
-  — the async loop carrying a generation to the SPA: REST `POST` persists a `pending` `GenerationRun`
-  + `JobPosting` and enqueues a Celery task; the task streams progress to the `gen_<pk>` channel
-  group; a Channels WS (`GenerationConsumer`, session-auth + ownership) forwards events and pushes a
-  snapshot on connect; a REST `GET` rehydrates on refresh. **Stub task body** for now — guide 2 swaps
-  the real pipeline in behind the stable event contract (`snapshot`/`progress`/`done`/`failed`).
-  Channel layer + Celery broker run on Redis/Valkey even in `DEBUG`. See [[generation-async-loop]].
+- **jac generation loop — real pipeline, end to end, hardened** (`jac/tasks.py`, `jac/views.py`,
+  `jac/consumers.py`, frontend `routes/_authenticated/applications/`) — REST `POST
+  /api/jac/generations/` (application pk) enqueues Celery `generate_run`, which runs the **real**
+  CV + cover-letter pipeline and streams `snapshot`/`progress`/`done`/`failed` over the `gen_<pk>`
+  WS (session-auth + ownership); REST `GET` rehydrates; the frontend renders the tailored CV +
+  letter (ai_share/grounding badges, personal-paragraph stub styling) and applies runs to the
+  application explicitly. **Hardened:** `POST …/<pk>/cancel/` revokes + fails a run (`task_id` on
+  the model; the task claims only `pending` runs and finishes only `running` ones, so a cancel
+  always wins); enqueue carries `expires=15 min`; task `soft_time_limit=25 min`; LLM
+  transport failures (`LLMTransportError`) retry once and surface "retrying in Ns" progress events
+  (`llm_connector.client.retry_reporter`); frontend has an Abort button, a stale-queue hint
+  (pending >30 s ⇒ "worker may be down"), and WS auto-reconnect with backoff. Channel layer MUST be
+  **`channels_redis.pubsub`** (core layer breaks vs redis-py ≥5.1). Dev stack = 4 processes
+  (README "Run (dev)"): valkey, ollama, runserver, **celery worker**. See [[generation-async-loop]].
 
 # roadmap
 
@@ -95,15 +101,9 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **wire the pipeline to the frontend** — a 3-guide effort: (1) async generation plumbing
-   **[done — see current state]**; (2) **generation pipeline** — swap the stub `generate_run` body
-   for the real CV + cover-letter run (`jac.generation_result.serialize_cv_selection`, patched
-   `CV`/`CoverLetter`/`AddressExtract`/`get_alias_strength`), producing the real `result` shape;
-   (3) **frontend render** of the tailored CV + cover letter — `grounding` next to `ai_share`
-   (green ✓ / amber "N claims" badge, claim list on hover) **and the `personal_paragraph`** (real
-   vs `is_stub` styled distinctly, sources + own grounding badge). The result dict already carries
-   everything. Guides 2 + 3 plans live in `to-do/`; pre-written red tests already on disk
-   (`test_generation_task.py`, `frontend/tests/lib/generations.test.ts`).
+1. **frontend cv-snippets** — open guide in `to-do/` (`[frontend]-cv-snippets.md`); the
+   "resume snippets frontend ui" commit landed parts of it — reconcile the guide against the code
+   before continuing.
 2. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 3. **self-hosted web-search agent** (parked) — let a self-hosted *standard* run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
@@ -112,30 +112,16 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
 
-> **Async generation plumbing — done (guide 1 of 3).** End-to-end REST→Celery→Channels-WS loop with
-> a **stub** task body, proving Redis/Valkey + Celery + Channels + WS session-auth + ownership before
-> the slow LLM pipeline goes on top (guide 2). Unknown `grade` is **coerced to `light` + warned**, not
-> rejected (a 400 would punish a typo; the run still succeeds). See [[generation-async-loop]].
+> **Pipeline-to-frontend (3 guides) — done.** Plumbing, real pipeline task body, and the frontend
+> render all landed (guides in `plans/done/`); see the generation-loop bullet in current state.
 >
-> **Frontend LLM-config tab — done.** Owner-scoped CRUD UI over `/api/llm/configs/` (provider masks
-> for the commercial providers, JSON textarea for `custom`/`ollama`; write-only `api_key`). Landed
-> with the **first frontend test harness**: vitest, tests in a separate `frontend/tests/` tree that
-> mirrors `src/` (not colocated) and is excluded from the `tsc -b` build. See [[frontend-test-layout]].
-
-> **Cover-letter generation — done.** Selection (`SnippetSelector`) + writer (`CoverLetterWriter`,
-> posting stripped) + `ai_share` provenance + `FaithfulnessCheck` grounding all landed and merged to
-> `main`. The previously-failing cover-letter tests are now green (the breakage was a missing test
-> import + a `langauge` typo in `ResumeSnippetSerializer` that 500'd every snippet endpoint — both
-> fixed). all suites pass clean (no stray log/stdout noise). **Tests now live in a per-app
-> `tests/` package** (`backend/<app>/tests/`), split by concern into `test_*.py` files with shared
-> fixtures in a non-collected `_helpers.py` — not the old single `tests.py` per app.
->
-> **CV ladder — done.** All three rungs landed: `light` (embeddings →
-> propagation + floors), `standard` (`Instruct` `0–3` labels → keep-by-verdict), `strong`
-> (`Conversational` holistic ordered selection → guardrails only). All LLM I/O is **line-format,
-> not JSON** (id-anchored, truncation-robust — see `no-json-llm-io`). Model/grade selection wired
-> end-to-end: `cv_eval --llm/--grade` matrix + alias threading + embedder autodetect +
-> per-embedder `embed_floors`.
+> **Generation hardening — done (2026-07-09).** The "worker down / run stuck forever" failure class
+> is closed: cancel endpoint + Abort button, task-side claim/terminal guards, enqueue expiry, soft
+> time limit, LLM transport retry with live "retrying" events, stale-queue hint, WS auto-reconnect,
+> and the load-bearing pubsub channel-layer fix (core layer + redis-py ≥5.1 dropped idle sockets —
+> documented earlier but never typed into settings). Follow-up worth a guide: `CoverLetterWriter`
+> accepts any non-empty LLM response, so a spurious small-model refusal ("I can't assist…") can
+> become the letter body — needs a refusal guard.
 
 # how we work
 
