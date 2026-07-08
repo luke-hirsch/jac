@@ -322,3 +322,20 @@ class CVFilterRoutingTests(TestCase):
         ):
             out = f.output()
         self.assertEqual(out["job"][0]["score"], 0.9)  # cosine -> light path
+
+
+class CVGradeCohesionTests(TestCase):
+    """`[backend]-grade-cohesion`: CV.FILTER_GRADE derives from the canonical Grade, and an
+    unknown filter_grade normalises to light in one place."""
+
+    def test_filter_grade_derives_from_enum(self):
+        from jac.cv import CV
+        from jac.models import Grade
+
+        self.assertEqual(set(CV.FILTER_GRADE), set(Grade.values))
+
+    def test_unknown_grade_normalises_to_light(self):
+        from jac.cv import CV
+
+        cv = CV(user_pk=1, filter_grade="nonsense")
+        self.assertEqual(cv.filter_grade, "light")

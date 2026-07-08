@@ -14,14 +14,23 @@ from datetime import date
 from django.db.models import Q
 
 from jac.filter import CVFilter
-from jac.models import Certification, Education, Job, Language, Project, Skill
+from jac.models import (
+    Certification,
+    Education,
+    Grade,
+    Job,
+    Language,
+    Project,
+    Skill,
+    normalize_grade,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class CV:
     PROFICIENCY_ORDER = ["beginner", "intermediate", "advanced", "expert"]
-    FILTER_GRADE = ["strong", "standard", "light"]
+    FILTER_GRADE = list(Grade.values)  # ["light", "standard", "strong"]
 
     _MIN_PER_SECTION = {
         "skills": 5,
@@ -57,7 +66,7 @@ class CV:
         self.min_skill_proficiency = min_skill_proficiency
         self.entries = self.get_cv_entries()
         if filter_grade in self.FILTER_GRADE:
-            self.filter_grade = filter_grade
+            self.filter_grade = normalize_grade(filter_grade)
         else:
             self.filter_grade = "light"
 
@@ -274,9 +283,7 @@ class CV:
         cv_filter = CVFilter(
             job_post_text=job_post_text,
             entries=self._flatten_entries(),
-            grade=grade
-            if grade and grade in ["light", "standard", "strong"]
-            else "light",
+            grade=normalize_grade(grade),
             user=self.user,
             alias=alias,
         )

@@ -44,6 +44,28 @@ class SkillManager(models.Manager):
         )
 
 
+class Grade(models.TextChoices):
+    """The CV-tailoring / cover-letter quality rung. 1:1 with an LLM alias's 'strength'
+    (llm_connector.conf.get_alias_strength) — same three strings, but this is jac's own copy so
+    the connector stays app-agnostic. This is THE definition; nothing else should hardcode the list.
+    """
+
+    light = "light", _("Light")
+    standard = "standard", _("Standard")
+    strong = "strong", _("Strong")
+
+
+def normalize_grade(value: str | None) -> str:
+    """Coerce any input to a valid Grade value, defaulting to `light`.
+
+    The single validation point for grade across the pipeline (serializer, CV, CVFilter). A blank
+    or unknown grade becomes `light` — the safe/cheap rung — never an error (a typo shouldn't fail a
+    run). NOTE: this differs from llm_connector.get_alias_strength, which defaults unknowns to
+    `strong`; see the grade-cohesion guide's 'Decision point'.
+    """
+    return value if value in Grade.values else Grade.light
+
+
 class SystemScopedManager(models.Manager):
     """Manager for user-owned models that also ship read-only system defaults
     (rows owned by the `SYSTEM_USER_USERNAME` sentinel). `for_user(user)`
@@ -545,15 +567,10 @@ class GenerationRun(models.Model):
         done = "done", _("Done")
         failed = "failed", _("Failed")
 
-    class GradeChoice(models.TextChoices):
-        light = "light", _("Light")
-        standard = "standard", _("Standard")
-        high = "strong", _("Strong")
-
     job_application = models.ForeignKey(
         JobApplication, on_delete=models.CASCADE, related_name="runs"
     )
-    grade = models.CharField(max_length=10, default="light")
+    grade = models.CharField(max_length=10, choices=Grade.choices, default=Grade.light)
     alias = models.CharField(max_length=100, default="default")
     verify_grounding = models.BooleanField(default=True)
     verifier_alias = models.CharField(max_length=100, blank=True)

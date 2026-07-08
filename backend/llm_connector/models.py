@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from .crypto import decrypt, encrypt
+from .validators import validate_safe_llm_url
 
 
 class LLMConfig(models.Model):
@@ -75,6 +76,13 @@ class LLMConfig(models.Model):
         if self.extra:
             config.update(self.extra)
         return config
+
+    def clean(self):
+        super().clean()
+        if self.provider in ("custom", "ollama") and self.url:
+            validate_safe_llm_url(
+                self.url
+            )  # raises ValidationError on an internal host
 
 
 class LLMRequestLog(models.Model):

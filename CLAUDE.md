@@ -1,13 +1,18 @@
 # project
 
-a personalised portfolio site + a private CV automation tool (**jac**), in one monorepo.
+a personalised **public** portfolio site + a CV automation tool (**jac**), in one monorepo. the
+portfolio is the product; jac feeds it.
 
-- **portfolio**: no static page. content is rendered per visitor based on how they arrived.
+- **portfolio**: no static page. content is rendered per visitor based on how they arrived —
   e.g. a visitor from a business-card QR sees something different than one arriving from a CV on a
   job post; organic visitors introduce themselves via a questionnaire and get content matched to
-  their answers.
-- **jac** (Job Application Creator): a private pipeline that digests a job posting and renders a
-  CV + cover letter tailored to it with the help of LLMs.
+  their answers. it renders from the **same career-DB entries** jac maintains, and it is public.
+- **jac** (Job Application Creator): a pipeline that digests a job posting and renders a CV +
+  cover letter tailored to it with the help of LLMs. auth-gated **today** (signup closed = launch
+  toggle), but the plan is to open it as part of the portfolio — a "create your own CV here!"
+  showcase. **security posture: treat every authenticated surface as internet-facing**, because
+  open signup is a roadmap destination, not an accident; public endpoints opt in via explicit
+  `AllowAny` on top of the deny-by-default DRF setting, never public-by-omission.
 
 # layout
 

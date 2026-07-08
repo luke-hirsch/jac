@@ -389,3 +389,23 @@ class ParagraphGroundingCheckTests(TestCase):
         with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
             out = ParagraphGroundingCheck("para", "C", "P").critique()
         self.assertEqual(out, {"count": None, "claims": []})
+
+
+class EmbedCapJobPostTests(TestCase):
+    """`[backend]-correctness-bugs`: Embed._cap_job_post actually truncates when over budget.
+    Red until the no-op stub branch is replaced with real char-truncation."""
+
+    def _embed(self, text):
+        return Embed(job_post_text=text, entries=[])  # no entries -> all budget for the post
+
+    def test_under_budget_returned_unchanged(self):
+        with patch.object(Embed, "_MAX_TOKENS", 100):
+            text = "word " * 10  # ~40 tokens, well under 100
+            self.assertEqual(self._embed(text)._cap_job_post(), text)
+
+    def test_over_budget_is_truncated(self):
+        with patch.object(Embed, "_MAX_TOKENS", 100):
+            text = "word " * 400  # ~1600 tokens >> 100
+            capped = self._embed(text)._cap_job_post()
+            self.assertLess(len(capped), len(text))
+            self.assertLessEqual(len(capped), 100 * 4)  # room_tokens * ~4 chars/token

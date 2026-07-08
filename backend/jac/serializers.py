@@ -20,9 +20,10 @@ from jac.models import (
     Project,
     ResumeSnippet,
     Skill,
+    normalize_grade,
 )
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T", bound=serializers.Serializer)
@@ -459,7 +460,9 @@ class ApplicationLayoutSerializer(serializers.ModelSerializer):
         return obj.user.username == settings.SYSTEM_USER_USERNAME
 
 
-class GenerationRunCreateSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+class GenerationRunCreateSerializer(
+    ScopeRelatedToUserMixin, serializers.ModelSerializer
+):
     user_scoped_fields = ("job_application",)
     # Blank = auto-detect from the alias strength in the task (`run.grade or
     # get_alias_strength(...)`); the model default "light" only applies to direct ORM creates.
@@ -483,10 +486,14 @@ class GenerationRunCreateSerializer(ScopeRelatedToUserMixin, serializers.ModelSe
         ]
 
     def validate_grade(self, value):
-        if value and value not in ("light", "standard", "strong"):
-            logger.warning(f"Invalid grade: {value}")
-            value = "light"
-        return value
+        # Blank stays blank (the task auto-detects from alias strength). A non-blank but unknown
+        # grade is coerced to the safe rung rather than 400'd — a typo shouldn't fail the request.
+        if not value:
+            return value
+        normalized = normalize_grade(value)
+        if normalized != value:
+            logger.warning("Invalid grade %r coerced to %r", value, normalized)
+        return normalized
 
 
 class GenerationRunSerializer(serializers.ModelSerializer):

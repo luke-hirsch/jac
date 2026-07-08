@@ -4,7 +4,6 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase, override_settings
 
-import llm_connector
 from llm_connector import complete
 from llm_connector.client import LLMClient
 from llm_connector.crypto import _fernet, decrypt, encrypt

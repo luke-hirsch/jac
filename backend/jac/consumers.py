@@ -14,13 +14,15 @@ class GenerationConsumer(AsyncJsonWebsocketConsumer):
         if user is None or not user.is_authenticated:
             await self.close(code=4401)
             return
-        snapshot = await self._snapshot(user.id, self.pk)
-        if snapshot is None:
+        if not await self._owns(user.id, self.pk):
             await self.close(code=4404)
             return
         self.group = f"gen_{self.pk}"
         await self.channel_layer.group_add(self.group, self.channel_name)
         await self.accept()
+        # Read AFTER joining the group: any event during accept() is then reconciled by this
+        # baseline snapshot, closing the read-then-subscribe race.
+        snapshot = await self._snapshot(self.pk)
         await self.send_json({"event": "snapshot", **snapshot})
 
     async def disconnect(self, code):
@@ -33,12 +35,16 @@ class GenerationConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json(message["payload"])
 
     @database_sync_to_async
-    def _snapshot(self, user_id: int, pk: int):
-        run = GenerationRun.objects.filter(
+    def _owns(self, user_id: int, pk: int) -> bool:
+        return GenerationRun.objects.filter(
             pk=pk, job_application__user_id=user_id
-        ).first()
-        if run is None:
-            return None
+        ).exists()
+
+    @database_sync_to_async
+    def _snapshot(self, pk: int) -> dict:
+        run = GenerationRun.objects.filter(pk=pk).first()
+        if run is None:  # deleted between the ownership check and here
+            return {"status": "failed", "stage": "", "result": None, "error": "gone"}
         return {
             "status": run.status,
             "stage": run.stage,

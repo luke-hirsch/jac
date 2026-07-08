@@ -1,8 +1,6 @@
 """API — user-scoping, CRUD behaviours, bulk actions."""
 
-import json
 from datetime import date, timedelta
-from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth.models import User

@@ -36,6 +36,14 @@ class AnthropicAdapter(LLMAdapter):
         self._max_tokens = config.get("max_tokens", 4096)
 
     @staticmethod
+    def _text_from(response) -> str:
+        """Join all text blocks, skipping tool_use / thinking / web_search blocks. Anthropic can
+        return a non-text block first (e.g. with tools enabled), so indexing content[0] is unsafe."""
+        return "".join(
+            b.text for b in response.content if getattr(b, "type", None) == "text"
+        ).strip()
+
+    @staticmethod
     def _split_system(
         messages: list[dict], extra_system: str | None
     ) -> tuple[str | None, list[dict]]:
@@ -57,7 +65,7 @@ class AnthropicAdapter(LLMAdapter):
         if system:
             params["system"] = system
         response = self._client.messages.create(**params)
-        return response.content[0].text
+        return self._text_from(response)
 
     def stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
         system, api_msgs = self._split_system(

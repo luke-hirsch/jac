@@ -11,7 +11,6 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.test import TestCase
 
-from jac.cv import CV
 from jac.models import (
     Certification,
     Domain,

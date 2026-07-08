@@ -7,8 +7,7 @@ from unittest.mock import MagicMock, patch
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase
 
-import llm_connector
-from llm_connector import can_web_search, complete
+from llm_connector import can_web_search
 from llm_connector.base import LLMAdapter
 from llm_connector.providers.anthropic import AnthropicAdapter
 from llm_connector.providers.google import GoogleAdapter
@@ -96,7 +95,6 @@ class OllamaAdapterTests(TestCase):
 
     def test_registered_as_ollama_provider(self):
         from llm_connector.providers.ollama import OllamaAdapter
-        from llm_connector.registry import get_adapter_class
 
         self.assertIs(get_adapter_class("ollama"), OllamaAdapter)
 
@@ -322,3 +320,24 @@ class GoogleWebSearchTests(TestCase):
         self._wire(adapter, self._response("t", ["https://a", "https://a"]))
         out = adapter.web_search([{"role": "user", "content": "q"}])
         self.assertEqual(out["sources"], ["https://a"])
+
+
+class AnthropicCompleteTests(TestCase):
+    """`[backend]-correctness-bugs`: complete() must skip a leading non-text block instead of
+    indexing content[0].text (which raises with tools/thinking enabled)."""
+
+    def _adapter(self):
+        return AnthropicAdapter({"api_key": "test", "model": "claude-sonnet-4-6"})
+
+    def test_complete_returns_text_past_a_tool_block(self):
+        adapter = self._adapter()
+        adapter._client = MagicMock()
+        adapter._client.messages.create.return_value = _Block(
+            content=[
+                _Block(type="tool_use", name="calc", input={}),
+                _Block(type="text", text="Final answer."),
+            ]
+        )
+        self.assertEqual(
+            adapter.complete([{"role": "user", "content": "hi"}]), "Final answer."
+        )

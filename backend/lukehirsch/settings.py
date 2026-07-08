@@ -1,13 +1,19 @@
 import os
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-SECRET_KEY = os.getenv(
-    "SECRET_KEY", "django-insecure-g4pj@dk!pf+e#+8^5t-ic(avl(ng9e=@3%ziwrls-!5sq%y6s5"
+from lukehirsch.prod import (
+    DEV_ENCRYPTION_KEY,
+    DEV_SECRET_KEY,
+    env_bool,
+    env_int,
+    verify_production_secrets,
 )
 
-DEBUG = os.getenv("DEBUG", True)
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+SECRET_KEY = os.getenv("SECRET_KEY", DEV_SECRET_KEY)
+
+DEBUG = env_bool("DEBUG", True)
 
 ALLOWED_HOSTS = [os.getenv("ALLOWED_HOST", "localhost")]
 
@@ -177,8 +183,8 @@ LLM = {
         "url": os.getenv("LLM_URL", "http://localhost:11434/v1"),
         "model": os.getenv("LLM_MODEL", "llama3.2:1b"),
         "embed_model": os.getenv("LLM_EMBED_MODEL", "qwen3-embedding:0.6b"),
-        "timeout": os.getenv("LLM_TIMEOUT", 300),
-        "think": os.getenv("LLM_THINKING", False),
+        "timeout": env_int("LLM_TIMEOUT", 300),
+        "think": env_bool("LLM_THINKING", False),
         "strength": os.getenv("LLM_STRENGTH", "light"),
     }
 }
@@ -186,10 +192,7 @@ LLM = {
 
 LLM_LOGGING = True
 
-LLM_ENCRYPTION_KEY = os.getenv(
-    "LLM_ENCRYPTION_KEY",
-    "ZGphbmdvLWluc2VjdXJlLWxsbS1kZXYta2V5LW9ubHk=",
-)
+LLM_ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", DEV_ENCRYPTION_KEY)
 
 
 SYSTEM_USER_USERNAME = "system"
@@ -208,7 +211,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
@@ -235,6 +238,7 @@ ACCOUNT_EMAIL_VERIFICATION_BY_CODE_ENABLED = True
 ACCOUNT_RATE_LIMITS = {
     "reset_password": "20/m/ip,5/m/key,3/h/key,5/d/key",
 }
+ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", False)
 
 # Custom adapter dedupes 'account already exists' mails per address;
 ACCOUNT_ADAPTER = "lukehirsch.adapter.HarassmentResistantAccountAdapter"
@@ -264,6 +268,12 @@ EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.strato.de")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() == "true"
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@luke-hirsch.de")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+verify_production_secrets(
+    debug=DEBUG,
+    secret_key=SECRET_KEY,
+    encryption_key=LLM_ENCRYPTION_KEY,
+)

@@ -90,7 +90,11 @@ class GenerationRunCreateTests(APITestCase):
             )
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).grade, "light")
-        self.assertTrue(any("Invalid grade: nonsense" in m for m in logs.output))
+        # normalize_grade returns the Grade enum member, so the coerced value's repr in the
+        # message is `Grade.light`, not `'light'` — assert on the stable offending-value part.
+        self.assertTrue(
+            any("Invalid grade 'nonsense' coerced to" in m for m in logs.output)
+        )
 
 
 class GenerationRunReadTests(APITestCase):

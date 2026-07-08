@@ -3,11 +3,16 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 
 class IndexView(APIView):
+    # The site root is public (portfolio visitors land here anonymously); the global DRF
+    # default is IsAuthenticated, so public endpoints must opt in explicitly.
+    permission_classes = [AllowAny]
+
     def get(self, request):
         return Response({"message": "I am alive!"})
 

@@ -88,3 +88,36 @@ class LLMRequestLogViewSetScopingTests(APITestCase):
         self.client.force_login(self.bob)
         r = self.client.get(f"/api/llm/request-logs/{self.alice_log.pk}/")
         self.assertEqual(r.status_code, 404)
+
+
+class LLMConfigSSRFValidationTests(APITestCase):
+    """`[backend]-ssrf-signup-gate`: the API refuses to store a custom/ollama config whose url
+    resolves to an internal address. Red until LLMConfigSerializer.validate calls the validator."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ssrf_user", password="pass")
+        self.client.force_login(self.user)
+
+    def _post(self, url):
+        return self.client.post(
+            "/api/llm/configs/",
+            json.dumps(
+                {
+                    "alias": "local",
+                    "provider": "ollama",
+                    "model": "llama3",
+                    "url": url,
+                }
+            ),
+            content_type="application/json",
+        )
+
+    def test_internal_url_is_rejected(self):
+        r = self._post("http://127.0.0.1:11434/v1")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("url", r.data)
+
+    def test_public_url_is_accepted(self):
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            r = self._post("https://ollama.example.com/v1")
+        self.assertEqual(r.status_code, 201, r.data)

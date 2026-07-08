@@ -66,23 +66,14 @@ class Embed:
         return embed(inputs=inputs, alias=self.alias, user=self.user)
 
     def _cap_job_post(self) -> str:
-        """caps job post to _MAX_TOKENS by summerizing if necessary"""
-        tokens_of_entries = 80 * len(
-            self.flatten_entries
-        )  # could actually be measured be tokenizer
-        tokens_of_job_post_text = len(self.job_post_text.split()) * 4
-        tokens = tokens_of_entries + tokens_of_job_post_text
-        if tokens < self._MAX_TOKENS:
+        """Cap the job-post text so (entries + post) fits _MAX_TOKENS. Hard char-truncation
+        (~4 chars/token) — crude but real; the previous version returned the full text unchanged."""
+        tokens_of_entries = 80 * len(self.flatten_entries)
+        tokens_of_job_post = len(self.job_post_text.split()) * 4
+        if tokens_of_entries + tokens_of_job_post <= self._MAX_TOKENS:
             return self.job_post_text
-        else:
-            try:
-                # to do:
-                # summerize ai job post, tokens fit
-                # todo: decide if standard or embeded model summerize the job post
-                return self.job_post_text
-            except Exception:
-                reduced_char = len(self.job_post_text) - (tokens - self._MAX_TOKENS) * 4
-                return self.job_post_text[:reduced_char]
+        room_tokens = max(self._MAX_TOKENS - tokens_of_entries, 0)
+        return self.job_post_text[: room_tokens * 4]
 
     def _cos(self, a, b) -> float:
         """Cosine similarity of two vectors. 0.0 if either is empty/zero-norm."""

@@ -12,7 +12,6 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 
-from jac.cv import CV
 from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import ApplicationLayout, Domain, Job, Skill
 

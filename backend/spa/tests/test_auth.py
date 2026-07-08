@@ -53,6 +53,9 @@ _TEST_SETTINGS = {
     "EMAIL_BACKEND": "django.core.mail.backends.locmem.EmailBackend",
     "CACHES": {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
     "ALLOWED_HOSTS": ["localhost", "testserver"],
+    # These flows exercise signup end-to-end; the launch gate (closed by default)
+    # is covered separately in SignupGateTests.
+    "ACCOUNT_ALLOW_SIGNUPS": True,
 }
 
 
@@ -235,7 +238,7 @@ class AdminMfaGateTests(TestCase):
         )
 
     def _enroll_totp(self, user):
-        from allauth.mfa.totp.internal.auth import generate_totp_secret, TOTP
+        from allauth.mfa.totp.internal.auth import generate_totp_secret
         secret = generate_totp_secret()
         TOTP.activate(user, secret)
         return secret
@@ -276,10 +279,10 @@ class AdminMfaGateTests(TestCase):
 
     def test_signal_sets_session_flag(self):
         from allauth.mfa.signals import authenticator_used
-        secret = self._enroll_totp(self.staff)
+        self._enroll_totp(self.staff)
         authenticator = Authenticator.objects.get(user=self.staff, type=Authenticator.Type.TOTP)
         self.client.force_login(self.staff)
-        request = self.client.get("/admin/").wsgi_request  # triggers middleware redirect
+        self.client.get("/admin/")  # triggers middleware redirect
         # Fire the signal manually with a fresh request that has a session
         from django.test import RequestFactory
         factory = RequestFactory()
@@ -336,3 +339,27 @@ class UserProfileViewTests(TestCase):
         self.client.force_login(self.bob)
         bob_id = self.client.get(self.PROFILE_URL).json()["id"]
         self.assertNotEqual(alice_id, bob_id)
+
+
+class SignupGateTests(TestCase):
+    """`[backend]-ssrf-signup-gate`: registration is closed unless ACCOUNT_ALLOW_SIGNUPS is set.
+    Red until HarassmentResistantAccountAdapter overrides is_open_for_signup."""
+
+    def _adapter(self):
+        from lukehirsch.adapter import HarassmentResistantAccountAdapter
+
+        return HarassmentResistantAccountAdapter()
+
+    def test_signup_closed_by_default(self):
+        self.assertFalse(self._adapter().is_open_for_signup(request=None))
+
+    @override_settings(ACCOUNT_ALLOW_SIGNUPS=True)
+    def test_signup_open_when_flag_set(self):
+        self.assertTrue(self._adapter().is_open_for_signup(request=None))
+
+    def test_signup_endpoint_refuses_when_closed(self):
+        resp = _post(
+            self.client, SIGNUP, {"email": "gate@example.com", "password": "gate_Xk9!"}
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(len(mail.outbox), 0)

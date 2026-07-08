@@ -146,3 +146,47 @@ class FavouriteLimitModelTests(TestCase):
     def test_non_favourite_unconstrained(self):
         for i in range(5):
             self._edu(False, f"U{i}")  # no cap on non-favourites
+
+
+class GradeCohesionTests(TestCase):
+    """`[backend]-grade-cohesion`: one canonical Grade drives the model field, and grade is
+    normalised in one place. Red until jac.models defines Grade + normalize_grade and GenerationRun
+    uses choices=Grade.choices (dropping the mismatched GradeChoice)."""
+
+    def test_grade_enum_values(self):
+        from jac.models import Grade
+
+        self.assertEqual(list(Grade.values), ["light", "standard", "strong"])
+        # Guards the old `high = "strong"` name/value mismatch: name == value for every member.
+        for member in Grade:
+            self.assertEqual(member.name, member.value)
+
+    def test_generation_run_field_uses_choices(self):
+        from jac.models import GenerationRun
+
+        field = GenerationRun._meta.get_field("grade")
+        self.assertTrue(field.choices)
+        self.assertIn("strong", [value for value, _ in field.choices])
+
+    def test_old_gradechoice_is_gone(self):
+        from jac.models import GenerationRun
+
+        self.assertFalse(hasattr(GenerationRun, "GradeChoice"))
+
+    def test_normalize_grade(self):
+        from jac.models import normalize_grade
+
+        self.assertEqual(normalize_grade(""), "light")
+        self.assertEqual(normalize_grade(None), "light")
+        self.assertEqual(normalize_grade("bogus"), "light")
+        self.assertEqual(normalize_grade("strong"), "strong")
+        self.assertEqual(normalize_grade("standard"), "standard")
+
+
+class SerializerLoggerTests(TestCase):
+    """`[backend]-correctness-bugs`: the serializers logger is module-scoped, not the root logger."""
+
+    def test_logger_is_module_scoped(self):
+        from jac.serializers import logger
+
+        self.assertEqual(logger.name, "jac.serializers")

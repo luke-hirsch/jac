@@ -1,6 +1,7 @@
 from llm_connector.conf import get_embed_floors
 
 from jac.llm_prompts import Conversational, Embed, Instruct
+from jac.models import Grade
 
 
 class CVFilter:
@@ -52,12 +53,11 @@ class CVFilter:
           - standard: Instruct-LLM relevance labels -> keep-by-verdict (_select_ranked);
           - light:    embedding cosine -> propagation + absolute floors (_select).
         """
-        if self.grade == "strong":
+        if self.grade == Grade.strong:
             selected = self._strong_selection()
             if selected:
                 return self._select_holistic(selected)
-            # conversational selector failed -> degrade to standard
-        if self.grade in ("standard", "strong"):
+        if self.grade in (Grade.standard, Grade.strong):
             labels = self._standard_scores()
             if labels:
                 return self._select_ranked(labels)

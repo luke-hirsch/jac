@@ -1,6 +1,8 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from llm_connector.models import LLMConfig, LLMRequestLog
+from llm_connector.validators import validate_safe_llm_url
 
 
 class LLMConfigSerializer(serializers.ModelSerializer):
@@ -58,7 +60,22 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         if api_key:
             instance.api_key = api_key
         instance.save()
+
         return instance
+
+    # providers whose adapter POSTs to a user-supplied url (SSRF surface)
+    _URL_PROVIDERS = {"custom", "ollama"}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        provider = attrs.get("provider") or getattr(self.instance, "provider", None)
+        url = attrs.get("url", getattr(self.instance, "url", ""))
+        if provider in self._URL_PROVIDERS and url:
+            try:
+                validate_safe_llm_url(url)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"url": list(exc.messages)})
+        return attrs
 
 
 class LLMRequestLogSerializer(serializers.ModelSerializer):

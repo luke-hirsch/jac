@@ -6,6 +6,8 @@ through `URLRouter` so `scope["url_route"]` is populated, and sets `scope["user"
 (standing in for AuthMiddlewareStack).
 """
 
+from unittest.mock import patch
+
 from asgiref.sync import async_to_sync, sync_to_async
 from channels.routing import URLRouter
 from channels.testing import WebsocketCommunicator
@@ -73,3 +75,38 @@ class GenerationConsumerTests(TransactionTestCase):
             await comm.disconnect()
 
         async_to_sync(run)()
+
+    def test_subscribes_before_reading_snapshot(self):
+        """`[backend]-correctness-bugs`: the consumer must join the gen_<pk> group BEFORE reading
+        the snapshot, so an event fired during connect can't be lost. White-box ordering assertion —
+        the race itself is timing-dependent and can't be made cleanly black-box red.
+
+        Red today twice over: current connect() reads the snapshot first (wrong order), and calls
+        `_snapshot(user_id, pk)` (two args) — the fixed signature is `_snapshot(pk)`."""
+        from channels.layers import InMemoryChannelLayer
+
+        from jac.consumers import GenerationConsumer
+
+        order: list[str] = []
+        orig_group_add = InMemoryChannelLayer.group_add
+
+        async def spy_group_add(self, group, channel):
+            order.append("group_add")
+            return await orig_group_add(self, group, channel)
+
+        async def spy_snapshot(self, pk):
+            order.append("snapshot")
+            return {"status": "pending", "stage": "", "result": None, "error": ""}
+
+        async def run():
+            with patch.object(InMemoryChannelLayer, "group_add", spy_group_add), patch.object(
+                GenerationConsumer, "_snapshot", spy_snapshot
+            ):
+                comm = self._communicator(self.gen.pk, self.alice)
+                connected, _ = await comm.connect()
+                self.assertTrue(connected)
+                await comm.receive_json_from()
+                await comm.disconnect()
+
+        async_to_sync(run)()
+        self.assertLess(order.index("group_add"), order.index("snapshot"))
