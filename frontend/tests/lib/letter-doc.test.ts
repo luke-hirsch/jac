@@ -7,6 +7,7 @@ import {
   hasStub,
   letterMetaFromResult,
   normalizeLetterMeta,
+  replaceRange,
   replaceStub,
 } from "@/lib/letter-doc";
 import type { CoverLetterResult } from "@/lib/queries/generations";
@@ -126,5 +127,21 @@ describe("appendParagraph", () => {
 
   it("ignores blank paragraphs", () => {
     expect(appendParagraph("Body.", "   ")).toBe("Body.");
+  });
+});
+
+describe("replaceRange", () => {
+  it("splices the replacement over the selection", () => {
+    // "aaa bbb ccc": textarea selection of "bbb" is [4, 7)
+    expect(replaceRange("aaa bbb ccc", 4, 7, "XXX")).toBe("aaa XXX ccc");
+  });
+
+  it("inserts at a collapsed selection", () => {
+    expect(replaceRange("ab", 1, 1, "-")).toBe("a-b");
+  });
+
+  it("clamps out-of-range indices instead of throwing", () => {
+    expect(replaceRange("abc", -5, 99, "X")).toBe("X");
+    expect(replaceRange("abc", 2, 1, "X")).toBe("abXc"); // end < start → collapsed at start
   });
 });
