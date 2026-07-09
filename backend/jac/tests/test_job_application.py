@@ -7,6 +7,8 @@ writes own-only). The layout FK is non-null with a callable default resolving to
 "default" layout — also the SET_DEFAULT target when a custom layout is deleted.
 """
 
+from unittest.mock import patch
+
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -296,3 +298,52 @@ class ApplicationLayoutApiTests(APITestCase):
             "/api/jac/layouts/", {"name": "alice-special"}, format="json"
         )
         self.assertEqual(r.status_code, 400)
+
+
+class RewriteEndpointTests(APITestCase):
+    """POST /api/jac/applications/<pk>/rewrite/ — the letter editor's AI passage rewrite.
+    Only the passage travels both ways; nothing is persisted. The LLM is patched at
+    jac.llm_prompts.complete, so no network. NOTE: the cross-user test passes even before
+    the endpoint exists (404 either way) — it pins the contract for the green state."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="rw_user", password="pass")
+        cls.other = User.objects.create_user(username="rw_other", password="pass")
+        cls.app = _application(cls.user, posting_text="We need a dev.")
+
+    def _post(self, body):
+        return self.client.post(
+            f"/api/jac/applications/{self.app.pk}/rewrite/", body, format="json"
+        )
+
+    def test_rewrites_a_passage(self):
+        self.client.force_login(self.user)
+        with patch("jac.llm_prompts.complete", return_value="  Polished passage.\n"):
+            r = self._post({"text": "I did stuff.", "instruction": "more formal"})
+        self.assertEqual(r.status_code, 200, getattr(r, "data", r.content))
+        self.assertEqual(r.data, {"text": "Polished passage."})
+
+    def test_blank_text_is_400(self):
+        self.client.force_login(self.user)
+        r = self._post({"text": "   "})
+        self.assertEqual(r.status_code, 400)
+
+    def test_overlong_passage_is_400(self):
+        self.client.force_login(self.user)
+        with patch("jac.llm_prompts.complete", return_value="x") as mock_complete:
+            r = self._post({"text": "x" * 5000})
+        self.assertEqual(r.status_code, 400)
+        mock_complete.assert_not_called()
+
+    def test_empty_model_reply_is_502(self):
+        self.client.force_login(self.user)
+        with patch("jac.llm_prompts.complete", return_value=""):
+            r = self._post({"text": "I did stuff."})
+        self.assertEqual(r.status_code, 502)
+
+    def test_foreign_application_is_404(self):
+        self.client.force_login(self.other)
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            r = self._post({"text": "I did stuff."})
+        self.assertEqual(r.status_code, 404)

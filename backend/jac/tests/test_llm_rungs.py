@@ -12,6 +12,7 @@ from jac.llm_prompts import (
     FaithfulnessCheck,
     Instruct,
     ParagraphGroundingCheck,
+    ParagraphRewrite,
     PersonalParagraphWriter,
     TheAnalyst,
     TheJudge,
@@ -409,3 +410,41 @@ class EmbedCapJobPostTests(TestCase):
             capped = self._embed(text)._cap_job_post()
             self.assertLess(len(capped), len(text))
             self.assertLessEqual(len(capped), 100 * 4)  # room_tokens * ~4 chars/token
+
+
+class ParagraphRewriteTests(TestCase):
+    """ParagraphRewrite (application-content-v2 guide): the on-demand passage rewriter behind
+    POST /applications/<pk>/rewrite/. Same fabrication rules as CoverLetterWriter — the passage
+    is authoritative and the posting is never shown; any failure returns '' (caller keeps the
+    original text)."""
+
+    def _rw(self, **kw):
+        return ParagraphRewrite("I did stuff at my job.", **kw)
+
+    def test_prompt_carries_passage_instruction_and_language(self):
+        p = self._rw(instruction="more formal", language="de")._prompt()
+        self.assertIn("I did stuff at my job.", p)
+        self.assertIn("REQUEST: more formal", p)
+        self.assertIn("Write in de.", p)
+
+    def test_prompt_omits_request_line_without_instruction(self):
+        self.assertNotIn("REQUEST:", self._rw()._prompt())
+
+    def test_prompt_never_sees_a_job_posting_and_forbids_invention(self):
+        p = self._rw()._prompt()
+        self.assertNotIn("JOB POSTING", p)
+        self.assertIn("do not add skills", p)
+
+    def test_rewrite_returns_stripped_completion(self):
+        with patch("jac.llm_prompts.complete", return_value="  Polished passage.\n"):
+            self.assertEqual(self._rw().rewrite(), "Polished passage.")
+
+    def test_blank_passage_short_circuits_without_llm_call(self):
+        with patch("jac.llm_prompts.complete") as mock_complete:
+            self.assertEqual(ParagraphRewrite("   ").rewrite(), "")
+        mock_complete.assert_not_called()
+
+    def test_llm_failure_returns_empty(self):
+        with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
+            with _muted():
+                self.assertEqual(self._rw().rewrite(), "")
