@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.files.base import ContentFile
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 
@@ -101,22 +102,53 @@ class CVCommandSmokeTests(TestCase):
 
 
 class SeedDefaultsTests(TestCase):
-    """seed_default_domains: system domains + the default ApplicationLayout (idempotent)."""
+    """seed_default_domains: system domains + BOTH system layouts ("default" one-page,
+    "two-page"), idempotent, and refreshing a stored template when the resource changed."""
 
-    def test_seeds_domains_and_default_layout_with_template(self):
+    def test_seeds_domains_and_both_layouts_with_templates(self):
         with tempfile.TemporaryDirectory() as media:
             with override_settings(MEDIA_ROOT=media):
                 call_command("seed_default_domains", stdout=io.StringIO())
                 system = User.objects.get(username=settings.SYSTEM_USER_USERNAME)
                 self.assertTrue(Domain.objects.filter(user=system).exists())
-                layout = ApplicationLayout.objects.get(user=system, name="default")
-                self.assertTrue(layout.template)
-                with layout.template.open() as fh:
-                    spec = json.load(fh)
-                self.assertIn("cv", spec)
 
-                # Re-run: no duplicate layout, template stays attached once.
+                one = ApplicationLayout.objects.get(user=system, name="default")
+                self.assertTrue(one.template)
+                with one.template.open() as fh:
+                    spec = json.load(fh)
+                self.assertEqual(spec["cv"]["pages"], 1)
+                # Section keys match the cv_content contract (plural), not legacy singular.
+                self.assertIn("educations", spec["cv"]["sections"])
+                self.assertNotIn("education", spec["cv"]["sections"])
+
+                two = ApplicationLayout.objects.get(user=system, name="two-page")
+                self.assertTrue(two.template)
+                with two.template.open() as fh:
+                    spec2 = json.load(fh)
+                self.assertEqual(spec2["cv"]["pages"], 2)
+
+                # Re-run: idempotent — still exactly the two system layouts.
                 call_command("seed_default_domains", stdout=io.StringIO())
                 self.assertEqual(
-                    ApplicationLayout.objects.filter(user=system).count(), 1
+                    ApplicationLayout.objects.filter(user=system).count(), 2
                 )
+
+    def test_seed_refreshes_stale_template(self):
+        with tempfile.TemporaryDirectory() as media:
+            with override_settings(MEDIA_ROOT=media):
+                system, _ = User.objects.get_or_create(
+                    username=settings.SYSTEM_USER_USERNAME,
+                    defaults={"is_active": False},
+                )
+                layout = ApplicationLayout.objects.create(user=system, name="default")
+                layout.template.save(
+                    "default_layout.json", ContentFile(b'{"stale": true}')
+                )
+
+                call_command("seed_default_domains", stdout=io.StringIO())
+
+                layout.refresh_from_db()
+                with layout.template.open() as fh:
+                    spec = json.load(fh)
+                self.assertNotIn("stale", spec)
+                self.assertIn("cv", spec)

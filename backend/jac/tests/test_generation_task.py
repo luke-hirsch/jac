@@ -15,7 +15,7 @@ from llm_connector.base import LLMTransportError
 
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
-from jac.models import GenerationRun, Job
+from jac.models import GenerationRun, Job, JobPostAddress
 from jac.tasks import generate_run
 
 from ._helpers import _application, _muted
@@ -25,7 +25,12 @@ IN_MEMORY = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 _LETTER = {
     "language": "en",
     "subject": "Application",
+    "salutation": "Dear team,",
     "body": "…",
+    "sender": {"name": "Ada Lovelace", "city": "Berlin"},
+    "recipient": {"company": "ACME", "city": "Duckburg"},
+    "date": "2026-07-09",
+    "closing": "Kind regards,",
     "ai_share": 0.1,
     "grounding": {"count": None, "claims": []},
     "personal_paragraph": "",
@@ -33,6 +38,12 @@ _LETTER = {
     "personal_paragraph_sources": [],
     "personal_paragraph_grounding": {"count": None, "claims": []},
     "text": "…full text…",
+}
+
+# The furniture slice of _LETTER that auto-fill copies into JobApplication.letter_meta.
+_LETTER_META = {
+    k: _LETTER[k]
+    for k in ("language", "subject", "salutation", "date", "closing", "sender", "recipient")
 }
 
 
@@ -111,8 +122,49 @@ class GenerateRunTaskTests(TestCase):
         run.refresh_from_db()
         app = run.job_application
         app.refresh_from_db()
-        self.assertEqual(app.cover_letter, _LETTER["text"])
+        # Body-only contract: the editable cover_letter gets the letter *body* (plus personal
+        # paragraph, when present); the furniture lands in letter_meta instead of the full text.
+        self.assertEqual(app.cover_letter, _LETTER["body"])
+        self.assertEqual(app.letter_meta, _LETTER_META)
         self.assertEqual(app.cv_content, run.result["cv"])
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_run_persists_extracted_address(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        """The extracted recipient address is saved on the posting (1:1) — updated on a
+        re-run, never duplicated — so the SPA can prefill the letter recipient."""
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+        mock_extract.return_value.extract.return_value = {
+            "title": "Dev",
+            "language": "en",
+            "company": "ACME",
+            "city": "Duckburg",
+        }
+
+        run = self._run()
+        generate_run(run.pk)
+
+        posting = run.job_application.posting
+        addr = JobPostAddress.objects.get(job_posting=posting)
+        self.assertEqual(addr.company, "ACME")
+        self.assertEqual(addr.city, "Duckburg")
+
+        mock_extract.return_value.extract.return_value = {"company": "ACME GmbH"}
+        second = GenerationRun.objects.create(
+            job_application=run.job_application, alias="default"
+        )
+        generate_run(second.pk)
+
+        self.assertEqual(
+            JobPostAddress.objects.filter(job_posting=posting).count(), 1
+        )
+        addr.refresh_from_db()
+        self.assertEqual(addr.company, "ACME GmbH")
 
     @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")

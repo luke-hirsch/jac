@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
 
-from jac.cover_letter import PERSONAL_STUB, CoverLetter, SnippetSelector
+from jac.cover_letter import PERSONAL_STUB, CoverLetter, SnippetSelector, editable_body
 from jac.models import Domain, Job, JobPostAddress, ResumeSnippet
 from jac.research import CompanyResearcher
 
@@ -193,6 +193,18 @@ class CoverLetterBuildTests(_CoverLetterCVMixin, TestCase):
             ).build()
         self.assertEqual(r["subject"], "Bewerbung als Backend Engineer")
         self.assertEqual(r["salutation"], "Sehr geehrte Damen und Herren,")
+
+    def test_closing_is_language_furniture(self):
+        """build() exposes `closing` so the SPA never hardcodes the bilingual strings."""
+        with patch("jac.llm_prompts.complete", return_value="x"):
+            en = CoverLetter(
+                self.user, self._jp(), self._cv(), address=JobPostAddress()
+            ).build()
+            de = CoverLetter(
+                self.user, self._jp(language="de"), self._cv(), address=JobPostAddress()
+            ).build()
+        self.assertEqual(en["closing"], "Kind regards,")
+        self.assertEqual(de["closing"], "Mit freundlichen Grüßen,")
 
     def test_ai_share_present_and_in_range(self):
         with patch("jac.llm_prompts.complete", return_value="Body."):
@@ -497,3 +509,19 @@ class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
         self.assertIn("Snippet body.", body_arg)
         self.assertNotIn("I love Acme rockets.", body_arg)
         self.assertEqual(r["personal_paragraph"], "I love Acme rockets.")
+
+
+class EditableBodyTests(TestCase):
+    """editable_body(): the body-only slice that lands in JobApplication.cover_letter —
+    body + personal paragraph (real or stub), never the furnished full text."""
+
+    def test_body_only_when_no_personal_paragraph(self):
+        self.assertEqual(editable_body({"body": "Hi.", "personal_paragraph": ""}), "Hi.")
+
+    def test_appends_personal_paragraph_as_own_block(self):
+        letter = {"body": "Hi.", "personal_paragraph": "I admire ACME."}
+        self.assertEqual(editable_body(letter), "Hi.\n\nI admire ACME.")
+
+    def test_stub_paragraph_stays_loud(self):
+        letter = {"body": "Hi.", "personal_paragraph": PERSONAL_STUB}
+        self.assertIn(PERSONAL_STUB, editable_body(letter))

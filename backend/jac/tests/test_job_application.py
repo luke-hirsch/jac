@@ -16,6 +16,7 @@ from jac.models import (
     ApplicationLayout,
     GenerationRun,
     JobApplication,
+    JobPostAddress,
     JobPosting,
     default_application_layout,
 )
@@ -162,6 +163,56 @@ class JobApplicationCrudTests(APITestCase):
         self.assertEqual(r.status_code, 204)
         self.assertFalse(JobApplication.objects.filter(pk=app.pk).exists())
         self.assertFalse(GenerationRun.objects.filter(pk=run.pk).exists())
+
+
+class JobApplicationContentV2Tests(APITestCase):
+    """The structured-content contract (application-content-v2 guide): `letter_meta` is an
+    SPA-owned JSON artefact like cv_content, and the posting nests its extracted address."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="app_v2", password="pass")
+        cls.posting = JobPosting.objects.create(
+            user=cls.user, title="Backend dev", posting_text="We need a backend dev."
+        )
+        cls.app = JobApplication.objects.create(user=cls.user, posting=cls.posting)
+
+    def test_letter_meta_defaults_empty_and_roundtrips(self):
+        self.client.force_login(self.user)
+        r = self.client.get(f"/api/jac/applications/{self.app.pk}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["letter_meta"], {})
+
+        meta = {
+            "language": "de",
+            "subject": "Bewerbung als Backend dev",
+            "salutation": "Sehr geehrte Damen und Herren,",
+            "date": "2026-07-09",
+            "closing": "Mit freundlichen Grüßen,",
+            "sender": {"name": "Ada"},
+            "recipient": {"company": "ACME"},
+        }
+        r = self.client.patch(
+            f"/api/jac/applications/{self.app.pk}/",
+            {"letter_meta": meta},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.letter_meta, meta)
+
+    def test_posting_detail_address_null_until_extracted(self):
+        self.client.force_login(self.user)
+        r = self.client.get(f"/api/jac/applications/{self.app.pk}/")
+        self.assertIsNone(r.data["posting_detail"]["address"])
+
+        JobPostAddress.objects.create(
+            job_posting=self.posting, company="ACME", city="Duckburg"
+        )
+        r = self.client.get(f"/api/jac/applications/{self.app.pk}/")
+        addr = r.data["posting_detail"]["address"]
+        self.assertEqual(addr["company"], "ACME")
+        self.assertEqual(addr["city"], "Duckburg")
 
 
 class JobApplicationScopingTests(APITestCase):
