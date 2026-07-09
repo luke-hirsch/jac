@@ -25,7 +25,12 @@ export type CoverLetterResult = {
   text: string;
 };
 
-export type CvEntry = { id: string; label: string; relevance_score: number | null };
+export type CvEntry = {
+  id: string;
+  label: string;
+  relevance_score: number | null;
+  deselected?: boolean;
+};
 
 export type TailoredResult = {
   meta: { grade: string; alias: string };
@@ -93,12 +98,21 @@ export function aiShareBadge(share: number): Badge {
 export function groundingBadge(g: Grounding): Badge {
   if (g.count === null) return { tone: "muted", label: "not checked" };
   if (g.count === 0) return { tone: "green", label: "grounded" };
-  return { tone: "amber", label: `${g.count} claim${g.count === 1 ? "" : "s"}` };
+  return {
+    tone: "amber",
+    label: `${g.count} claim${g.count === 1 ? "" : "s"}`,
+  };
 }
 
 /** Fold a WS event (or a REST snapshot reshaped as one) into run state. */
 export type WsEvent =
-  | { event: "snapshot"; status: RunStatus; stage: string; result: TailoredResult | null; error: string }
+  | {
+      event: "snapshot";
+      status: RunStatus;
+      stage: string;
+      result: TailoredResult | null;
+      error: string;
+    }
   | { event: "progress"; status: RunStatus; stage: string }
   | { event: "done"; status: RunStatus; result: TailoredResult }
   | { event: "failed"; status: RunStatus; error: string };
@@ -134,7 +148,12 @@ export function isStalePending(
 export function runReducer(state: RunState, e: WsEvent): RunState {
   switch (e.event) {
     case "snapshot":
-      return { status: e.status, stage: e.stage, result: e.result, error: e.error };
+      return {
+        status: e.status,
+        stage: e.stage,
+        result: e.result,
+        error: e.error,
+      };
     case "progress":
       return { ...state, status: e.status, stage: e.stage };
     case "done":
@@ -151,7 +170,10 @@ export function runReducer(state: RunState, e: WsEvent): RunState {
 export function useCreateGeneration() {
   return useMutation({
     mutationFn: (form: GenerationForm) =>
-      api<GenerationRun>(URL, { method: "POST", body: JSON.stringify(toPayload(form)) }),
+      api<GenerationRun>(URL, {
+        method: "POST",
+        body: JSON.stringify(toPayload(form)),
+      }),
   });
 }
 

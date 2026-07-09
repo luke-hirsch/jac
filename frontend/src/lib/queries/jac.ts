@@ -126,6 +126,13 @@ export type ResumeSnippetRow = {
   created_at: string;
   updated_at: string;
 };
+
+export type LayoutRow = {
+  id: number;
+  name: string;
+  template: string | null; // media URL of the JSON layout spec (guide 4 fetches it)
+  is_default: boolean; // true = shared system layout (read-only)
+};
 // factory
 
 type Resource = {
@@ -143,6 +150,7 @@ const R = {
   projects: { key: "projects", url: "/api/jac/projects/" },
   languages: { key: "languages", url: "/api/jac/languages/" },
   snippets: { key: "snippets", url: "/api/jac/resume-snippets/" },
+  layouts: { key: "layouts", url: "/api/jac/layouts/" },
 } as const satisfies Record<string, Resource>;
 
 function bulkUrl(key: ResourceKey) {
@@ -289,5 +297,24 @@ export function useBulkPatchDomains(
         body: JSON.stringify({ action: "patch_domains", ids, add, remove }),
       }),
     onSuccess: () => invalidateResource(qc, key),
+  });
+}
+
+// full career db dump
+
+export type CvEntriesResponse = {
+  skills: SkillRow[];
+  jobs: JobRow[];
+  educations: EducationRow[];
+  certifications: CertificationRow[];
+  projects: ProjectRow[];
+  languages: LanguageRow[];
+};
+
+export function useCvEntries(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["jac", "cv-entries"],
+    queryFn: () => api<CvEntriesResponse>("/api/jac/cv/entries/"),
+    enabled: options.enabled ?? true,
   });
 }

@@ -2,14 +2,10 @@ import { useEffect, useReducer, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ArrowDown, ArrowUp, Eye, EyeOff, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
@@ -47,11 +43,39 @@ import {
 } from "@/lib/queries/generations";
 import { openGenerationSocket, type SocketStatus } from "@/lib/ws";
 
-export const Route = createFileRoute("/_authenticated/applications/$applicationId")({
+import {
+  SECTION_ORDER,
+  SECTION_TITLES,
+  addEntry,
+  fromCareerDb,
+  joinEntry,
+  labelFor,
+  missingEntries,
+  moveEntry,
+  removeEntry,
+  toggleDeselect,
+  type CvContent,
+  type SectionKey,
+} from "@/lib/cv-doc";
+import {
+  useCvEntries,
+  useFullList,
+  type CvEntriesResponse,
+  type LayoutRow,
+} from "@/lib/queries/jac";
+
+export const Route = createFileRoute(
+  "/_authenticated/applications/$applicationId",
+)({
   component: ApplicationDetailPage,
 });
 
-const INITIAL: RunState = { status: "pending", stage: "", result: null, error: "" };
+const INITIAL: RunState = {
+  status: "pending",
+  stage: "",
+  result: null,
+  error: "",
+};
 
 function ApplicationDetailPage() {
   const { applicationId } = Route.useParams();
@@ -127,8 +151,10 @@ function ApplicationDetailPage() {
     });
   }
 
-  if (app.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (!app.data) return <p className="text-sm text-destructive">Application not found.</p>;
+  if (app.isLoading)
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!app.data)
+    return <p className="text-sm text-destructive">Application not found.</p>;
 
   return (
     <div className="space-y-6">
@@ -157,9 +183,7 @@ function ApplicationDetailPage() {
         <ResultView
           applicationId={id}
           state={state}
-          applied={
-            app.data.cover_letter === state.result.cover_letter.text
-          }
+          applied={app.data.cover_letter === state.result.cover_letter.text}
         />
       )}
       <ApplicationContentCard app={app.data} />
@@ -235,7 +259,9 @@ function GeneratePanel({
     (runState.status === "pending" || runState.status === "running");
   const ageSeconds = runCreatedAt ? pendingAgeSeconds(runCreatedAt, now) : 0;
   const staleQueue =
-    running && runCreatedAt != null && isStalePending(runState.status, runCreatedAt, now);
+    running &&
+    runCreatedAt != null &&
+    isStalePending(runState.status, runCreatedAt, now);
 
   async function onGenerate() {
     try {
@@ -319,8 +345,8 @@ function GeneratePanel({
 
         {staleQueue && (
           <p className="text-sm text-amber-700">
-            Queued for {ageSeconds}s with no progress — the generation worker may
-            not be running. Abort and retry, or start the worker.
+            Queued for {ageSeconds}s with no progress — the generation worker
+            may not be running. Abort and retry, or start the worker.
           </p>
         )}
 
@@ -417,7 +443,11 @@ function ResultView({
             <Badge variant="outline">
               {result.meta.grade} · {result.meta.alias}
             </Badge>
-            <Button size="sm" onClick={onApply} disabled={applied || update.isPending}>
+            <Button
+              size="sm"
+              onClick={onApply}
+              disabled={applied || update.isPending}
+            >
               {applied ? "Applied" : "Apply to application"}
             </Button>
           </div>
@@ -436,7 +466,13 @@ function ResultView({
   );
 }
 
-function CvSection({ section, entries }: { section: string; entries: CvEntry[] }) {
+function CvSection({
+  section,
+  entries,
+}: {
+  section: string;
+  entries: CvEntry[];
+}) {
   return (
     <div>
       <h3 className="text-sm font-semibold capitalize">{section}</h3>
@@ -478,7 +514,9 @@ function CoverLetterCard({ letter }: { letter: CoverLetterResult }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <pre className="whitespace-pre-wrap font-sans text-sm">{letter.text}</pre>
+        <pre className="whitespace-pre-wrap font-sans text-sm">
+          {letter.text}
+        </pre>
         {(letter.personal_paragraph_is_stub || letter.personal_paragraph) && (
           <div
             className={
@@ -519,30 +557,50 @@ function CoverLetterCard({ letter }: { letter: CoverLetterResult }) {
 }
 
 /* ---------- application content (the editable artefact) ---------- */
-
 function ApplicationContentCard({ app }: { app: ApplicationRow }) {
   const update = useUpdateApplication();
+  const layouts = useFullList<LayoutRow>("layouts");
+  const careerDb = useCvEntries();
   const [coverLetter, setCoverLetter] = useState(app.cover_letter);
   const [status, setStatus] = useState<ApplicationStatus>(app.status);
+  const [cvDraft, setCvDraft] = useState<CvContent>(app.cv_content ?? {});
 
   // "Adjusting state during render" (React docs, same pattern as usePagedList):
-  // re-seed the local draft when the server copy changes (apply / auto-fill),
-  // discarding any unsaved edits in favour of the fresher server state.
+  // re-seed the local drafts when the server copy changes (apply / auto-fill),
+  // discarding any unsaved edits in favour of the fresher server state. cv_content is
+  // compared by value — a refetch returning identical JSON must not clobber the draft.
+  const serverCv = JSON.stringify(app.cv_content ?? {});
   const [prevServer, setPrevServer] = useState({
     cover: app.cover_letter,
     status: app.status,
+    cv: serverCv,
   });
-  if (prevServer.cover !== app.cover_letter || prevServer.status !== app.status) {
-    setPrevServer({ cover: app.cover_letter, status: app.status });
+  if (
+    prevServer.cover !== app.cover_letter ||
+    prevServer.status !== app.status ||
+    prevServer.cv !== serverCv
+  ) {
+    setPrevServer({
+      cover: app.cover_letter,
+      status: app.status,
+      cv: serverCv,
+    });
     setCoverLetter(app.cover_letter);
     setStatus(app.status);
+    setCvDraft(app.cv_content ?? {});
   }
 
-  const dirty = coverLetter !== app.cover_letter || status !== app.status;
+  const dirty =
+    coverLetter !== app.cover_letter ||
+    status !== app.status ||
+    JSON.stringify(cvDraft) !== serverCv;
 
   function onSave() {
     update.mutate(
-      { id: app.id, body: { cover_letter: coverLetter, status } },
+      {
+        id: app.id,
+        body: { cover_letter: coverLetter, status, cv_content: cvDraft },
+      },
       {
         onSuccess: () => toast.success("Application saved"),
         onError: () => toast.error("Could not save the application"),
@@ -550,15 +608,33 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
     );
   }
 
-  const cvSections = Object.entries(app.cv_content ?? {}).filter(
-    ([, entries]) => Array.isArray(entries) && entries.length > 0,
-  );
+  // The layout is a FK pick, not a draft — persist it immediately.
+  function onLayoutChange(v: string) {
+    update.mutate(
+      { id: app.id, body: { layout: Number(v) } },
+      { onError: () => toast.error("Could not change the layout") },
+    );
+  }
+
+  const hasCv = SECTION_ORDER.some((s) => (cvDraft[s] ?? []).length > 0);
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>Application content</CardTitle>
         <div className="flex items-center gap-2">
+          <Select value={String(app.layout)} onValueChange={onLayoutChange}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Layout" />
+            </SelectTrigger>
+            <SelectContent>
+              {(layouts.data ?? []).map((l) => (
+                <SelectItem key={l.id} value={String(l.id)}>
+                  {l.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select
             value={status}
             onValueChange={(v) => setStatus(v as ApplicationStatus)}
@@ -574,23 +650,47 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" onClick={onSave} disabled={!dirty || update.isPending}>
+          <Button
+            size="sm"
+            onClick={onSave}
+            disabled={!dirty || update.isPending}
+          >
             Save
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {cvSections.length > 0 ? (
+        {hasCv ? (
           <div className="space-y-4">
-            {cvSections.map(([section, entries]) => (
-              <CvSection key={section} section={section} entries={entries} />
+            {/* Every section renders (the section component hides itself only when it has
+                neither entries nor addable rows), so an AI run that kept no project still
+                offers the project add-picker. */}
+            {SECTION_ORDER.map((section) => (
+              <CvEditorSection
+                key={section}
+                section={section}
+                entries={cvDraft[section] ?? []}
+                db={careerDb.data}
+                onEdit={setCvDraft}
+              />
             ))}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            No CV content yet — generate a run; the first result fills this
-            automatically.
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              No CV content yet — generate a run above, or build it by hand:
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!careerDb.data}
+              onClick={() =>
+                careerDb.data && setCvDraft(fromCareerDb(careerDb.data))
+              }
+            >
+              Start from full career DB
+            </Button>
+          </div>
         )}
         <Separator />
         <div className="space-y-1">
@@ -604,5 +704,111 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function CvEditorSection({
+  section,
+  entries,
+  db,
+  onEdit,
+}: {
+  section: SectionKey;
+  entries: CvEntry[];
+  db: CvEntriesResponse | undefined;
+  onEdit: (fn: (c: CvContent) => CvContent) => void;
+}) {
+  const missing = missingEntries(db, section, entries);
+  if (entries.length === 0 && missing.length === 0) return null;
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">{SECTION_TITLES[section]}</h3>
+      <ul className="space-y-1">
+        {entries.map((e, i) => {
+          const row = db ? joinEntry(db, section, e) : null;
+          const gone = db != null && row == null; // deleted from the career DB
+          return (
+            <li
+              key={e.id}
+              className={`flex items-center gap-1 text-sm ${
+                e.deselected ? "opacity-50" : ""
+              }`}
+            >
+              <span className={`flex-1 ${e.deselected ? "line-through" : ""}`}>
+                {row ? labelFor(section, row) : e.label}
+                {gone && (
+                  <span className="ml-1 text-xs text-destructive">
+                    (no longer in the career DB)
+                  </span>
+                )}
+              </span>
+              {e.relevance_score != null && (
+                <Badge variant="outline">{e.relevance_score.toFixed(2)}</Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Move up"
+                disabled={i === 0}
+                onClick={() => onEdit((c) => moveEntry(c, section, i, -1))}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Move down"
+                disabled={i === entries.length - 1}
+                onClick={() => onEdit((c) => moveEntry(c, section, i, 1))}
+              >
+                <ArrowDown className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={e.deselected ? "Reselect" : "Deselect"}
+                onClick={() => onEdit((c) => toggleDeselect(c, section, i))}
+              >
+                {e.deselected ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Delete"
+                onClick={() => onEdit((c) => removeEntry(c, section, i))}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+      {missing.length > 0 && (
+        <Select
+          value=""
+          onValueChange={(v) => {
+            const row = missing.find((r) => String(r.id) === v);
+            if (row) onEdit((c) => addEntry(c, section, row));
+          }}
+        >
+          <SelectTrigger className="mt-1 h-8 w-72 text-xs">
+            <SelectValue
+              placeholder={`Add ${SECTION_TITLES[section].toLowerCase()}…`}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {missing.map((r) => (
+              <SelectItem key={r.id} value={String(r.id)}>
+                {labelFor(section, r)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
