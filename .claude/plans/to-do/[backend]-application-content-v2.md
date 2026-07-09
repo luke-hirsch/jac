@@ -31,6 +31,14 @@ earlier, see memory `cv-render-export-decision`). Reading the code, three backen
    `default_layout.json`: its `cv.sections` says `"education"` but every other contract
    (`cv_content` keys, `/api/jac/cv/entries/` response, `CvRender.SECTION_ORDER`) uses the plural
    `"educations"` — align it before the frontend starts consuming the spec.
+4. **No way to AI-rewrite an edited passage.** The letter editor (guide 3) wants a "rewrite this
+   selection" action — e.g. to polish the hand-written personal paragraph. That needs one small
+   endpoint: `POST /api/jac/applications/<pk>/rewrite/` with `{text, instruction?, alias?}` →
+   `{text}`. New `ParagraphRewrite` prompt class in `llm_prompts.py`, same fabrication rules as
+   `CoverLetterWriter` (the passage is authoritative, the posting is NOT given). Note the
+   trade-off: this is a **synchronous** LLM call in the request cycle — fine for a one-paragraph
+   rewrite on a personal tool, and much simpler than a run + WebSocket round-trip; if it ever
+   grows past a paragraph, move it onto the Celery path.
 
 **No new "dump" endpoint is needed** for the no-AI manual mode: `/api/jac/cv/entries/`
 (`CVEntryListView`, all career entries grouped by type) and `/api/jac/resume-snippets/` already
@@ -48,6 +56,8 @@ exist and are user-scoped. Guide 2 consumes them as-is.
 | `backend/jac/resources/default_layout.json` | `"education"` → `"educations"` |
 | `backend/jac/resources/two_page_layout.json` | new two-page layout spec |
 | `backend/jac/management/commands/seed_default_domains.py` | seed both layouts; refresh a template when the resource file changed |
+| `backend/jac/llm_prompts.py` | `ParagraphRewrite` — rewrite one passage, no fact invention |
+| `backend/jac/views.py` | `rewrite` action on `JobApplicationViewSet` |
 
 ## The code
 
@@ -280,6 +290,119 @@ Note the behaviour change: the seeder now *refreshes* a stale template (the old 
 attached one if missing). That is what makes the `default_layout.json` plural-fix in step 5
 actually reach existing dev DBs.
 
+### 8. `backend/jac/llm_prompts.py` — `ParagraphRewrite`
+
+Place it after `CoverLetterWriter` (it's the same family). Free prose out — like the writer,
+this is a place where line-format I/O does not apply:
+
+```python
+class ParagraphRewrite:
+    """Rewrite ONE user-selected passage of a cover-letter body on demand.
+
+    The SPA's letter editor sends the passage plus an optional instruction ("shorter", "more
+    formal", …). The passage is authoritative — the model rephrases, it does not add facts
+    (same fabrication rule as CoverLetterWriter, and the posting is again NOT given).
+    Free prose out; any failure -> '' so the caller keeps the original text.
+    """
+
+    _INSTRUCTION = (
+        "Rewrite the passage below from a cover letter. Keep the meaning and every factual "
+        "claim — do not add skills, employers, job titles, numbers, dates, or achievements "
+        "the passage does not state. Keep roughly the same length unless the request says "
+        "otherwise. Write in {language}. Output ONLY the rewritten passage — no quotes, no "
+        "markdown, no commentary."
+    )
+    _MAX_CHARS = 4000  # a passage, not a document — the view 400s above this
+
+    def __init__(
+        self,
+        passage: str,
+        *,
+        instruction: str = "",
+        language: str = "en",
+        alias: str = "default",
+        user=None,
+    ):
+        self.passage = passage
+        self.instruction = instruction
+        self.language = language
+        self.alias = alias
+        self.user = user
+
+    def rewrite(self) -> str:
+        """Return the rewritten passage. '' on blank input or any LLM failure."""
+        if not self.passage.strip():
+            return ""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("ParagraphRewrite: LLM call failed")
+            return ""
+        return (raw or "").strip()
+
+    def _prompt(self) -> str:
+        req = f"REQUEST: {self.instruction}\n\n" if self.instruction else ""
+        return (
+            f"{self._INSTRUCTION.format(language=self.language)}\n\n"
+            f"{req}PASSAGE:\n{self.passage}\n\nREWRITTEN:"
+        )
+```
+
+### 9. `backend/jac/views.py` — the rewrite action
+
+Imports: add `ParagraphRewrite` next to the `AddressExtract`-style imports
+(`from jac.llm_prompts import ParagraphRewrite`). Then on `JobApplicationViewSet`:
+
+```python
+    @extend_schema(
+        request=inline_serializer(
+            "ParagraphRewrite",
+            {
+                "text": serializers.CharField(),
+                "instruction": serializers.CharField(
+                    required=False, allow_blank=True
+                ),
+                "alias": serializers.CharField(required=False),
+            },
+        ),
+        responses=OpenApiResponse(description="{'text': rewritten passage}"),
+    )
+    @action(detail=True, methods=["post"])
+    def rewrite(self, request, pk=None):
+        """AI-rewrite one passage of the letter body. Only the passage travels both ways —
+        the client splices the result back into its draft; nothing is persisted here.
+        Synchronous LLM call (one paragraph; see the guide's decision note). 502 when the
+        model yields nothing, so the client keeps the original text."""
+        application = self.get_object()
+        text = request.data.get("text") or ""
+        if not text.strip():
+            return Response(
+                {"text": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(text) > ParagraphRewrite._MAX_CHARS:
+            return Response(
+                {"text": ["Passage too long — select a paragraph, not the letter."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        rewritten = ParagraphRewrite(
+            text,
+            instruction=(request.data.get("instruction") or "").strip(),
+            language=application.posting.language or "en",
+            alias=(request.data.get("alias") or "default").strip() or "default",
+            user=request.user,
+        ).rewrite()
+        if not rewritten:
+            return Response(
+                {"detail": "The language model returned nothing — try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"text": rewritten})
+```
+
+(`self.get_object()` runs the user-scoped queryset + `IsOwner`, so another user's application
+404s like everywhere else.)
+
 ## Tests (written by the AI, already on this branch — start red)
 
 - `backend/jac/tests/test_generation_task.py` — extended `_LETTER` fixture (full furniture) +
@@ -292,12 +415,17 @@ actually reach existing dev DBs.
   `editable_body()` composes body + personal paragraph and skips the empty paragraph.
 - `backend/jac/tests/test_commands.py` — seeder creates *both* layouts, the two-page spec says
   `pages == 2`, re-run is idempotent, and a changed resource refreshes the stored template.
+- `backend/jac/tests/test_llm_rungs.py` — `ParagraphRewrite`: prompt carries passage +
+  instruction + language and forbids invention; never sees a job posting; blank passage
+  short-circuits without an LLM call; LLM failure returns `""`.
+- `backend/jac/tests/test_job_application.py` (`RewriteEndpointTests`) — happy path 200,
+  blank text 400, over-long passage 400, empty model reply 502, foreign application 404.
 
 Run them (pyenv `jac` env, from `backend/`):
 
 ```bash
 python manage.py test jac.tests.test_generation_task jac.tests.test_job_application \
-    jac.tests.test_cover_letter jac.tests.test_commands
+    jac.tests.test_cover_letter jac.tests.test_commands jac.tests.test_llm_rungs
 ```
 
 ## Verification
@@ -314,3 +442,6 @@ python manage.py test jac.tests.test_generation_task jac.tests.test_job_applicat
      address block), `letter_meta` has subject/salutation/date/closing/sender/recipient, and
      `posting_detail.address.company` is filled.
    - re-running keeps exactly one `JobPostAddress` row for the posting (check admin or shell).
+5. Rewrite smoke (Ollama up): `POST /api/jac/applications/<pk>/rewrite/` with
+   `{"text": "I did stuff at my job.", "instruction": "more formal"}` → 200 with a rephrased
+   `text`; with Ollama stopped → 502, not a 500 traceback.

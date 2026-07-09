@@ -21,6 +21,10 @@ page counts, `pdf().toBlob()` for download).
 - **Export**: scope × format — {complete, cv, letter} × {pdf, md, json}. Markdown mirrors the
   backend's `CvRender.export_md` / `CoverLetter.render_markdown` so all renderers agree.
 - The letter is never auto-truncated — an overflowing letter gets a warning, not silent cuts.
+- **Send-time stub safeguard** (the long-standing TODO from the personal-paragraph work): a
+  letter-bearing pdf/md export is hard-blocked while the body still contains the
+  `PERSONAL_STUB` marker — that document must never reach an employer. JSON stays allowed
+  (a data dump, not a sendable artefact), as does a cv-only export.
 
 ## Affected files
 
@@ -31,7 +35,7 @@ page counts, `pdf().toBlob()` for download).
 | `frontend/src/lib/render/fit.ts` | **new** — pure fit logic: drop order, page counting, binary-search fit |
 | `frontend/src/lib/render/parts.ts` | **new** — entry → {heading, meta, body} shared by PDF + md renderers |
 | `frontend/src/lib/render/templates.tsx` | **new** — `CvDocument` / `LetterDocument` / `ApplicationDocument` + render helpers |
-| `frontend/src/lib/export.ts` | **new** — md/json builders + download helpers |
+| `frontend/src/lib/export.ts` | **new** — md/json builders, stub export gate, download helpers |
 | `frontend/src/routes/_authenticated/applications/$applicationId.tsx` | new `ExportCard` |
 
 ## The code
@@ -675,7 +679,7 @@ import {
   SECTION_TITLES,
   type CvContent,
 } from "@/lib/cv-doc";
-import type { LetterMeta } from "@/lib/letter-doc";
+import { hasStub, type LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import { entryParts } from "@/lib/render/parts";
 
@@ -731,6 +735,28 @@ export function letterToMarkdown(meta: LetterMeta, body: string): string {
 }
 
 export type ExportScope = "complete" | "cv" | "letter";
+export type ExportFormat = "pdf" | "md" | "json";
+
+/**
+ * Send-time stub safeguard: a letter-bearing pdf/md export with the PERSONAL_STUB still in
+ * the body is refused — that document must never reach an employer. Returns the reason to
+ * show, or null when the export may proceed. JSON is exempt (a data dump, not a sendable
+ * artefact); so is a cv-only export (no letter in it).
+ */
+export function exportBlocker(
+  scope: ExportScope,
+  format: ExportFormat,
+  body: string,
+): string | null {
+  if (scope === "cv" || format === "json") return null;
+  if (hasStub(body)) {
+    return (
+      "The letter body still contains the personal-paragraph stub — " +
+      "replace it before exporting."
+    );
+  }
+  return null;
+}
 
 /** JSON export: the selection joined with the career-DB rows behind it (frozen snapshot). */
 export function exportJson(
@@ -812,8 +838,10 @@ import {
   cvToMarkdown,
   downloadBlob,
   downloadText,
+  exportBlocker,
   exportJson,
   letterToMarkdown,
+  type ExportFormat,
   type ExportScope,
 } from "@/lib/export";
 ```
@@ -896,7 +924,15 @@ function ExportCard({ app }: { app: ApplicationRow }) {
     }
   }
 
+  // Send-time stub gate: refuses (with the reason) before any rendering happens.
+  function blockedBy(format: ExportFormat): boolean {
+    const reason = exportBlocker(scope, format, app.cover_letter);
+    if (reason) toast.error(reason);
+    return reason != null;
+  }
+
   function onDownloadPdf() {
+    if (blockedBy("pdf")) return;
     void withBusy(async () => {
       const built = await buildPdf();
       downloadBlob(built.blob, `${stem}.pdf`);
@@ -905,6 +941,7 @@ function ExportCard({ app }: { app: ApplicationRow }) {
   }
 
   function onPreview() {
+    if (blockedBy("pdf")) return;
     void withBusy(async () => {
       const built = await buildPdf();
       setPreview({ url: URL.createObjectURL(built.blob), info: built });
@@ -912,6 +949,7 @@ function ExportCard({ app }: { app: ApplicationRow }) {
   }
 
   function onDownloadMd() {
+    if (blockedBy("md")) return;
     const db = careerDb.data;
     const active = activeContent(app.cv_content ?? {});
     const cvMd = cvToMarkdown(name, active, db);
@@ -1028,7 +1066,9 @@ function ExportCard({ app }: { app: ApplicationRow }) {
 - `frontend/tests/lib/export.test.ts` — `entryParts` (joined rows vs. label fallback,
   favourite flag), `cvToMarkdown` (section order/headings, ★, meta/body lines),
   `letterToMarkdown` (block order, bold subject, empty lines collapse), `exportJson` (scope
-  shapes, joined `entry` field).
+  shapes, joined `entry` field), `exportBlocker` (full scope×format matrix: pdf/md blocked
+  for letter-bearing scopes with a stubbed body; json and cv-only always pass; clean body
+  never blocks).
 
 ```bash
 cd frontend && npx vitest run tests/lib/render-fit.test.ts tests/lib/render-spec.test.ts tests/lib/export.test.ts
@@ -1049,3 +1089,7 @@ npm test   # full suite once green
    truncated.
 6. All six download combos (3 scopes × md/json) produce sensible files; the md CV matches the
    backend `cv_test` artifact style; `complete.pdf` ≤ 3 pages when the letter fits.
+7. Stub gate: apply a run whose personal paragraph stubbed (light grade) without replacing it →
+   "Download PDF" / "Preview PDF" / "Markdown" on `complete` or `letter` scope refuse with the
+   stub toast; `cv` scope and JSON still export; after replacing the stub (guide 3) everything
+   exports again.

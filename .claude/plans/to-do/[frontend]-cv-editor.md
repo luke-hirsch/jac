@@ -9,9 +9,11 @@
 
 The application detail page shows `cv_content` as a read-only list. This guide turns it into the
 manual-customisation stage of the flow: the user can **reorder** (move up/down), **deselect**
-(keep, but excluded from render/export — recoverable), and **delete** entries, pick one of the
-two standard **layouts**, and — for the no-AI path — **build the CV manually** from the full
-career DB (`/api/jac/cv/entries/`, which already exists backend-side).
+(keep, but excluded from render/export — recoverable), and **delete** entries, **add** any
+career-DB entry the selection is missing (per-section picker — also the way back after a
+delete, and how an AI run's drops get overridden), pick one of the two standard **layouts**,
+and — for the no-AI path — **build the CV manually** from the full career DB
+(`/api/jac/cv/entries/`, which already exists backend-side).
 
 Design decision to be aware of: `cv_content` stays a *selection* (`{section: [{id, label,
 relevance_score, deselected?}]}`), not a data snapshot. The editor joins the ids against the live
@@ -262,6 +264,37 @@ export function activeContent(content: CvContent): CvContent {
   }
   return out;
 }
+
+/** Career-DB rows of a section not (or no longer) in the content — the add-picker options. */
+export function missingEntries(
+  db: CvEntriesResponse | undefined,
+  section: SectionKey,
+  entries: CvEntry[],
+): AnyRow[] {
+  if (!db) return [];
+  const present = new Set(entries.map((e) => e.id));
+  return (db[section] as AnyRow[]).filter(
+    (r) => !present.has(entryId(section, r.id)),
+  );
+}
+
+/** Append a career-DB row to a section — end of list (= lowest rank), no score. */
+export function addEntry(
+  content: CvContent,
+  section: SectionKey,
+  row: AnyRow,
+): CvContent {
+  const list = content[section] ?? [];
+  const id = entryId(section, row.id);
+  if (list.some((e) => e.id === id)) return content;
+  return {
+    ...content,
+    [section]: [
+      ...list,
+      { id, label: labelFor(section, row), relevance_score: null },
+    ],
+  };
+}
 ```
 
 ### 4. `frontend/src/routes/_authenticated/applications/$applicationId.tsx`
@@ -273,9 +306,11 @@ import { ArrowDown, ArrowUp, Eye, EyeOff, Trash2 } from "lucide-react";
 import {
   SECTION_ORDER,
   SECTION_TITLES,
+  addEntry,
   fromCareerDb,
   joinEntry,
   labelFor,
+  missingEntries,
   moveEntry,
   removeEntry,
   toggleDeselect,
@@ -389,17 +424,18 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
       <CardContent className="space-y-4">
         {hasCv ? (
           <div className="space-y-4">
-            {SECTION_ORDER.map((section) =>
-              (cvDraft[section] ?? []).length === 0 ? null : (
-                <CvEditorSection
-                  key={section}
-                  section={section}
-                  entries={cvDraft[section]}
-                  db={careerDb.data}
-                  onEdit={setCvDraft}
-                />
-              ),
-            )}
+            {/* Every section renders (the section component hides itself only when it has
+                neither entries nor addable rows), so an AI run that kept no project still
+                offers the project add-picker. */}
+            {SECTION_ORDER.map((section) => (
+              <CvEditorSection
+                key={section}
+                section={section}
+                entries={cvDraft[section] ?? []}
+                db={careerDb.data}
+                onEdit={setCvDraft}
+              />
+            ))}
           </div>
         ) : (
           <div className="space-y-2">
@@ -442,6 +478,8 @@ function CvEditorSection({
   db: CvEntriesResponse | undefined;
   onEdit: (fn: (c: CvContent) => CvContent) => void;
 }) {
+  const missing = missingEntries(db, section, entries);
+  if (entries.length === 0 && missing.length === 0) return null;
   return (
     <div>
       <h3 className="text-sm font-semibold">{SECTION_TITLES[section]}</h3>
@@ -509,6 +547,28 @@ function CvEditorSection({
           );
         })}
       </ul>
+      {missing.length > 0 && (
+        <Select
+          value=""
+          onValueChange={(v) => {
+            const row = missing.find((r) => String(r.id) === v);
+            if (row) onEdit((c) => addEntry(c, section, row));
+          }}
+        >
+          <SelectTrigger className="mt-1 h-8 w-72 text-xs">
+            <SelectValue
+              placeholder={`Add ${SECTION_TITLES[section].toLowerCase()}…`}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {missing.map((r) => (
+              <SelectItem key={r.id} value={String(r.id)}>
+                {labelFor(section, r)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
     </div>
   );
 }
@@ -519,8 +579,14 @@ Subtleties:
 - `onEdit` takes an updater so consecutive clicks compose on the latest draft
   (`setCvDraft(fn)` — React state updater form).
 - Deselect ≠ delete: deselected entries stay in `cv_content` (dimmed, struck through) and are
-  stripped by `activeContent()` at render time (guide 4). Delete removes the entry; the way back
-  is re-applying a run or rebuilding from the career DB.
+  stripped by `activeContent()` at render time (guide 4). Delete removes the entry; the
+  add-picker is the way back (it lists exactly the career-DB rows the section doesn't
+  reference, so a deleted entry immediately reappears there).
+- Added entries land at the **end** of their section with `relevance_score: null` — the tail
+  is the lowest rank, so guide 4's fit drops a hand-added entry first unless the user moves it
+  up. That's deliberate: an explicit ↑ is the user's ranking statement.
+- The add Select keeps `value=""` so it always resets to the placeholder after a pick
+  (a command dressed as a select, not a persistent choice).
 - The layout Select PATCHes immediately (a FK pick, not part of the drafted content). The two
   system rows ("default" = one-page, "two-page") come from guide 1's seeder.
 
@@ -528,7 +594,9 @@ Subtleties:
 
 - `frontend/tests/lib/cv-doc.test.ts` — `parseEntryId`, `labelFor` (job/education/certification
   shapes), `fromCareerDb` (order, ids, null scores), `moveEntry` (swap, clamp at edges,
-  immutability), `removeEntry`, `toggleDeselect` (round-trip), `activeContent`.
+  immutability), `removeEntry`, `toggleDeselect` (round-trip), `activeContent`,
+  `missingEntries` (unreferenced rows only; empty without a DB), `addEntry` (appends at the
+  tail with a built label + null score; no duplicates).
 
 ```bash
 cd frontend && npx vitest run tests/lib/cv-doc.test.ts   # red until cv-doc.ts + jac.ts additions exist
@@ -547,3 +615,5 @@ npm test                                                  # full suite once gree
    keeps the pick.
 5. Delete a career-DB row that an application references (e.g. a test skill) → the entry shows
    its stored label + "(no longer in the career DB)" instead of crashing.
+6. Delete an entry from the CV, then re-add it via the section's "Add …" select → it reappears
+   at the section's tail without a score badge; the select resets to its placeholder.
