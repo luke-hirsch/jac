@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { entryParts, isFavouriteLookup, skillNames } from "@/lib/render/parts";
-import { cvToMarkdown, exportJson, letterToMarkdown } from "@/lib/export";
+import {
+  cvToMarkdown,
+  exportBlocker,
+  exportJson,
+  letterToMarkdown,
+  type ExportFormat,
+  type ExportScope,
+} from "@/lib/export";
+import { PERSONAL_STUB } from "@/lib/letter-doc";
 import type { CvContent } from "@/lib/cv-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 
@@ -8,6 +16,7 @@ import type { CvEntriesResponse } from "@/lib/queries/jac";
  * Export builders (guide [frontend]-render-export). entryParts is the shared entry shape
  * behind the PDF templates and the markdown export; the markdown mirrors the backend
  * renderers (jac/render.py, jac/cover_letter.py render_markdown) so every format agrees.
+ * exportBlocker is the send-time stub safeguard: a stubbed letter never leaves as pdf/md.
  */
 
 const db = {
@@ -160,5 +169,36 @@ describe("exportJson", () => {
   it("carries the letter meta + body", () => {
     const parsed = JSON.parse(exportJson("letter", args));
     expect(parsed.letter).toEqual({ meta, body: "Body." });
+  });
+});
+
+describe("exportBlocker (send-time stub safeguard)", () => {
+  const stubbed = `Intro.\n\n${PERSONAL_STUB}\n\nOutro.`;
+  const scopes: ExportScope[] = ["complete", "cv", "letter"];
+  const formats: ExportFormat[] = ["pdf", "md", "json"];
+
+  it("blocks letter-bearing pdf/md exports while the stub is in the body", () => {
+    for (const scope of ["complete", "letter"] as ExportScope[]) {
+      for (const format of ["pdf", "md"] as ExportFormat[]) {
+        expect(exportBlocker(scope, format, stubbed)).toMatch(/stub/);
+      }
+    }
+  });
+
+  it("exempts cv-only exports and json data dumps", () => {
+    for (const format of formats) {
+      expect(exportBlocker("cv", format, stubbed)).toBeNull();
+    }
+    for (const scope of scopes) {
+      expect(exportBlocker(scope, "json", stubbed)).toBeNull();
+    }
+  });
+
+  it("never blocks a clean body", () => {
+    for (const scope of scopes) {
+      for (const format of formats) {
+        expect(exportBlocker(scope, format, "A finished letter.")).toBeNull();
+      }
+    }
   });
 });
