@@ -30,15 +30,15 @@ Endpoint base: `/api/jac/resume-snippets/`.
 
 ## Affected files
 
-| path | change |
-| ---- | ------ |
-| `frontend/src/lib/queries/jac.ts` | add `ResumeSnippetRow` type; register `snippets` in `R`; widen `useBulkPatchDomains` to accept `"snippets"` |
-| `frontend/src/lib/snippet-form.ts` | **new** — pure form↔payload helpers (kinds, zod schema, `emptySnippetInput`, `snippetToInput`, `toSnippetPayload`); the testable core |
-| `frontend/src/components/cv/project-picker.tsx` | **new** — single-select FK picker over the user's projects (mirror of `JobPicker`) |
-| `frontend/src/routes/_authenticated/cv/snippets.tsx` | **new** — the CRUD page (mirror of `jobs.tsx`) |
-| `frontend/src/routes/_authenticated/cv.tsx` | add the `Snippets` tab to `TABS` |
-| `frontend/src/routes/_authenticated/cv/index.tsx` | add the `Snippets` card to `SECTIONS` |
-| `frontend/src/routeTree.gen.ts` | **auto-generated** by the `tanstackRouter` vite plugin when `snippets.tsx` appears — don't hand-edit; just run the dev server once |
+| path                                                 | change                                                                                                                                |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `frontend/src/lib/queries/jac.ts`                    | add `ResumeSnippetRow` type; register `snippets` in `R`; widen `useBulkPatchDomains` to accept `"snippets"`                           |
+| `frontend/src/lib/snippet-form.ts`                   | **new** — pure form↔payload helpers (kinds, zod schema, `emptySnippetInput`, `snippetToInput`, `toSnippetPayload`); the testable core |
+| `frontend/src/components/cv/project-picker.tsx`      | **new** — single-select FK picker over the user's projects (mirror of `JobPicker`)                                                    |
+| `frontend/src/routes/_authenticated/cv/snippets.tsx` | **new** — the CRUD page (mirror of `jobs.tsx`)                                                                                        |
+| `frontend/src/routes/_authenticated/cv.tsx`          | add the `Snippets` tab to `TABS`                                                                                                      |
+| `frontend/src/routes/_authenticated/cv/index.tsx`    | add the `Snippets` card to `SECTIONS`                                                                                                 |
+| `frontend/src/routeTree.gen.ts`                      | **auto-generated** by the `tanstackRouter` vite plugin when `snippets.tsx` appears — don't hand-edit; just run the dev server once    |
 
 Reused as-is (no change): `DomainPicker`, `DomainFilter`, `SkillPicker`, `JobPicker`, `SectionPage`,
 `Pagination`, `BulkBar`, `MarkdownPreview`, and the generic `usePagedList/useCreate/useUpdate/
@@ -244,7 +244,11 @@ export function ProjectPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="justify-start w-full">
+        <Button
+          type="button"
+          variant="outline"
+          className="justify-start w-full"
+        >
           {current ? current.name : "Pick project…"}
         </Button>
       </PopoverTrigger>
@@ -744,7 +748,7 @@ function SnippetEditor({
                 onChange={(e) => f.handleChange(e.target.value)}
                 className="font-mono text-sm"
               />
-              <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
+              <div className="border rounded-md p-3 min-h-60 bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>
@@ -918,6 +922,9 @@ until styling settles; see `[[frontend-test-layout]]`).
 6. **Filters:** filter by **Kind**, by **Active/Inactive**, and by **Domain**; each narrows the list.
    Search by title/content text.
 7. **Bulk:** select rows → bulk **Delete** and bulk **assign domains** both work (the bulk bar).
-8. **Scope:** the job/project/skill/domain pickers only offer *your own* rows (server-side scoping) —
+8. **Scope:** the job/project/skill/domain pickers only offer _your own_ rows (server-side scoping) —
    no cross-user leakage.
+
+```
+
 ```
