@@ -15,7 +15,7 @@ delete, and how an AI run's drops get overridden), pick one of the two standard 
 and — for the no-AI path — **build the CV manually** from the full career DB
 (`/api/jac/cv/entries/`, which already exists backend-side).
 
-Design decision to be aware of: `cv_content` stays a *selection* (`{section: [{id, label,
+Design decision to be aware of: `cv_content` stays a _selection_ (`{section: [{id, label,
 relevance_score, deselected?}]}`), not a data snapshot. The editor joins the ids against the live
 career DB for display (and guide 4 does the same for rendering); the stored `label` is only a
 fallback for entries later deleted from the career DB. The downloaded PDF is the frozen artefact
@@ -24,12 +24,12 @@ fallback for entries later deleted from the career DB. The downloaded PDF is the
 
 ## Affected files
 
-| file | why |
-| --- | --- |
-| `frontend/src/lib/cv-doc.ts` | **new** — pure cv_content editing logic (join, labels, move/remove/deselect, manual build) |
-| `frontend/src/lib/queries/jac.ts` | `CvEntriesResponse` + `useCvEntries` hook; `layouts` resource + `LayoutRow` |
-| `frontend/src/lib/queries/generations.ts` | `CvEntry` gains `deselected?: boolean` |
-| `frontend/src/routes/_authenticated/applications/$applicationId.tsx` | `ApplicationContentCard` becomes the CV editor + layout picker |
+| file                                                                 | why                                                                                        |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `frontend/src/lib/cv-doc.ts`                                         | **new** — pure cv_content editing logic (join, labels, move/remove/deselect, manual build) |
+| `frontend/src/lib/queries/jac.ts`                                    | `CvEntriesResponse` + `useCvEntries` hook; `layouts` resource + `LayoutRow`                |
+| `frontend/src/lib/queries/generations.ts`                            | `CvEntry` gains `deselected?: boolean`                                                     |
+| `frontend/src/routes/_authenticated/applications/$applicationId.tsx` | `ApplicationContentCard` becomes the CV editor + layout picker                             |
 
 ## The code
 
@@ -62,7 +62,7 @@ export type LayoutRow = {
   id: number;
   name: string;
   template: string | null; // media URL of the JSON layout spec (guide 4 fetches it)
-  is_default: boolean;     // true = shared system layout (read-only)
+  is_default: boolean; // true = shared system layout (read-only)
 };
 ```
 
@@ -172,7 +172,10 @@ export function joinEntry(
   return (db[section] as AnyRow[]).find((r) => r.id === parsed.pk) ?? null;
 }
 
-export function dateRange(started: string | null, ended: string | null): string {
+export function dateRange(
+  started: string | null,
+  ended: string | null,
+): string {
   return `${started ?? "?"}–${ended ?? "present"}`;
 }
 
@@ -195,7 +198,9 @@ export function labelFor(section: SectionKey, row: AnyRow): string {
       const e = row as EducationRow;
       const head = `${e.degree ?? ""} ${e.field_of_study ?? ""}`.trim();
       const w = dateRange(e.started, e.ended);
-      return head ? `${head} @ ${e.institution} (${w})` : `${e.institution} (${w})`;
+      return head
+        ? `${head} @ ${e.institution} (${w})`
+        : `${e.institution} (${w})`;
     }
     case "certifications": {
       const c = row as CertificationRow;
@@ -233,7 +238,12 @@ export function moveEntry(
 ): CvContent {
   const list = content[section] ?? [];
   const target = index + delta;
-  if (index < 0 || index >= list.length || target < 0 || target >= list.length) {
+  if (
+    index < 0 ||
+    index >= list.length ||
+    target < 0 ||
+    target >= list.length
+  ) {
     return content;
   }
   const next = [...list];
@@ -241,13 +251,21 @@ export function moveEntry(
   return { ...content, [section]: next };
 }
 
-export function removeEntry(content: CvContent, section: string, index: number): CvContent {
+export function removeEntry(
+  content: CvContent,
+  section: string,
+  index: number,
+): CvContent {
   const list = content[section] ?? [];
   if (index < 0 || index >= list.length) return content;
   return { ...content, [section]: list.filter((_, i) => i !== index) };
 }
 
-export function toggleDeselect(content: CvContent, section: string, index: number): CvContent {
+export function toggleDeselect(
+  content: CvContent,
+  section: string,
+  index: number,
+): CvContent {
   const list = content[section] ?? [];
   if (index < 0 || index >= list.length) return content;
   const next = list.map((e, i) =>
@@ -326,7 +344,7 @@ import {
 ```
 
 Replace `ApplicationContentCard` and add the editor section component. The read-only `CvSection`
-stays — the *run result* card still uses it; only the application card becomes editable. The
+stays — the _run result_ card still uses it; only the application card becomes editable. The
 cover-letter textarea block is untouched here (guide 3 rebuilds it):
 
 ```tsx
@@ -353,7 +371,11 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
     prevServer.status !== app.status ||
     prevServer.cv !== serverCv
   ) {
-    setPrevServer({ cover: app.cover_letter, status: app.status, cv: serverCv });
+    setPrevServer({
+      cover: app.cover_letter,
+      status: app.status,
+      cv: serverCv,
+    });
     setCoverLetter(app.cover_letter);
     setStatus(app.status);
     setCvDraft(app.cv_content ?? {});
@@ -366,7 +388,10 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
 
   function onSave() {
     update.mutate(
-      { id: app.id, body: { cover_letter: coverLetter, status, cv_content: cvDraft } },
+      {
+        id: app.id,
+        body: { cover_letter: coverLetter, status, cv_content: cvDraft },
+      },
       {
         onSuccess: () => toast.success("Application saved"),
         onError: () => toast.error("Could not save the application"),
@@ -416,7 +441,11 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" onClick={onSave} disabled={!dirty || update.isPending}>
+          <Button
+            size="sm"
+            onClick={onSave}
+            disabled={!dirty || update.isPending}
+          >
             Save
           </Button>
         </div>
@@ -446,7 +475,9 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
               variant="outline"
               size="sm"
               disabled={!careerDb.data}
-              onClick={() => careerDb.data && setCvDraft(fromCareerDb(careerDb.data))}
+              onClick={() =>
+                careerDb.data && setCvDraft(fromCareerDb(careerDb.data))
+              }
             >
               Start from full career DB
             </Button>
@@ -617,3 +648,15 @@ npm test                                                  # full suite once gree
    its stored label + "(no longer in the career DB)" instead of crashing.
 6. Delete an entry from the CV, then re-add it via the section's "Add …" select → it reappears
    at the section's tail without a score badge; the select resets to its placeholder.
+
+## Results
+
+tests are green,
+issues in the frontend
+
+- opus generating run failed. needs to be invastigated
+- ligth/default run dumped info. but i knwe there has been a job that fits good to the application.
+- so far i could not add other entries from the db. manual adding entries only appeared after failed run. should
+- changing the layout doesn't change a thing
+- generation run can be applied. works well
+- removing, hiding etc works
