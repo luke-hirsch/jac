@@ -30,6 +30,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from jac.cv import CV
+from jac.llm_prompts import ParagraphRewrite
 from jac.models import (
     ApplicationLayout,
     Certification,
@@ -359,6 +360,49 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             .prefetch_related("runs")
         )
 
+    @extend_schema(
+        request=inline_serializer(
+            "ParagraphRewrite",
+            {
+                "text": serializers.CharField(),
+                "instruction": serializers.CharField(required=False, allow_blank=True),
+                "alias": serializers.CharField(required=False),
+            },
+        ),
+        responses=OpenApiResponse(description="{'text': rewritten passage}"),
+    )
+    @action(detail=True, methods=["post"])
+    def rewrite(self, request, pk=None):
+        """AI-rewrite one passage of the letter body. Only the passage travels both ways —
+        the client splices the result back into its draft; nothing is persisted here.
+        Synchronous LLM call (one paragraph; see the guide's decision note). 502 when the
+        model yields nothing, so the client keeps the original text."""
+        application = self.get_object()
+        text = request.data.get("text") or ""
+        if not text.strip():
+            return Response(
+                {"text": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(text) > ParagraphRewrite._MAX_CHARS:
+            return Response(
+                {"text": ["Passage too long — select a paragraph, not the letter."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        rewritten = ParagraphRewrite(
+            text,
+            instruction=(request.data.get("instruction") or "").strip(),
+            language=application.posting.language or "en",
+            alias=(request.data.get("alias") or "default").strip() or "default",
+            user=request.user,
+        ).rewrite()
+        if not rewritten:
+            return Response(
+                {"detail": "The language model returned nothing — try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"text": rewritten})
+
 
 class GenerationRunViewSet(
     mixins.CreateModelMixin,
@@ -414,7 +458,9 @@ class GenerationRunViewSet(
                 celery_current_app.control.revoke(run.task_id, terminate=True)
             except Exception:  # noqa: BLE001 — broker down must not block the cancel
                 logger.warning(
-                    "cancel run %s: revoke of task %s failed", run.pk, run.task_id,
+                    "cancel run %s: revoke of task %s failed",
+                    run.pk,
+                    run.task_id,
                     exc_info=True,
                 )
         run.status = GenerationRun.Status.failed

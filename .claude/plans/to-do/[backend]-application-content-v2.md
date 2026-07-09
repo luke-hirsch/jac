@@ -11,7 +11,7 @@
 The frontend is taking over rendering and export (md/json/pdf via `@react-pdf/renderer` — decided
 earlier, see memory `cv-render-export-decision`). Reading the code, three backend gaps block that:
 
-1. **The extracted `JobPostAddress` is never persisted.** `generate_run` builds an *unsaved*
+1. **The extracted `JobPostAddress` is never persisted.** `generate_run` builds an _unsaved_
    `JobPostAddress(**fields)` (jac/tasks.py step 2), feeds it to `CoverLetter`, and drops it. The
    recipient block survives only inside `run.result`. `CoverLetter.__init__` even tries
    `job_posting.address` as a fallback (cover_letter.py:150-156) — the reverse 1:1 that no code
@@ -46,18 +46,18 @@ exist and are user-scoped. Guide 2 consumes them as-is.
 
 ## Affected files
 
-| file | why |
-| --- | --- |
-| `backend/jac/models.py` | `JobApplication.letter_meta` JSONField |
-| `backend/jac/migrations/00XX_…` | `makemigrations jac` output for the new field |
-| `backend/jac/serializers.py` | `JobPostAddressSerializer`, nested `address` on `JobPostingSerializer`, `letter_meta` on `JobApplicationSerializer` |
-| `backend/jac/cover_letter.py` | expose `closing` in `build()` result + `editable_body()` helper |
-| `backend/jac/tasks.py` | persist the address (`update_or_create`); auto-fill `letter_meta` + body-only `cover_letter` |
-| `backend/jac/resources/default_layout.json` | `"education"` → `"educations"` |
-| `backend/jac/resources/two_page_layout.json` | new two-page layout spec |
-| `backend/jac/management/commands/seed_default_domains.py` | seed both layouts; refresh a template when the resource file changed |
-| `backend/jac/llm_prompts.py` | `ParagraphRewrite` — rewrite one passage, no fact invention |
-| `backend/jac/views.py` | `rewrite` action on `JobApplicationViewSet` |
+| file                                                      | why                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `backend/jac/models.py`                                   | `JobApplication.letter_meta` JSONField                                                                              |
+| `backend/jac/migrations/00XX_…`                           | `makemigrations jac` output for the new field                                                                       |
+| `backend/jac/serializers.py`                              | `JobPostAddressSerializer`, nested `address` on `JobPostingSerializer`, `letter_meta` on `JobApplicationSerializer` |
+| `backend/jac/cover_letter.py`                             | expose `closing` in `build()` result + `editable_body()` helper                                                     |
+| `backend/jac/tasks.py`                                    | persist the address (`update_or_create`); auto-fill `letter_meta` + body-only `cover_letter`                        |
+| `backend/jac/resources/default_layout.json`               | `"education"` → `"educations"`                                                                                      |
+| `backend/jac/resources/two_page_layout.json`              | new two-page layout spec                                                                                            |
+| `backend/jac/management/commands/seed_default_domains.py` | seed both layouts; refresh a template when the resource file changed                                                |
+| `backend/jac/llm_prompts.py`                              | `ParagraphRewrite` — rewrite one passage, no fact invention                                                         |
+| `backend/jac/views.py`                                    | `rewrite` action on `JobApplicationViewSet`                                                                         |
 
 ## The code
 
@@ -286,7 +286,7 @@ and the layout block in `handle()`:
 (drop the old single-layout block and its final stdout line; `DEFAULT_LAYOUT_NAME` /
 `DEFAULT_LAYOUT_TEMPLATE` go away — nothing else imports them.)
 
-Note the behaviour change: the seeder now *refreshes* a stale template (the old code only
+Note the behaviour change: the seeder now _refreshes_ a stale template (the old code only
 attached one if missing). That is what makes the `default_layout.json` plural-fix in step 5
 actually reach existing dev DBs.
 
@@ -408,12 +408,12 @@ Imports: add `ParagraphRewrite` next to the `AddressExtract`-style imports
 - `backend/jac/tests/test_generation_task.py` — extended `_LETTER` fixture (full furniture) +
   new tests: address persisted and updated (never duplicated) across runs; auto-fill writes the
   body-only `cover_letter` and the `letter_meta` furniture. The existing
-  `test_done_autofills_empty_application` expectation is *updated* to the body-only contract.
+  `test_done_autofills_empty_application` expectation is _updated_ to the body-only contract.
 - `backend/jac/tests/test_job_application.py` — `letter_meta` defaults to `{}` and round-trips
   through PATCH; `posting_detail.address` is `null` before extraction and populated after.
 - `backend/jac/tests/test_cover_letter.py` — `build()` exposes a language-correct `closing`;
   `editable_body()` composes body + personal paragraph and skips the empty paragraph.
-- `backend/jac/tests/test_commands.py` — seeder creates *both* layouts, the two-page spec says
+- `backend/jac/tests/test_commands.py` — seeder creates _both_ layouts, the two-page spec says
   `pages == 2`, re-run is idempotent, and a changed resource refreshes the stored template.
 - `backend/jac/tests/test_llm_rungs.py` — `ParagraphRewrite`: prompt carries passage +
   instruction + language and forbids invention; never sees a job posting; blank passage
@@ -445,3 +445,40 @@ python manage.py test jac.tests.test_generation_task jac.tests.test_job_applicat
 5. Rewrite smoke (Ollama up): `POST /api/jac/applications/<pk>/rewrite/` with
    `{"text": "I did stuff at my job.", "instruction": "more formal"}` → 200 with a rephrased
    `text`; with Ollama stopped → 502, not a 500 traceback.
+
+## Results
+
+two errors after testing
+
+```bash
+lukas@localhost backend % ./manage.py test jac.tests.test_generation_task jac.tests.test_job_application \
+    jac.tests.test_cover_letter jac.tests.test_commands jac.tests.test_llm_rungs
+Found 143 test(s).
+Creating test database for alias 'default'...
+System check identified no issues (0 silenced).
+...............EE..............................................................................................................................
+======================================================================
+ERROR: test_letter_meta_defaults_empty_and_roundtrips (jac.tests.test_job_application.JobApplicationContentV2Tests.test_letter_meta_defaults_empty_and_roundtrips)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/lukas/Projects/jac/backend/jac/tests/test_job_application.py", line 186, in test_letter_meta_defaults_empty_and_roundtrips
+    self.assertEqual(r.data["letter_meta"], {})
+                     ~~~~~~^^^^^^^^^^^^^^^
+KeyError: 'letter_meta'
+
+======================================================================
+ERROR: test_posting_detail_address_null_until_extracted (jac.tests.test_job_application.JobApplicationContentV2Tests.test_posting_detail_address_null_until_extracted)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/lukas/Projects/jac/backend/jac/tests/test_job_application.py", line 209, in test_posting_detail_address_null_until_extracted
+    self.assertIsNone(r.data["posting_detail"]["address"])
+                      ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+KeyError: 'address'
+
+----------------------------------------------------------------------
+Ran 143 tests in 1.959s
+
+FAILED (errors=2)
+Destroying test database for alias 'default'...
+lukas@localhost backend %
+```

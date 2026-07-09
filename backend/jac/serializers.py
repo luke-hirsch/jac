@@ -14,6 +14,7 @@ from jac.models import (
     GenerationRun,
     Job,
     JobApplication,
+    JobPostAddress,
     JobPosting,
     Language,
     Location,
@@ -460,6 +461,25 @@ class ApplicationLayoutSerializer(serializers.ModelSerializer):
         return obj.user.username == settings.SYSTEM_USER_USERNAME
 
 
+class JobPostAddressSerializer(serializers.ModelSerializer):
+    """Read-only nested shape for the extracted employer address."""
+
+    class Meta:
+        model = JobPostAddress
+        fields = [
+            "company",
+            "contact_name",
+            "street",
+            "address_line2",
+            "zip",
+            "city",
+            "country",
+            "email",
+            "phone",
+        ]
+        read_only_fields = fields
+
+
 class GenerationRunCreateSerializer(
     ScopeRelatedToUserMixin, serializers.ModelSerializer
 ):
@@ -534,6 +554,8 @@ class GenerationRunSummarySerializer(serializers.ModelSerializer):
 
 
 class JobPostingSerializer(serializers.ModelSerializer):
+    address = serializers.SerializerMethodField()
+
     class Meta:
         model = JobPosting
         fields = [
@@ -542,11 +564,16 @@ class JobPostingSerializer(serializers.ModelSerializer):
             "posting_text",
             "language",
             "source_url",
+            "address",
             "active",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_address(self, obj) -> dict | None:
+        addr = getattr(obj, "address", None)
+        return JobPostAddressSerializer(addr).data if addr else None
 
 
 class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
@@ -570,6 +597,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "posting_detail",
             "cv_content",
             "cover_letter",
+            "letter_meta",
             "layout",
             "status",
             "runs",

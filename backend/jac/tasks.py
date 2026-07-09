@@ -25,7 +25,7 @@ from llm_connector.base import LLMTransportError
 from llm_connector.client import retry_reporter
 from llm_connector.conf import get_alias_strength
 
-from jac.cover_letter import CoverLetter
+from jac.cover_letter import CoverLetter, editable_body
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import AddressExtract
@@ -83,9 +83,7 @@ def _fail(run: GenerationRun, error: str) -> None:
     terminal (e.g. cancelled by the user) is left untouched."""
     updated = GenerationRun.objects.filter(
         pk=run.pk, status=GenerationRun.Status.running
-    ).update(
-        status=GenerationRun.Status.failed, error=error, updated_at=timezone.now()
-    )
+    ).update(status=GenerationRun.Status.failed, error=error, updated_at=timezone.now())
     if updated:
         publish_event(
             run.pk,
@@ -152,11 +150,16 @@ def generate_run(run_id: int) -> None:
 
             # 2. Extract the recipient address; refresh the persisted JobPosting.
             _progress(run, "reading posting")
-            extracted = AddressExtract(jp.posting_text, alias=alias, user=user).extract()
+            extracted = AddressExtract(
+                jp.posting_text, alias=alias, user=user
+            ).extract()
             jp.title = extracted.get("title", "") or jp.title
             jp.language = extracted.get("language", "en") or "en"
             jp.save(update_fields=["title", "language", "updated_at"])
-            addr = JobPostAddress(**{f: extracted.get(f, "") for f in _ADDRESS_FIELDS})
+            addr, _ = JobPostAddress.objects.update_or_create(
+                job_posting=jp,
+                defaults={f: extracted.get(f, "") for f in _ADDRESS_FIELDS},
+            )
 
             # 3. Build the cover letter.
             _progress(
@@ -204,14 +207,30 @@ def generate_run(run_id: int) -> None:
         # applies a run's result explicitly from the SPA, so re-runs never clobber edits.
         if not application.cv_content and not application.cover_letter:
             application.cv_content = result["cv"]
-            application.cover_letter = letter.get("text", "")
+            application.cover_letter = editable_body(letter)
+            application.letter_meta = {
+                k: letter[k]
+                for k in (
+                    "language",
+                    "subject",
+                    "salutation",
+                    "date",
+                    "closing",
+                    "sender",
+                    "recipient",
+                )
+                if k in letter
+            }
             application.save(
-                update_fields=["cv_content", "cover_letter", "updated_at"]
+                update_fields=[
+                    "cv_content",
+                    "cover_letter",
+                    "letter_meta",
+                    "updated_at",
+                ]
             )
 
-        publish_event(
-            run.pk, {"event": "done", "status": run.status, "result": result}
-        )
+        publish_event(run.pk, {"event": "done", "status": run.status, "result": result})
 
     except SoftTimeLimitExceeded:
         logger.warning("generate_run %s hit the soft time limit", run_id)

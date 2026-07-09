@@ -24,3 +24,5 @@ Thumbs.db
 
 data/
 dump.*
+
+.ruff_cache

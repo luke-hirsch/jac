@@ -710,3 +710,55 @@ class ParagraphGroundingCheck:
             f"PERSONALITY:\n{self.personality_dossier or '(none)'}\n\n"
             f"PARAGRAPH:\n{self.paragraph}\n\nAUDIT:"
         )
+
+
+class ParagraphRewrite:
+    """Rewrite ONE user-selected passage of a cover-letter body on demand.
+
+    The SPA's letter editor sends the passage plus an optional instruction ("shorter", "more
+    formal", …). The passage is authoritative — the model rephrases, it does not add facts
+    (same fabrication rule as CoverLetterWriter, and the posting is again NOT given).
+    Free prose out; any failure -> '' so the caller keeps the original text.
+    """
+
+    _INSTRUCTION = (
+        "Rewrite the passage below from a cover letter. Keep the meaning and every factual "
+        "claim — do not add skills, employers, job titles, numbers, dates, or achievements "
+        "the passage does not state. Keep roughly the same length unless the request says "
+        "otherwise. Write in {language}. Output ONLY the rewritten passage — no quotes, no "
+        "markdown, no commentary."
+    )
+    _MAX_CHARS = 4000  # a passage, not a document — the view 400s above this
+
+    def __init__(
+        self,
+        passage: str,
+        *,
+        instruction: str = "",
+        language: str = "en",
+        alias: str = "default",
+        user=None,
+    ):
+        self.passage = passage
+        self.instruction = instruction
+        self.language = language
+        self.alias = alias
+        self.user = user
+
+    def rewrite(self) -> str:
+        """Return the rewritten passage. '' on blank input or any LLM failure."""
+        if not self.passage.strip():
+            return ""
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("ParagraphRewrite: LLM call failed")
+            return ""
+        return (raw or "").strip()
+
+    def _prompt(self) -> str:
+        req = f"REQUEST: {self.instruction}\n\n" if self.instruction else ""
+        return (
+            f"{self._INSTRUCTION.format(language=self.language)}\n\n"
+            f"{req}PASSAGE:\n{self.passage}\n\nREWRITTEN:"
+        )

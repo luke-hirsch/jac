@@ -29,12 +29,11 @@ from django.core.management.base import BaseCommand
 
 from jac.models import ApplicationLayout, Domain
 
-DEFAULT_LAYOUT_NAME = "default"
-DEFAULT_LAYOUT_TEMPLATE = (
-    Path(__file__).resolve().parents[2] / "resources" / "default_layout.json"
-)
-
-
+RESOURCES = Path(__file__).resolve().parents[2] / "resources"
+DEFAULT_LAYOUTS = [
+    ("default", RESOURCES / "default_layout.json"),
+    ("two-page", RESOURCES / "two_page_layout.json"),
+]
 # Broad industry / sector defaults. Lowercase to match the existing rows
 # (except the established "IT"). Edit this list — it's the source of truth.
 DEFAULT_DOMAINS = [
@@ -119,17 +118,28 @@ class Command(BaseCommand):
                 pruned.append(d.name)
                 d.delete()
 
-        layout, layout_created = ApplicationLayout.objects.get_or_create(
-            user=system, name=DEFAULT_LAYOUT_NAME
-        )
-        if not layout.template:
-            layout.template.save(
-                DEFAULT_LAYOUT_TEMPLATE.name,
-                ContentFile(DEFAULT_LAYOUT_TEMPLATE.read_bytes()),
+        for name, resource in DEFAULT_LAYOUTS:
+            layout, layout_created = ApplicationLayout.objects.get_or_create(
+                user=system, name=name
             )
-            layout_action = "created" if layout_created else "template attached"
-        else:
-            layout_action = "created" if layout_created else "unchanged"
+            data = resource.read_bytes()
+            if layout.template:
+                with layout.template.open("rb") as fh:
+                    current = fh.read()
+            else:
+                current = None
+            if current != data:
+                if layout.template:
+                    layout.template.delete(save=False)
+                layout.template.save(resource.name, ContentFile(data))
+                layout_action = "created" if layout_created else "template refreshed"
+            else:
+                layout_action = "unchanged"
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Layout {layout.name!r}: {layout_action} ({layout.template.name})"
+                )
+            )
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -140,9 +150,7 @@ class Command(BaseCommand):
         if created:
             self.stdout.write("  created: " + ", ".join(created))
         if pruned:
-            self.stdout.write(
-                self.style.WARNING("  pruned: " + ", ".join(pruned))
-            )
+            self.stdout.write(self.style.WARNING("  pruned: " + ", ".join(pruned)))
         self.stdout.write(
             self.style.SUCCESS(
                 f"Default layout {layout.name!r}: {layout_action} ({layout.template.name})"

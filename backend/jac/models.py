@@ -56,14 +56,8 @@ class Grade(models.TextChoices):
 
 
 def normalize_grade(value: str | None) -> str:
-    """Coerce any input to a valid Grade value, defaulting to `light`.
-
-    The single validation point for grade across the pipeline (serializer, CV, CVFilter). A blank
-    or unknown grade becomes `light` — the safe/cheap rung — never an error (a typo shouldn't fail a
-    run). NOTE: this differs from llm_connector.get_alias_strength, which defaults unknowns to
-    `strong`; see the grade-cohesion guide's 'Decision point'.
-    """
-    return value if value in Grade.values else Grade.light
+    """Coerce any input to a valid Grade value, defaulting to `light`."""
+    return str(value) if value in Grade.values else Grade.light
 
 
 class SystemScopedManager(models.Manager):
@@ -471,7 +465,6 @@ class JobPosting(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     # Soft-delete: postings are never hard-deleted (applications hang off them);
-    # deactivating one flips its applications to `inactive` via JobApplication.clean().
     active = models.BooleanField(default=True)
 
     class Meta:
@@ -530,6 +523,7 @@ class JobApplication(models.Model):
     )
     cv_content = models.JSONField(default=dict, blank=True)
     cover_letter = models.TextField(blank=True)
+    letter_meta = models.JSONField(default=dict, blank=True)
     layout = models.ForeignKey(
         ApplicationLayout,
         on_delete=models.SET_DEFAULT,
@@ -549,7 +543,10 @@ class JobApplication(models.Model):
         return f"Application for {self.posting.title or 'posting'} ({self.status})"
 
     def clean(self) -> None:
-        if self.posting_id is not None and not self.posting.active:
+        if (
+            self.posting_id is not None  # type: ignore[attr-defined]
+            and not self.posting.active
+        ):
             self.status = self.StatusChoices.inactive
         return super().clean()
 

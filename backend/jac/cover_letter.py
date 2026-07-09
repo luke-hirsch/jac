@@ -39,6 +39,19 @@ _SUBJECT = {"en": "Application for {title}", "de": "Bewerbung als {title}"}
 _CLOSING = {"en": "Kind regards,", "de": "Mit freundlichen Grüßen,"}
 
 
+def editable_body(letter: dict) -> str:
+    """The sendable middle of a built letter: body + personal paragraph (real or stub).
+
+    This — not the fully furnished `text` — is what belongs in the editable
+    `JobApplication.cover_letter`; subject/salutation/date/closing/addresses live in
+    `letter_meta` and are re-assembled at render/export time.
+    """
+    parts = [letter.get("body", "")]
+    if letter.get("personal_paragraph"):
+        parts.append(letter["personal_paragraph"])
+    return "\n\n".join(p for p in parts if p)
+
+
 class SnippetSelector:
     """Pick 1 intro + 1 closing + up to `max_body` body snippets for a filtered CV.
 
@@ -195,6 +208,7 @@ class CoverLetter:
             "sender": self._sender(),
             "recipient": self._recipient(),
             "date": timezone.localdate().isoformat(),
+            "closing": _CLOSING.get(language, _CLOSING["en"]),
             "snippets_used": [f"{s.kind}:{s.pk}" for s in sel["ordered"]],
             "ai_share": self._ai_share(sel["ordered"], language, body_is_ai_fallback),
             "snippet_provenance": {
@@ -325,6 +339,7 @@ class CoverLetter:
         out.append(_CLOSING.get(r["language"], _CLOSING["en"]))
         out.append("")
         out.append(snd["name"])
+        out.append(r["closing"])
         return "\n".join(out).rstrip() + "\n"
 
     # How much the writer reshapes even same-language prose, by grade. Native words are

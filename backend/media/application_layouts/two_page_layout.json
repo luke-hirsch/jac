@@ -1,10 +1,10 @@
 {
   "version": 1,
   "page": { "size": "A4", "margin": [56, 48] },
-  "font": { "family": "Helvetica", "base_pt": 10 },
+  "font": { "family": "Helvetica", "base_pt": 11 },
   "colors": { "accent": "#1a5fb4", "text": "#1c1c1c", "muted": "#6b6b6b" },
   "cv": {
-    "pages": 1,
+    "pages": 2,
     "sections": ["jobs", "educations", "projects", "certifications"],
     "sidebar": ["skills", "languages"]
   },
