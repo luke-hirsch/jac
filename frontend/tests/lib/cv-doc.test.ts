@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   SECTION_ORDER,
   activeContent,
+  addEntry,
   dateRange,
   entryId,
   fromCareerDb,
   joinEntry,
   labelFor,
+  missingEntries,
   moveEntry,
   parseEntryId,
   removeEntry,
@@ -172,5 +174,43 @@ describe("activeContent", () => {
     const active = activeContent(c);
     expect(active.jobs.map((e) => e.id)).toEqual(["job:99"]);
     expect(active.skills).toHaveLength(1);
+  });
+});
+
+describe("missingEntries", () => {
+  it("lists exactly the career-DB rows the section does not reference", () => {
+    // content() references skill:1, the only skill in the DB → nothing to add…
+    expect(missingEntries(db, "skills", content().skills)).toEqual([]);
+    // …but with an empty selection the row becomes addable.
+    expect(missingEntries(db, "skills", []).map((r) => r.id)).toEqual([1]);
+    // job:12 is referenced; job:99 is not a DB row, so it can't make anything "missing".
+    expect(missingEntries(db, "jobs", content().jobs)).toEqual([]);
+  });
+
+  it("is empty while the DB has not loaded", () => {
+    expect(missingEntries(undefined, "skills", [])).toEqual([]);
+  });
+});
+
+describe("addEntry", () => {
+  it("appends at the tail with a built label and no score", () => {
+    const c = removeEntry(content(), "jobs", 0); // drop job:12, then re-add it
+    const added = addEntry(c, "jobs", job);
+    expect(added.jobs.map((e) => e.id)).toEqual(["job:99", "job:12"]);
+    expect(added.jobs[1]).toEqual({
+      id: "job:12",
+      label: "Senior Dev at ACME (2021-01-01–present)",
+      relevance_score: null,
+    });
+  });
+
+  it("creates the section when absent", () => {
+    const added = addEntry({}, "educations", education);
+    expect(added.educations.map((e) => e.id)).toEqual(["education:3"]);
+  });
+
+  it("refuses duplicates (returns the same object)", () => {
+    const c = content();
+    expect(addEntry(c, "jobs", job)).toBe(c); // job:12 already referenced
   });
 });
