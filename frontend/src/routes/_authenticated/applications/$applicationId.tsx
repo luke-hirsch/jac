@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useState, useRef } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useLLMConfigs } from "@/lib/queries/llm";
 import {
+  useRewriteParagraph,
   STATUS_LABELS,
   runToApplicationPatch,
   useApplication,
@@ -63,6 +64,17 @@ import {
   type CvEntriesResponse,
   type LayoutRow,
 } from "@/lib/queries/jac";
+import {
+  appendParagraph,
+  editableBody,
+  hasStub,
+  normalizeLetterMeta,
+  replaceRange,
+  replaceStub,
+  type LetterMeta,
+} from "@/lib/letter-doc";
+import { Input } from "@/components/ui/input";
+import { type ResumeSnippetRow } from "@/lib/queries/jac";
 
 export const Route = createFileRoute(
   "/_authenticated/applications/$applicationId",
@@ -183,7 +195,9 @@ function ApplicationDetailPage() {
         <ResultView
           applicationId={id}
           state={state}
-          applied={app.data.cover_letter === state.result.cover_letter.text}
+          applied={
+            app.data.cover_letter === editableBody(state.result.cover_letter)
+          }
         />
       )}
       <ApplicationContentCard app={app.data} />
@@ -564,6 +578,10 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
   const [coverLetter, setCoverLetter] = useState(app.cover_letter);
   const [status, setStatus] = useState<ApplicationStatus>(app.status);
   const [cvDraft, setCvDraft] = useState<CvContent>(app.cv_content ?? {});
+  const serverMeta = JSON.stringify(normalizeLetterMeta(app.letter_meta));
+  const [letterMeta, setLetterMeta] = useState<LetterMeta>(() =>
+    normalizeLetterMeta(app.letter_meta),
+  );
 
   // "Adjusting state during render" (React docs, same pattern as usePagedList):
   // re-seed the local drafts when the server copy changes (apply / auto-fill),
@@ -574,28 +592,38 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
     cover: app.cover_letter,
     status: app.status,
     cv: serverCv,
+    meta: serverMeta,
   });
   if (
     prevServer.cover !== app.cover_letter ||
     prevServer.status !== app.status ||
-    prevServer.cv !== serverCv
+    prevServer.cv !== serverCv ||
+    prevServer.meta !== serverMeta
   ) {
     setPrevServer({
       cover: app.cover_letter,
       status: app.status,
       cv: serverCv,
+      meta: serverMeta,
     });
     setCoverLetter(app.cover_letter);
     setStatus(app.status);
     setCvDraft(app.cv_content ?? {});
+    setLetterMeta(normalizeLetterMeta(app.letter_meta));
   }
 
   const dirty =
     coverLetter !== app.cover_letter ||
     status !== app.status ||
-    JSON.stringify(cvDraft) !== serverCv;
+    JSON.stringify(cvDraft) !== serverCv ||
+    JSON.stringify(letterMeta) !== serverMeta;
 
   function onSave() {
+    if ((status === "sent" || status === "follow_up") && hasStub(coverLetter)) {
+      toast.warning(
+        "The letter still contains the personal-paragraph stub — it is not sendable.",
+      );
+    }
     update.mutate(
       {
         id: app.id,
@@ -692,16 +720,15 @@ function ApplicationContentCard({ app }: { app: ApplicationRow }) {
             </Button>
           </div>
         )}
+
         <Separator />
-        <div className="space-y-1">
-          <Label>Cover letter</Label>
-          <Textarea
-            rows={12}
-            value={coverLetter}
-            onChange={(e) => setCoverLetter(e.target.value)}
-            placeholder="The applied run's cover letter lands here — edit freely."
-          />
-        </div>
+        <LetterEditor
+          applicationId={app.id}
+          meta={letterMeta}
+          onMeta={setLetterMeta}
+          body={coverLetter}
+          onBody={setCoverLetter}
+        />
       </CardContent>
     </Card>
   );
@@ -809,6 +836,255 @@ function CvEditorSection({
           </SelectContent>
         </Select>
       )}
+    </div>
+  );
+}
+
+/* ---------- letter editor ---------- */
+
+function MetaField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs">{label}</Label>
+      <Input value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+const RECIPIENT_FIELDS: [string, string][] = [
+  ["company", "Company"],
+  ["contact_name", "Contact"],
+  ["street", "Street"],
+  ["zip", "ZIP"],
+  ["city", "City"],
+  ["country", "Country"],
+  ["email", "Email"],
+];
+
+const SENDER_FIELDS: [string, string][] = [
+  ["name", "Name"],
+  ["street", "Street"],
+  ["zip", "ZIP"],
+  ["city", "City"],
+  ["email", "Email"],
+  ["phone", "Phone"],
+];
+
+function LetterEditor({
+  applicationId,
+  meta,
+  onMeta,
+  body,
+  onBody,
+}: {
+  applicationId: number;
+  meta: LetterMeta;
+  onMeta: (m: LetterMeta) => void;
+  body: string;
+  onBody: (b: string) => void;
+}) {
+  const snippets = useFullList<ResumeSnippetRow>("snippets");
+  const rewrite = useRewriteParagraph();
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [stubDraft, setStubDraft] = useState("");
+  const [snippetId, setSnippetId] = useState("");
+  const [instruction, setInstruction] = useState("");
+
+  const setField = (field: keyof LetterMeta) => (v: string) =>
+    onMeta({ ...meta, [field]: v });
+  const setBlockField =
+    (block: "recipient" | "sender", field: string) => (v: string) =>
+      onMeta({ ...meta, [block]: { ...meta[block], [field]: v } });
+
+  function onAppendSnippet() {
+    const s = snippets.data?.find((r) => String(r.id) === snippetId);
+    if (!s) return;
+    onBody(appendParagraph(body, s.content));
+    setSnippetId("");
+  }
+
+  function onRewrite() {
+    const el = bodyRef.current;
+    if (!el) return;
+    // The selection indexes into the *draft* string the textarea renders, so the splice
+    // below is exact. The selection is read at click time — mutate on the captured range.
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (!body.slice(start, end).trim()) {
+      toast.error("Select the passage to rewrite in the body first");
+      return;
+    }
+    rewrite.mutate(
+      { id: applicationId, text: body.slice(start, end), instruction },
+      {
+        onSuccess: (r) => onBody(replaceRange(body, start, end, r.text)),
+        onError: () =>
+          toast.error("Rewrite failed — is the model server running?"),
+      },
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="col-span-2">
+          <MetaField
+            label="Subject"
+            value={meta.subject}
+            onChange={setField("subject")}
+          />
+        </div>
+        <MetaField label="Date" value={meta.date} onChange={setField("date")} />
+        <MetaField
+          label="Language"
+          value={meta.language}
+          onChange={setField("language")}
+        />
+        <div className="col-span-2">
+          <MetaField
+            label="Salutation"
+            value={meta.salutation}
+            onChange={setField("salutation")}
+          />
+        </div>
+        <div className="col-span-2">
+          <MetaField
+            label="Closing"
+            value={meta.closing}
+            onChange={setField("closing")}
+          />
+        </div>
+      </div>
+
+      <details className="rounded border p-3">
+        <summary className="cursor-pointer text-sm font-medium">
+          Recipient
+        </summary>
+        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
+          {RECIPIENT_FIELDS.map(([field, label]) => (
+            <MetaField
+              key={field}
+              label={label}
+              value={meta.recipient[field] ?? ""}
+              onChange={setBlockField("recipient", field)}
+            />
+          ))}
+        </div>
+      </details>
+
+      <details className="rounded border p-3">
+        <summary className="cursor-pointer text-sm font-medium">Sender</summary>
+        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
+          {SENDER_FIELDS.map(([field, label]) => (
+            <MetaField
+              key={field}
+              label={label}
+              value={meta.sender[field] ?? ""}
+              onChange={setBlockField("sender", field)}
+            />
+          ))}
+        </div>
+      </details>
+
+      <div className="space-y-1">
+        <Label>Cover letter body</Label>
+        <Textarea
+          ref={bodyRef}
+          rows={12}
+          value={body}
+          onChange={(e) => onBody(e.target.value)}
+          placeholder="The applied run's letter body lands here — or write your own."
+        />
+      </div>
+
+      <div className="flex items-end gap-2">
+        <div className="flex-1 space-y-1">
+          <Label className="text-xs">
+            AI rewrite (select text in the body first)
+          </Label>
+          <Input
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder="Optional instruction — e.g. shorter, more formal…"
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onRewrite}
+          disabled={rewrite.isPending}
+        >
+          {rewrite.isPending ? "Rewriting…" : "Rewrite selection"}
+        </Button>
+      </div>
+
+      {hasStub(body) && (
+        <div className="space-y-2 rounded border border-destructive/50 bg-destructive/10 p-3">
+          <p className="text-xs font-medium">
+            The body still contains the personal-paragraph stub — not sendable.
+            Write your own paragraph to replace it:
+          </p>
+          <Textarea
+            rows={4}
+            value={stubDraft}
+            onChange={(e) => setStubDraft(e.target.value)}
+            placeholder="Why this company, in your own words…"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={!stubDraft.trim()}
+              onClick={() => {
+                onBody(replaceStub(body, stubDraft));
+                setStubDraft("");
+              }}
+            >
+              Replace stub
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onBody(replaceStub(body, ""))}
+            >
+              Remove stub
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-end gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Append a snippet</Label>
+          <Select value={snippetId} onValueChange={setSnippetId}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder="Pick a snippet…" />
+            </SelectTrigger>
+            <SelectContent>
+              {(snippets.data ?? []).map((s) => (
+                <SelectItem key={s.id} value={String(s.id)}>
+                  {s.kind}: {s.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!snippetId}
+          onClick={onAppendSnippet}
+        >
+          Append
+        </Button>
+      </div>
     </div>
   );
 }

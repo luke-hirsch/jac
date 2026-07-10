@@ -2,6 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Page } from "./paginated";
 import type { CvEntry, RunStatus, TailoredResult } from "./generations";
+import {
+  editableBody,
+  letterMetaFromResult,
+  type LetterMeta,
+} from "@/lib/letter-doc";
 
 export type ApplicationStatus =
   | "draft"
@@ -35,6 +40,7 @@ export type ApplicationRow = {
   posting: number;
   posting_detail: PostingDetail;
   cv_content: Record<string, CvEntry[]>;
+  letter_meta: Partial<LetterMeta>;
   cover_letter: string;
   layout: number;
   status: ApplicationStatus;
@@ -48,20 +54,26 @@ export type ApplicationPatch = Partial<{
   cover_letter: string;
   status: ApplicationStatus;
   layout: number;
+  letter_meta: LetterMeta;
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */
 
 /** Payload for creating an application from pasted posting text. */
-export function toApplicationPayload(postingText: string): { posting_text: string } {
+export function toApplicationPayload(postingText: string): {
+  posting_text: string;
+} {
   return { posting_text: postingText.trim() };
 }
 
 /** The PATCH that "applies" a finished run's result onto the application. */
-export function runToApplicationPatch(result: TailoredResult): ApplicationPatch {
+export function runToApplicationPatch(
+  result: TailoredResult,
+): ApplicationPatch {
   return {
     cv_content: result.cv,
-    cover_letter: result.cover_letter.text,
+    cover_letter: editableBody(result.cover_letter),
+    letter_meta: letterMetaFromResult(result.cover_letter),
   };
 }
 
@@ -123,5 +135,23 @@ export function useDeleteApplication() {
   return useMutation({
     mutationFn: (id: number) => api<void>(`${URL}${id}/`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+export function useRewriteParagraph() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      text,
+      instruction,
+    }: {
+      id: number;
+      text: string;
+      instruction?: string;
+    }) =>
+      api<{ text: string }>(`${URL}${id}/rewrite/`, {
+        method: "POST",
+        body: JSON.stringify({ text, instruction: instruction ?? "" }),
+      }),
   });
 }

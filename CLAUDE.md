@@ -138,7 +138,10 @@ conversation runs through these phases:
    can adapt them but sees when the goal is met (red → green).
 6. **human types the code** (essential — this is how the human stays on top of the codebase).
 7. AI corrects and improves.
-8. **human tests and debugs.**
+8. **human tests and debugs**, logging the outcome in the guide's closing `## Results` chapter
+   (raw test output + observed issues + what works). that chapter is the bug list follow-up work
+   starts from — AI reads it first when debugging, and `/wrap-up` checks it before a guide moves
+   to `done/`.
 
 ## who does what (default-strict)
 

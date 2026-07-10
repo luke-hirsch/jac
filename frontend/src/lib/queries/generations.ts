@@ -14,6 +14,7 @@ export type CoverLetterResult = {
   sender: Record<string, string>;
   recipient: Record<string, string>;
   date: string;
+  closing: string;
   snippets_used: string[];
   snippet_provenance: { native: string[]; translated: string[] };
   ai_share: number;
