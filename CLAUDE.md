@@ -94,6 +94,21 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   (pending >30 s ⇒ "worker may be down"), and WS auto-reconnect with backoff. Channel layer MUST be
   **`channels_redis.pubsub`** (core layer breaks vs redis-py ≥5.1). Dev stack = 4 processes
   (README "Run (dev)"): valkey, ollama, runserver, **celery worker**. See [[generation-async-loop]].
+- **jac application editor + render/export** (frontend: `lib/cv-doc.ts`, `lib/letter-doc.ts`,
+  `lib/render/{spec,fit,parts,templates}`, `lib/export.ts`; backend: `letter_meta` JSON +
+  `/rewrite/` endpoint on applications) — the application is the editable artefact: CV editor
+  (reorder / deselect / delete / add-from-career-DB per section), letter editor (meta fields,
+  snippet append, AI rewrite of a text selection, stub replace), snippets CRUD UI. Export via
+  **react-pdf**: `ApplicationLayout`'s JSON spec drives `CvDocument`/`LetterDocument`; `fitCv`
+  drops lowest-ranked entries to the layout's page budget (favourites last), the letter is never
+  cut, only flagged; md/json builders; `exportBlocker` = send-time stub gate (pdf/md refuse on
+  letter-bearing scopes while the `PERSONAL_STUB` is in the body). Cached server-side `pdf` field
+  still future work. See [[cv-render-export-decision]].
+- **application detail page decomposed** (`components/applications/`) — the former 1.3k-line route
+  is split per card: `posting-card` / `generate-panel` / `result-view` / `content-card` /
+  `letter-editor` / `export-card` + a `use-run-lifecycle` hook (reducer + WS + snapshot seed +
+  clock + abort); route file is ~70 lines of orchestration. Convention: feature components in
+  `src/components/<feature>/`, page hooks live beside them (`lib/queries/` stays toast-free).
 
 # roadmap
 
@@ -101,10 +116,9 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **frontend cv-snippets** — open guide in `to-do/` (`[frontend]-cv-snippets.md`); the
-   "resume snippets frontend ui" commit landed parts of it — reconcile the guide against the code
-   before continuing.
-2. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+1. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
+2. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
+   response, so a spurious small-model refusal ("I can't assist…") can become the letter body.
 3. **self-hosted web-search agent** (parked) — let a self-hosted *standard* run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
    (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
@@ -112,16 +126,11 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
 
-> **Pipeline-to-frontend (3 guides) — done.** Plumbing, real pipeline task body, and the frontend
-> render all landed (guides in `plans/done/`); see the generation-loop bullet in current state.
->
-> **Generation hardening — done (2026-07-09).** The "worker down / run stuck forever" failure class
-> is closed: cancel endpoint + Abort button, task-side claim/terminal guards, enqueue expiry, soft
-> time limit, LLM transport retry with live "retrying" events, stale-queue hint, WS auto-reconnect,
-> and the load-bearing pubsub channel-layer fix (core layer + redis-py ≥5.1 dropped idle sockets —
-> documented earlier but never typed into settings). Follow-up worth a guide: `CoverLetterWriter`
-> accepts any non-empty LLM response, so a spurious small-model refusal ("I can't assist…") can
-> become the letter body — needs a refusal guard.
+> **Application editor + render/export phase — done (2026-07-10 wrap-up).** All frontend guides
+> (`cv-snippets`, `cv-editor`, `letter-editor`, `tailored-render`, `render-export`) are in
+> `plans/done/`; `to-do/` is empty. Note: `render-export` moved to `done/` without a `## Results`
+> chapter — no logged verification run; the detail-page component split (2026-07-10) is also
+> pending Lukas's `tsc`/vitest/click-through.
 
 # how we work
 
