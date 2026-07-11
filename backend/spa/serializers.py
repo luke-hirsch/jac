@@ -6,12 +6,19 @@ from spa.personality_questions import MAX_ANSWER_LEN, PERSONALITY_QUESTIONS
 
 class UserProfileSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    # Read-only User-model spillover for consumers that need the whole sender
+    # identity in one fetch (the cover-letter editor's sender block). `name`
+    # mirrors jac CoverLetter._candidate_name so both agree on the fallback chain.
+    name = serializers.SerializerMethodField()
+    email = serializers.EmailField(source="user.email", read_only=True)
 
     class Meta:
         model = UserProfile
         fields = (
             "id",
             "user",
+            "name",
+            "email",
             "display_name",
             "avatar",
             "bio",
@@ -30,7 +37,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "city",
             "country",
         )
-        read_only_fields = ("id", "updated_at")
+        read_only_fields = ("id", "name", "email", "updated_at")
+
+    def get_name(self, obj) -> str:
+        if obj.display_name:
+            return obj.display_name
+        full = f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return full or obj.user.username
 
 
 class PersonalityProfileSerializer(serializers.ModelSerializer):

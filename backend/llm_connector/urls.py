@@ -5,12 +5,16 @@ Explicit `basename` is required because both viewsets override
 `get_queryset` rather than declaring a class-level `queryset`.
 """
 
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from llm_connector.views import LLMConfigViewSet, LLMRequestLogViewSet
+from llm_connector.views import LLMAliasListView, LLMConfigViewSet, LLMRequestLogViewSet
 
 router = DefaultRouter()
 router.register("configs", LLMConfigViewSet, basename="llmconfig")
 router.register("request-logs", LLMRequestLogViewSet, basename="llmrequestlog")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("aliases/", LLMAliasListView.as_view(), name="llmalias-list"),
+    *router.urls,
+]

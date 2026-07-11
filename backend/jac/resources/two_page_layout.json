@@ -6,7 +6,15 @@
   "cv": {
     "pages": 2,
     "sections": ["jobs", "educations", "projects", "certifications"],
-    "sidebar": ["skills", "languages"]
+    "sidebar": ["skills", "languages"],
+    "max_entries": {
+      "jobs": 8,
+      "educations": 4,
+      "projects": 7,
+      "certifications": 6,
+      "skills": 18,
+      "languages": 6
+    }
   },
   "cover_letter": { "din5008": true }
 }

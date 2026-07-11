@@ -29,8 +29,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from llm_connector import can_web_search
+
 from jac.cv import CV
-from jac.llm_prompts import ParagraphRewrite
+from jac.llm_prompts import AddressSearch, ParagraphRewrite
 from jac.models import (
     ApplicationLayout,
     Certification,
@@ -402,6 +404,41 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response({"text": rewritten})
+
+    @extend_schema(
+        request=inline_serializer(
+            "FindAddress",
+            {"alias": serializers.CharField(required=False)},
+        ),
+        responses=OpenApiResponse(
+            description="{'address': {field: value}, 'sources': [url]}"
+        ),
+    )
+    @action(detail=True, methods=["post"])
+    def find_address(self, request, pk=None):
+        """Web-search the employer's postal address for the letter's recipient block.
+        Sync like `rewrite` (a single web-search call); nothing is persisted — the
+        client merges the found fields into its letter_meta draft. 400 when the alias
+        can't web-search (the UI only offers capable ones; this is the backstop),
+        502 when the search yields nothing usable."""
+        application = self.get_object()
+        alias = (request.data.get("alias") or "default").strip() or "default"
+        if not can_web_search(alias, request.user):
+            return Response(
+                {"alias": ["This model cannot web-search."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        posting = application.posting
+        company = getattr(getattr(posting, "address", None), "company", "")
+        result = AddressSearch(
+            company, posting.posting_text, alias=alias, user=request.user
+        ).search()
+        if not result["ok"]:
+            return Response(
+                {"detail": "No address found — try another model or fill it in by hand."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"address": result["address"], "sources": result["sources"]})
 
 
 class GenerationRunViewSet(

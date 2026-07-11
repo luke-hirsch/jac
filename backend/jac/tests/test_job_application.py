@@ -347,3 +347,73 @@ class RewriteEndpointTests(APITestCase):
         with patch("jac.llm_prompts.complete", return_value="x"):
             r = self._post({"text": "I did stuff."})
         self.assertEqual(r.status_code, 404)
+
+
+class FindAddressEndpointTests(APITestCase):
+    """POST /api/jac/applications/<pk>/find_address/ — web-search the employer's postal
+    address for the recipient block. Capability-gated (400 for a non-web-search alias),
+    502 when nothing usable is found, nothing persisted. The LLM boundary is patched at
+    jac.llm_prompts.web_search (+ can_web_search in both consuming namespaces)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="fa_user", password="pass")
+        cls.other = User.objects.create_user(username="fa_other", password="pass")
+        cls.app = _application(cls.user, posting_text="Acme GmbH is hiring a dev.")
+
+    def _post(self, body=None):
+        return self.client.post(
+            f"/api/jac/applications/{self.app.pk}/find_address/",
+            body or {},
+            format="json",
+        )
+
+    def _capable(self):
+        return (
+            patch("jac.views.can_web_search", return_value=True),
+            patch("jac.llm_prompts.can_web_search", return_value=True),
+        )
+
+    def test_finds_and_returns_the_address(self):
+        self.client.force_login(self.user)
+        res = {
+            "text": "company: Acme GmbH\nstreet: Musterweg 5\nzip: 10115\ncity: Berlin",
+            "sources": ["https://acme.example/imprint"],
+        }
+        gate1, gate2 = self._capable()
+        with gate1, gate2, patch("jac.llm_prompts.web_search", return_value=res):
+            r = self._post({"alias": "opus"})
+        self.assertEqual(r.status_code, 200, getattr(r, "data", r.content))
+        self.assertEqual(r.data["address"]["city"], "Berlin")
+        self.assertEqual(r.data["sources"], ["https://acme.example/imprint"])
+
+    def test_incapable_alias_is_400(self):
+        self.client.force_login(self.user)
+        with (
+            patch("jac.views.can_web_search", return_value=False),
+            patch("jac.llm_prompts.web_search") as ws,
+        ):
+            r = self._post({"alias": "default"})
+        self.assertEqual(r.status_code, 400)
+        ws.assert_not_called()
+
+    def test_nothing_found_is_502(self):
+        self.client.force_login(self.user)
+        gate1, gate2 = self._capable()
+        with (
+            gate1,
+            gate2,
+            patch(
+                "jac.llm_prompts.web_search",
+                return_value={"text": "No idea, sorry.", "sources": []},
+            ),
+        ):
+            r = self._post({"alias": "opus"})
+        self.assertEqual(r.status_code, 502)
+
+    def test_foreign_application_is_404(self):
+        self.client.force_login(self.other)
+        gate1, gate2 = self._capable()
+        with gate1, gate2, patch("jac.llm_prompts.web_search", return_value={"text": "", "sources": []}):
+            r = self._post({"alias": "opus"})
+        self.assertEqual(r.status_code, 404)

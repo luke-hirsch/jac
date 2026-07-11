@@ -2,7 +2,7 @@ import logging
 import math
 import re
 
-from llm_connector import complete, embed
+from llm_connector import can_web_search, complete, embed, web_search
 
 logger = logging.getLogger(__name__)
 
@@ -453,6 +453,68 @@ class AddressExtract:
             if key in allowed and val and val.lower() not in self._PLACEHOLDERS:
                 out[key] = val[:200]
         return out
+
+
+class AddressSearch(AddressExtract):
+    """Find the employer's postal address ONLINE with a web-search-capable model — the
+    fallback when the posting itself states none. Inherits AddressExtract's line-format
+    parsing (`<field>: <value>`, placeholders dropped — see `no-json-llm-io`); differs in
+    transport (web_search, not complete) and in returning the cited sources so the user
+    can double-check before a letter goes out.
+    """
+
+    _FIELDS = (
+        "company",
+        "contact_name",
+        "street",
+        "address_line2",
+        "zip",
+        "city",
+        "country",
+        "email",
+        "phone",
+    )
+    _INSTRUCTION = (
+        "Find the postal address of the EMPLOYER named below (their headquarters, or the\n"
+        "office the role context points to) using web search. Output one\n"
+        "'<field>: <value>' per line, using exactly these field names:\n"
+        "  company, street, address_line2, zip, city, country, email, phone\n"
+        "Omit a line entirely if you cannot find that field online — never guess.\n"
+        "No prose, no markdown, no JSON."
+    )
+    _MAX_CONTEXT_CHARS = 600
+
+    def __init__(
+        self, company: str, posting_text: str, *, alias: str = "default", user=None
+    ):
+        super().__init__(posting_text, alias=alias, user=user)
+        self.company = (company or "").strip()
+
+    def search(self) -> dict:
+        """{"ok": bool, "address": {field: value}, "sources": [url]}. Not capable /
+        nothing found / any failure -> ok False with empties — never raises."""
+        if not can_web_search(self.alias, self.user):
+            logger.info("AddressSearch: alias %s has no web search", self.alias)
+            return {"ok": False, "address": {}, "sources": []}
+        try:
+            res = web_search(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("AddressSearch: web search failed")
+            return {"ok": False, "address": {}, "sources": []}
+        address = self._parse(res.get("text") or "")
+        return {
+            "ok": bool(address),
+            "address": address,
+            "sources": res.get("sources", []),
+        }
+
+    def _prompt(self) -> str:
+        company = self.company or "the employer in the role context"
+        ctx = self.job_post_text[: self._MAX_CONTEXT_CHARS]
+        return (
+            f"{self._INSTRUCTION}\n\nCOMPANY: {company}\n\n"
+            f"(role context, do not quote): {ctx}\n\nFIELDS:"
+        )
 
 
 class CoverLetterWriter:

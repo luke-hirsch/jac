@@ -6,6 +6,7 @@ from django.test import TestCase
 
 from jac.llm_prompts import (
     AddressExtract,
+    AddressSearch,
     Conversational,
     CoverLetterWriter,
     Embed,
@@ -247,6 +248,63 @@ class AddressExtractParseTests(TestCase):
     def test_extract_empty_on_llm_error(self):
         with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
             self.assertEqual(AddressExtract("p").extract(), {})
+
+
+class AddressSearchTests(TestCase):
+    """AddressSearch = AddressExtract's line contract over web_search: capability-gated
+    (no call without web search), sources passed through, `title`/`language` no longer
+    accepted (they're extraction fields, not address fields)."""
+
+    def test_incapable_alias_makes_no_call(self):
+        with (
+            patch("jac.llm_prompts.can_web_search", return_value=False),
+            patch("jac.llm_prompts.web_search") as ws,
+        ):
+            out = AddressSearch("Acme", "posting").search()
+        ws.assert_not_called()
+        self.assertEqual(out, {"ok": False, "address": {}, "sources": []})
+
+    def test_parses_found_address_and_keeps_sources(self):
+        res = {
+            "text": "company: Acme GmbH\nstreet: Musterweg 5\nzip: 10115\ncity: Berlin",
+            "sources": ["https://acme.example/imprint"],
+        }
+        with (
+            patch("jac.llm_prompts.can_web_search", return_value=True),
+            patch("jac.llm_prompts.web_search", return_value=res),
+        ):
+            out = AddressSearch("Acme", "posting").search()
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["address"]["street"], "Musterweg 5")
+        self.assertEqual(out["sources"], ["https://acme.example/imprint"])
+
+    def test_title_and_language_are_not_address_fields(self):
+        res = {"text": "company: Acme\ntitle: Dev\nlanguage: de", "sources": []}
+        with (
+            patch("jac.llm_prompts.can_web_search", return_value=True),
+            patch("jac.llm_prompts.web_search", return_value=res),
+        ):
+            out = AddressSearch("Acme", "posting").search()
+        self.assertEqual(out["address"], {"company": "Acme"})
+
+    def test_unusable_reply_is_not_ok(self):
+        with (
+            patch("jac.llm_prompts.can_web_search", return_value=True),
+            patch(
+                "jac.llm_prompts.web_search",
+                return_value={"text": "Sorry!", "sources": []},
+            ),
+        ):
+            self.assertFalse(AddressSearch("Acme", "posting").search()["ok"])
+
+    def test_search_failure_is_swallowed(self):
+        with (
+            _muted(),
+            patch("jac.llm_prompts.can_web_search", return_value=True),
+            patch("jac.llm_prompts.web_search", side_effect=RuntimeError("down")),
+        ):
+            out = AddressSearch("Acme", "posting").search()
+        self.assertEqual(out, {"ok": False, "address": {}, "sources": []})
 
 
 class CoverLetterWriterPromptTests(TestCase):

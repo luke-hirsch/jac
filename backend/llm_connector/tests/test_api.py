@@ -4,6 +4,7 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from llm_connector.models import LLMConfig, LLMRequestLog
@@ -121,3 +122,140 @@ class LLMConfigSSRFValidationTests(APITestCase):
         with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
             r = self._post("https://ollama.example.com/v1")
         self.assertEqual(r.status_code, 201, r.data)
+
+
+class LLMConfigCheckActionTests(APITestCase):
+    """`[fullstack]-llm-config-check`: POST /api/llm/configs/<pk>/check/ round-trips a
+    pong completion through the row's alias — the API twin of the `llm_check` command.
+    A failed probe is a result ({ok: false}), not an HTTP error. Red until the `check`
+    action (and the module-level LLMClient import it needs) lands in views.py."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice_check", password="pass")
+        cls.bob = User.objects.create_user(username="bob_check", password="pass")
+        cls.config = LLMConfig.objects.create(
+            user=cls.alice,
+            alias="writer",
+            provider=LLMConfig.Provider.openai,
+            model="gpt-4o",
+        )
+
+    def _check(self):
+        return self.client.post(f"/api/llm/configs/{self.config.pk}/check/")
+
+    def test_success_returns_ok_and_latency(self):
+        self.client.force_login(self.alice)
+        with patch("llm_connector.views.LLMClient") as client_cls:
+            client_cls.return_value.complete.return_value = "pong"
+            r = self._check()
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.data["ok"])
+        self.assertIsInstance(r.data["latency_ms"], int)
+        # resolves by alias with the requesting user — what the pipeline will do
+        client_cls.assert_called_once_with("writer", user=self.alice)
+
+    def test_failure_is_a_result_not_an_http_error(self):
+        self.client.force_login(self.alice)
+        with patch("llm_connector.views.LLMClient") as client_cls:
+            client_cls.return_value.complete.side_effect = RuntimeError(
+                "connection refused"
+            )
+            r = self._check()
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["ok"])
+        self.assertIn("connection refused", r.data["error"])
+        self.assertNotIn("latency_ms", r.data)
+
+    def test_client_construction_failure_is_also_a_result(self):
+        # unknown provider / missing optional SDK / decrypt failure — never a 500
+        self.client.force_login(self.alice)
+        with patch("llm_connector.views.LLMClient", side_effect=ImportError("no sdk")):
+            r = self._check()
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["ok"])
+        self.assertIn("no sdk", r.data["error"])
+
+    def test_other_users_config_is_404(self):
+        self.client.force_login(self.bob)
+        with patch("llm_connector.views.LLMClient") as client_cls:
+            r = self._check()
+        self.assertEqual(r.status_code, 404)
+        client_cls.assert_not_called()
+
+    def test_unauthenticated_request_is_forbidden(self):
+        r = self._check()
+        self.assertIn(r.status_code, (401, 403))
+
+
+LLM_TEST_SETTINGS = {
+    "default": {
+        "provider": "ollama",
+        "url": "http://localhost:11434",
+        "model": "llama3.2:1b",
+        "embed_model": "qwen3-embedding:0.6b",
+        "strength": "light",
+    }
+}
+
+
+@override_settings(LLM=LLM_TEST_SETTINGS)
+class LLMAliasListViewTests(APITestCase):
+    """/api/llm/aliases/ — resolved capabilities the generation UI pairs grades and
+    models with. The 'default' fallback is always present; per-user rows carry their
+    autodetected (or explicit) strength and adapter capabilities; nothing leaks
+    across users."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice_alias", password="pass")
+        cls.bob = User.objects.create_user(username="bob_alias", password="pass")
+        LLMConfig.objects.create(
+            user=cls.alice,
+            alias="opus",
+            provider=LLMConfig.Provider.anthropic,
+            model="claude-opus-4-8",
+        )
+        LLMConfig.objects.create(
+            user=cls.alice,
+            alias="local-embed",
+            provider=LLMConfig.Provider.ollama,
+            model="llama3.2:1b",
+            url="http://localhost:11434",
+            extra={"embed_model": "qwen3-embedding:0.6b", "strength": "light"},
+        )
+
+    def _rows(self, user):
+        self.client.force_login(user)
+        r = self.client.get("/api/llm/aliases/")
+        self.assertEqual(r.status_code, 200)
+        return {row["alias"]: row for row in r.data}
+
+    def test_default_fallback_is_always_present(self):
+        rows = self._rows(self.bob)
+        self.assertEqual(list(rows), ["default"])
+        default = rows["default"]
+        self.assertEqual(default["provider"], "ollama")
+        self.assertEqual(default["strength"], "light")
+        self.assertTrue(default["supports_embed"])
+        self.assertFalse(default["supports_web_search"])
+
+    def test_user_rows_carry_strength_and_capabilities(self):
+        rows = self._rows(self.alice)
+        self.assertEqual(set(rows), {"default", "opus", "local-embed"})
+        opus = rows["opus"]
+        self.assertEqual(opus["strength"], "strong")  # autodetected from the model id
+        self.assertFalse(opus["supports_embed"])
+        self.assertTrue(opus["supports_web_search"])
+        local = rows["local-embed"]
+        self.assertEqual(local["strength"], "light")  # explicit in extra
+        self.assertTrue(local["supports_embed"])
+
+    def test_no_cross_user_leak(self):
+        rows = self._rows(self.bob)
+        self.assertNotIn("opus", rows)
+
+    def test_unauthenticated_request_is_forbidden(self):
+        self.client.logout()
+        r = self.client.get("/api/llm/aliases/")
+        self.assertIn(r.status_code, (401, 403))

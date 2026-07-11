@@ -340,6 +340,73 @@ class UserProfileViewTests(TestCase):
         bob_id = self.client.get(self.PROFILE_URL).json()["id"]
         self.assertNotEqual(alice_id, bob_id)
 
+    def test_exposes_readonly_sender_identity(self):
+        """`name`/`email` (User-model spillover for the letter sender block) are
+        served read-only: name falls back display_name → first/last → username,
+        and neither field is writable through the endpoint."""
+        self.client.force_login(self.alice)
+        data = self.client.get(self.PROFILE_URL).json()
+        self.assertEqual(data["name"], "alice")  # no display_name, no first/last
+        self.assertEqual(data["email"], "alice@example.com")
+
+        self.alice.profile.display_name = "Alice A."
+        self.alice.profile.save(update_fields=["display_name"])
+        self.assertEqual(
+            self.client.get(self.PROFILE_URL).json()["name"], "Alice A."
+        )
+
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"email": "evil@example.com", "name": "Mallory"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)  # read-only fields are ignored
+        self.alice.refresh_from_db()
+        self.assertEqual(self.alice.email, "alice@example.com")
+
+    def test_patch_writes_first_and_last_name_to_user(self):
+        """first_name/last_name are writable spillover onto auth.User — they feed
+        the letter sender name (get_name) when display_name is blank."""
+        self.client.force_login(self.alice)
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"first_name": "Ada", "last_name": "Lovelace"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.alice.refresh_from_db()
+        self.assertEqual(self.alice.first_name, "Ada")
+        self.assertEqual(self.alice.last_name, "Lovelace")
+        # name spillover resolves through first/last (no display_name set)
+        self.assertEqual(resp.json()["first_name"], "Ada")
+        self.assertEqual(resp.json()["name"], "Ada Lovelace")
+
+    def test_username_is_read_only(self):
+        """username is surfaced for display but never writable through the endpoint."""
+        self.client.force_login(self.alice)
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"username": "hacker"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)  # read-only field ignored
+        self.alice.refresh_from_db()
+        self.assertEqual(self.alice.username, "alice")
+        self.assertEqual(resp.json()["username"], "alice")
+
+    def test_show_socials_toggle_persists(self):
+        """The CV socials opt-in defaults off and is togglable through the endpoint."""
+        self.client.force_login(self.alice)
+        self.assertFalse(self.client.get(self.PROFILE_URL).json()["show_socials"])
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"show_socials": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.alice.profile.refresh_from_db()
+        self.assertTrue(self.alice.profile.show_socials)
+
 
 class SignupGateTests(TestCase):
     """`[backend]-ssrf-signup-gate`: registration is closed unless ACCOUNT_ALLOW_SIGNUPS is set.
