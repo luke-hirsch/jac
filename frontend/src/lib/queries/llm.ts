@@ -294,6 +294,19 @@ export function addressSearchOptions(
   return out;
 }
 
+/* ---------- connectivity check ---------- */
+
+/** Result of POST /api/llm/configs/<id>/check/ — the API twin of `llm_check`.
+ *  A failed probe is a result (ok: false), not an HTTP error. */
+export type CheckResult =
+  | { ok: true; latency_ms: number }
+  | { ok: false; error: string };
+
+/** Inline row label: "OK · 812 ms" on success, the raw error text on failure. */
+export function checkResultLabel(r: CheckResult): string {
+  return r.ok ? `OK · ${r.latency_ms} ms` : r.error;
+}
+
 /* ---------- query hooks ---------- */
 
 const URL = "/api/llm/configs/";
@@ -340,5 +353,12 @@ export function useDeleteConfig() {
   return useMutation({
     mutationFn: (id: number) => api<void>(`${URL}${id}/`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+export function useCheckConfig() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<CheckResult>(`${URL}${id}/check/`, { method: "POST" }),
   });
 }

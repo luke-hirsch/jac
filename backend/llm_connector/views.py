@@ -8,14 +8,18 @@ defense-in-depth against custom actions that bypass the queryset.
 grades and models with.
 """
 
+import time
+
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from lukehirsch.permissions import IsOwner
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from llm_connector.base import LLMAdapter
+from llm_connector.client import LLMClient
 from llm_connector.conf import FALLBACK_ALIAS, get_alias_config, get_alias_strength
 from llm_connector.models import LLMConfig, LLMRequestLog
 from llm_connector.registry import get_adapter_class
@@ -28,6 +32,30 @@ class LLMConfigViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return LLMConfig.objects.filter(user=self.request.user)
+
+    @extend_schema(
+        request=None,
+        responses=OpenApiResponse(
+            description="{ok: true, latency_ms} or {ok: false, error}"
+        ),
+    )
+    @action(detail=True, methods=["post"])
+    def check(self, request, pk=None):
+        """Connectivity probe for one config — the API twin of `llm_check`.
+
+        Round-trips a one-word completion through the row's alias exactly as the
+        pipeline would resolve it. A failed probe is a *result*, not an HTTP
+        error: both outcomes are 200 with an `ok` discriminator.
+        """
+        config = self.get_object()
+        try:
+            client = LLMClient(config.alias, user=request.user)
+            start = time.monotonic()
+            client.complete("Respond with exactly one word: pong")
+            latency_ms = int((time.monotonic() - start) * 1000)
+            return Response({"ok": True, "latency_ms": latency_ms})
+        except Exception as exc:  # noqa: BLE001 — any failure is the check's finding
+            return Response({"ok": False, "error": str(exc)})
 
 
 class LLMRequestLogViewSet(viewsets.ReadOnlyModelViewSet):

@@ -4,13 +4,16 @@ import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import {
   PROVIDER_SPECS,
+  checkResultLabel,
   rowToState,
   switchProvider,
   toPayload,
+  useCheckConfig,
   useCreateConfig,
   useDeleteConfig,
   useLLMConfigs,
   useUpdateConfig,
+  type CheckResult,
   type ConfigFormState,
   type LLMConfigRow,
   type Provider,
@@ -57,6 +60,9 @@ function LLMConfigPage() {
   const [editing, setEditing] = useState<LLMConfigRow | "new" | null>(null);
   const del = useDeleteConfig();
 
+  const check = useCheckConfig();
+  const [checks, setChecks] = useState<Record<number, CheckResult>>({});
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -99,8 +105,35 @@ function LLMConfigPage() {
               <p className="truncate text-sm text-muted-foreground">
                 {c.model}
               </p>
+              {checks[c.id] && (
+                <p
+                  className={`truncate text-xs ${
+                    checks[c.id].ok
+                      ? "text-muted-foreground"
+                      : "text-destructive"
+                  }`}
+                >
+                  {checkResultLabel(checks[c.id])}
+                </p>
+              )}
             </div>
             <div className="flex shrink-0 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={check.isPending}
+                onClick={() => {
+                  setChecks(({ [c.id]: _stale, ...rest }) => rest);
+                  check.mutate(c.id, {
+                    onSuccess: (r) => setChecks((s) => ({ ...s, [c.id]: r })),
+                    onError: () => toast.error("Check failed"),
+                  });
+                }}
+              >
+                {check.isPending && check.variables === c.id
+                  ? "Checking…"
+                  : "Check"}
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setEditing(c)}>
                 Edit
               </Button>
