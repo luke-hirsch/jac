@@ -5,20 +5,25 @@ from spa.personality_questions import MAX_ANSWER_LEN, PERSONALITY_QUESTIONS
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
-    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
-    # Read-only User-model spillover for consumers that need the whole sender
-    # identity in one fetch (the cover-letter editor's sender block). `name`
-    # mirrors jac CoverLetter._candidate_name so both agree on the fallback chain.
     name = serializers.SerializerMethodField()
     email = serializers.EmailField(source="user.email", read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
+    first_name = serializers.CharField(
+        source="user.first_name", required=False, allow_blank=True, max_length=150
+    )
+    last_name = serializers.CharField(
+        source="user.last_name", required=False, allow_blank=True, max_length=150
+    )
 
     class Meta:
         model = UserProfile
         fields = (
             "id",
-            "user",
             "name",
+            "username",
             "email",
+            "first_name",
+            "last_name",
             "display_name",
             "avatar",
             "bio",
@@ -26,6 +31,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "website",
             "linkedin_url",
             "github_url",
+            "show_socials",
             "timezone",
             "theme",
             "contrast",
@@ -37,13 +43,21 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "city",
             "country",
         )
-        read_only_fields = ("id", "name", "email", "updated_at")
+        read_only_fields = ("id", "name", "username", "email", "updated_at")
 
     def get_name(self, obj) -> str:
         if obj.display_name:
             return obj.display_name
         full = f"{obj.user.first_name} {obj.user.last_name}".strip()
         return full or obj.user.username
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", None)
+        if user_data:
+            for attr, value in user_data.items():
+                setattr(instance.user, attr, value)
+            instance.user.save(update_fields=list(user_data))
+        return super().update(instance, validated_data)
 
 
 class PersonalityProfileSerializer(serializers.ModelSerializer):
@@ -81,7 +95,9 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
         sparse dict (answering 5 of 12) is valid. Only the per-answer length cap is enforced here.
         """
         if not isinstance(answers, dict):
-            raise serializers.ValidationError("Expected a mapping of question id -> answer.")
+            raise serializers.ValidationError(
+                "Expected a mapping of question id -> answer."
+            )
         cleaned: dict = {}
         for key, value in answers.items():
             text = (value or "").strip()

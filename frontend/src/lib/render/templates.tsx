@@ -41,6 +41,12 @@ function cvStyles(spec: LayoutSpec) {
       color: spec.colors.text,
     },
     name: { fontSize: base * 2, marginBottom: base, color: spec.colors.accent },
+    contact: {
+      color: spec.colors.muted,
+      fontSize: base * 0.9,
+      marginBottom: base,
+    },
+    summary: { marginBottom: base, lineHeight: 1.4 },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
@@ -111,16 +117,22 @@ export function CvPages({
   name,
   content,
   db,
+  contact,
+  summary,
 }: {
   spec: LayoutSpec;
   name: string;
   content: CvContent;
   db: CvEntriesResponse | undefined;
+  contact?: string;
+  summary?: string;
 }) {
   const styles = cvStyles(spec);
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
       <Text style={styles.name}>{name}</Text>
+      {contact ? <Text style={styles.contact}>{contact}</Text> : null}
+      {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {spec.cv.sections.map((s) => (
         <CvSectionView
           key={s}

@@ -18,6 +18,9 @@ import {
 
 type Profile = {
   id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
   display_name: string;
   bio: string;
   phone: string;
@@ -33,9 +36,12 @@ type Profile = {
   theme: "system" | "light" | "dark";
   contrast: "normal" | "high";
   email_reminders: boolean;
+  show_socials: boolean;
 };
 
 const schema = z.object({
+  first_name: z.string().max(150),
+  last_name: z.string().max(150),
   display_name: z.string().max(100),
   bio: z.string().max(500),
   phone: z.string().max(30),
@@ -51,6 +57,7 @@ const schema = z.object({
   theme: z.enum(["system", "light", "dark"]),
   contrast: z.enum(["normal", "high"]),
   email_reminders: z.boolean(),
+  show_socials: z.boolean(),
 });
 
 type ProfileSchema = z.infer<typeof schema>;
@@ -86,6 +93,8 @@ function ProfilePage() {
   return (
     <ProfileForm
       initial={{
+        first_name: p.first_name,
+        last_name: p.last_name,
         display_name: p.display_name,
         bio: p.bio,
         phone: p.phone,
@@ -101,6 +110,7 @@ function ProfilePage() {
         theme: p.theme,
         contrast: p.contrast,
         email_reminders: p.email_reminders,
+        show_socials: p.show_socials,
       }}
       onSubmit={(v) => patch.mutateAsync(v)}
       busy={patch.isPending}
@@ -109,10 +119,12 @@ function ProfilePage() {
 }
 
 function ProfileForm({
+  username,
   initial,
   onSubmit,
   busy,
 }: {
+  username: string;
   initial: ProfileSchema;
   onSubmit: (v: ProfileSchema) => Promise<unknown>;
   busy: boolean;
@@ -163,6 +175,15 @@ function ProfileForm({
         form.handleSubmit();
       }}
     >
+      <div className="space-y-1">
+        <Label>Username</Label>
+        <Input value={username} disabled readOnly />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {text("first_name", "First name")}
+        {text("last_name", "Last name")}
+      </div>
+      {text("display_name", "Display name")}
       {text("display_name", "Display name")}
       {textarea("bio", "Bio")}
       {text("phone", "Phone")}
@@ -233,6 +254,18 @@ function ProfileForm({
               onChange={(e) => field.handleChange(e.target.checked)}
             />
             Email me follow-up reminders
+          </label>
+        )}
+      </form.Field>
+      <form.Field name="show_socials">
+        {(field) => (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={field.state.value}
+              onChange={(e) => field.handleChange(e.target.checked)}
+            />
+            Show my contact details & socials on the exported CV
           </label>
         )}
       </form.Field>

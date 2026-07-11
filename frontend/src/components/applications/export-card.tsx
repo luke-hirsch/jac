@@ -20,6 +20,7 @@ import {
 import { type ApplicationRow } from "@/lib/queries/applications";
 import { activeContent } from "@/lib/cv-doc";
 import {
+  contactLine,
   fillBlanks,
   normalizeLetterMeta,
   senderFromProfile,
@@ -70,7 +71,10 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   // so an export never goes out with an empty sender block.
   const stored = normalizeLetterMeta(app.letter_meta);
   const meta = profile.data
-    ? { ...stored, sender: fillBlanks(stored.sender, senderFromProfile(profile.data)) }
+    ? {
+        ...stored,
+        sender: fillBlanks(stored.sender, senderFromProfile(profile.data)),
+      }
     : stored;
   const name = meta.sender.name || "CV";
   const stem = `application-${app.id}-${scope}`;
@@ -79,6 +83,9 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     if (!spec.data) throw new Error("layout spec not loaded");
     const s = spec.data;
     const db = careerDb.data;
+    const socials = profile.data?.show_socials ?? false;
+    const contact = contactLine(meta.sender, { socials });
+    const summary = profile.data?.bio ?? "";
     // Template entry budget first (hard editorial cap), page fit second.
     const active = capContent(
       activeContent(app.cv_content ?? {}),
@@ -92,7 +99,16 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             active,
             s.cv.pages,
             (c) =>
-              pdfPages(<CvDocument spec={s} name={name} content={c} db={db} />),
+              pdfPages(
+                <CvDocument
+                  spec={s}
+                  name={name}
+                  content={c}
+                  db={db}
+                  contact={contact}
+                  summary={summary}
+                />,
+              ),
             isFavouriteLookup(db),
           );
     const letterPages =
@@ -104,7 +120,14 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
 
     const doc =
       scope === "cv" ? (
-        <CvDocument spec={s} name={name} content={fit!.content} db={db} />
+        <CvDocument
+          spec={s}
+          name={name}
+          content={fit!.content}
+          db={db}
+          contact={contact}
+          summary={summary}
+        />
       ) : scope === "letter" ? (
         <LetterDocument spec={s} meta={meta} body={app.cover_letter} />
       ) : (
@@ -156,7 +179,10 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     const db = careerDb.data;
     // Same template budget as the PDF (md is a sendable artefact); json stays a full dump.
     const active = spec.data
-      ? capContent(activeContent(app.cv_content ?? {}), spec.data.cv.max_entries)
+      ? capContent(
+          activeContent(app.cv_content ?? {}),
+          spec.data.cv.max_entries,
+        )
       : activeContent(app.cv_content ?? {});
     const cvMd = cvToMarkdown(name, active, db);
     const letterMd = letterToMarkdown(meta, app.cover_letter);

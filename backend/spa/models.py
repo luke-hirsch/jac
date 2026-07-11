@@ -7,9 +7,7 @@ notification settings that don't belong on the auth.User model itself.
 
 from pathlib import Path
 
-
 from django.db import models
-
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -52,6 +50,8 @@ class UserProfile(models.Model):
     website = models.URLField(blank=True)
     linkedin_url = models.URLField(blank=True)
     github_url = models.URLField(blank=True)
+
+    show_socials = models.BooleanField(default=False)
 
     # Postal address — the sender block on JAC cover letters.
     street = models.CharField(max_length=200, blank=True)

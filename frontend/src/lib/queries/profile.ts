@@ -1,18 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-/** `/api/spa/profile/` — the request user's profile. `name`/`email` are read-only
- *  User-model spillover (name = display_name → first/last → username, resolved
- *  server-side) so the letter sender block needs exactly one fetch. */
+/** `/api/spa/profile/` —  */
 export type ProfileRow = {
   id: number;
   name: string;
+  username: string;
   email: string;
+  first_name: string;
+  last_name: string;
   display_name: string;
+  bio: string;
   phone: string;
   website: string;
   linkedin_url: string;
   github_url: string;
+  show_socials: boolean;
   street: string;
   address_line2: string;
   zip: string;

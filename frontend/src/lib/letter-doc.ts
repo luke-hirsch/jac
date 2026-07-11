@@ -1,10 +1,3 @@
-/**
- * Pure logic for the application's cover letter.
- *
- * Post guide 1 the letter lives in two fields: `cover_letter` = the editable body (woven
- * snippets + personal paragraph or stub) and `letter_meta` = the furniture (subject,
- * salutation, date, closing, sender/recipient) that render/export re-assemble around it.
- */
 import type { CoverLetterResult } from "@/lib/queries/generations";
 
 /** Must match backend jac/cover_letter.py PERSONAL_STUB byte for byte. */
@@ -67,6 +60,8 @@ export function senderFromProfile(p: {
   city: string;
   country: string;
   website: string;
+  linkedin_url: string;
+  github_url: string;
 }): Record<string, string> {
   return {
     name: p.name,
@@ -78,7 +73,18 @@ export function senderFromProfile(p: {
     city: p.city,
     country: p.country,
     website: p.website,
+    linkedin: p.linkedin_url,
+    github: p.github_url,
   };
+}
+
+export function contactLine(
+  sender: Record<string, string>,
+  opts: { socials: boolean },
+): string {
+  const parts = [sender.email, sender.phone];
+  if (opts.socials) parts.push(sender.website, sender.linkedin, sender.github);
+  return parts.filter(Boolean).join(" · ");
 }
 
 export function letterMetaFromResult(letter: CoverLetterResult): LetterMeta {
