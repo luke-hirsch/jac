@@ -96,6 +96,21 @@ export function exportBlocker(
   }
   return null;
 }
+/** content joined with the career-DB rows behind it — the shared export/hidden-layer shape. */
+export function joinedContent(
+  content: CvContent,
+  db: CvEntriesResponse | undefined,
+) {
+  return Object.fromEntries(
+    SECTION_ORDER.map((section) => [
+      section,
+      (content[section] ?? []).map((e) => ({
+        ...e,
+        entry: joinEntry(db, section, e),
+      })),
+    ]),
+  );
+}
 
 /** JSON export: the selection joined with the career-DB rows behind it (frozen snapshot). */
 export function exportJson(
@@ -107,21 +122,12 @@ export function exportJson(
     db: CvEntriesResponse | undefined;
   },
 ): string {
-  const cv = Object.fromEntries(
-    SECTION_ORDER.map((section) => [
-      section,
-      (args.content[section] ?? []).map((e) => ({
-        ...e,
-        entry: joinEntry(args.db, section, e),
-      })),
-    ]),
-  );
+  const cv = joinedContent(args.content, args.db);
   const letter = { meta: args.meta, body: args.body };
   const payload =
     scope === "cv" ? { cv } : scope === "letter" ? { letter } : { cv, letter };
   return JSON.stringify(payload, null, 2);
 }
-
 /* ---------- downloads (browser-only, not unit-tested) ---------- */
 
 export function downloadBlob(blob: Blob, filename: string) {

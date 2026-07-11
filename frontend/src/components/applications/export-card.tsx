@@ -48,6 +48,8 @@ import {
   type ExportScope,
 } from "@/lib/export";
 
+import { docMetadata, hiddenPayload } from "@/lib/render/hidden";
+
 type BuiltPdf = {
   blob: Blob;
   fit: FitResult | null; // null for letter-only
@@ -86,11 +88,11 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     const socials = profile.data?.show_socials ?? false;
     const contact = contactLine(meta.sender, { socials });
     const summary = profile.data?.bio ?? "";
-    // Template entry budget first (hard editorial cap), page fit second.
-    const active = capContent(
-      activeContent(app.cv_content ?? {}),
-      s.cv.max_entries,
-    );
+    // Template entry budget first (hard editorial cap), page fit second. `full` (pre-cap)
+    // sticks around: everything it has that the fitted content lacks — cap cuts and page
+    // drops alike — goes into the hidden layer as cut_for_space.
+    const full = activeContent(app.cv_content ?? {});
+    const active = capContent(full, s.cv.max_entries);
 
     const fit =
       scope === "letter"
@@ -118,21 +120,46 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             <LetterDocument spec={s} meta={meta} body={app.cover_letter} />,
           );
 
+    // The machine-readable layer: built from the fit *result* (which is why the fit's
+    // measuring renders above go without it — an absolute block has zero layout impact).
+    const hidden = hiddenPayload(scope, {
+      fitted: fit?.content ?? {},
+      full,
+      meta,
+      body: app.cover_letter,
+      db,
+    });
+    const docMeta = docMetadata(scope, {
+      name,
+      subject: meta.subject,
+      content: fit?.content ?? {},
+      db,
+    });
+
     const doc =
       scope === "cv" ? (
         <CvDocument
+          docMeta={docMeta}
           spec={s}
           name={name}
           content={fit!.content}
           db={db}
           contact={contact}
           summary={summary}
+          hidden={hidden}
         />
       ) : scope === "letter" ? (
-        <LetterDocument spec={s} meta={meta} body={app.cover_letter} />
+        <LetterDocument
+          docMeta={docMeta}
+          spec={s}
+          meta={meta}
+          body={app.cover_letter}
+          hidden={hidden}
+        />
       ) : (
         <ApplicationDocument
-          cv={{ spec: s, name, content: fit!.content, db }}
+          docMeta={docMeta}
+          cv={{ spec: s, name, content: fit!.content, db, contact, summary, hidden }}
           letter={{ spec: s, meta, body: app.cover_letter }}
         />
       );

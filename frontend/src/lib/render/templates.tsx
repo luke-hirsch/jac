@@ -26,7 +26,35 @@ import { countPdfPages } from "./fit";
 import { entryParts } from "./parts";
 import type { LayoutSpec } from "./spec";
 
+import type { DocMeta } from "./hidden";
+
 export const mm = (n: number) => n * 2.83465;
+
+/* ---------- invisible ink ---------- */
+
+/**
+ * 1pt text at opacity 0, absolutely positioned: zero layout impact (page counts and the
+ * fit loop are untouched — render-hidden-pdf.test.ts guards the invariance), but the
+ * glyphs land in the content stream where text extraction reads them. Bottom-anchored so
+ * geometric extractors order it after the visible content. Never `fixed` — that would
+ * duplicate the payload on every page.
+ */
+function HiddenInk({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <View
+      style={{
+        position: "absolute",
+        bottom: 6,
+        left: 24,
+        right: 24,
+        opacity: 0,
+      }}
+    >
+      <Text style={{ fontSize: 1 }}>{text}</Text>
+    </View>
+  );
+}
 
 /* ---------- CV ---------- */
 
@@ -119,6 +147,7 @@ export function CvPages({
   db,
   contact,
   summary,
+  hidden,
 }: {
   spec: LayoutSpec;
   name: string;
@@ -126,6 +155,7 @@ export function CvPages({
   db: CvEntriesResponse | undefined;
   contact?: string;
   summary?: string;
+  hidden?: string;
 }) {
   const styles = cvStyles(spec);
   return (
@@ -152,6 +182,7 @@ export function CvPages({
           compact
         />
       ))}
+      <HiddenInk text={hidden} />
     </Page>
   );
 }
@@ -208,10 +239,12 @@ export function LetterPage({
   spec,
   meta,
   body,
+  hidden,
 }: {
   spec: LayoutSpec;
   meta: LetterMeta;
   body: string;
+  hidden?: string;
 }) {
   const styles = letterStyles(spec);
   const snd = meta.sender;
@@ -264,6 +297,7 @@ export function LetterPage({
           {contactLine}
         </Text>
       ) : null}
+      <HiddenInk text={hidden} />
     </Page>
   );
 }
@@ -273,14 +307,20 @@ export function LetterPage({
 export type CvDocProps = Parameters<typeof CvPages>[0];
 export type LetterDocProps = Parameters<typeof LetterPage>[0];
 
-export const CvDocument = (p: CvDocProps) => (
-  <Document>
+export const CvDocument = ({
+  docMeta,
+  ...p
+}: CvDocProps & { docMeta?: DocMeta }) => (
+  <Document {...docMeta}>
     <CvPages {...p} />
   </Document>
 );
 
-export const LetterDocument = (p: LetterDocProps) => (
-  <Document>
+export const LetterDocument = ({
+  docMeta,
+  ...p
+}: LetterDocProps & { docMeta?: DocMeta }) => (
+  <Document {...docMeta}>
     <LetterPage {...p} />
   </Document>
 );
@@ -288,11 +328,13 @@ export const LetterDocument = (p: LetterDocProps) => (
 export const ApplicationDocument = ({
   cv,
   letter,
+  docMeta,
 }: {
   cv: CvDocProps;
   letter: LetterDocProps;
+  docMeta?: DocMeta;
 }) => (
-  <Document>
+  <Document {...docMeta}>
     <LetterPage {...letter} />
     <CvPages {...cv} />
   </Document>

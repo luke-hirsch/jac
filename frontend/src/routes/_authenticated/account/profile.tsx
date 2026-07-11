@@ -92,6 +92,7 @@ function ProfilePage() {
 
   return (
     <ProfileForm
+      username={p.username}
       initial={{
         first_name: p.first_name,
         last_name: p.last_name,
@@ -183,7 +184,6 @@ function ProfileForm({
         {text("first_name", "First name")}
         {text("last_name", "Last name")}
       </div>
-      {text("display_name", "Display name")}
       {text("display_name", "Display name")}
       {textarea("bio", "Bio")}
       {text("phone", "Phone")}
