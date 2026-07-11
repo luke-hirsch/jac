@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   PERSONAL_STUB,
   appendParagraph,
+  contactLine,
   editableBody,
   emptyLetterMeta,
+  fillBlanks,
   hasStub,
   letterMetaFromResult,
   normalizeLetterMeta,
   replaceRange,
   replaceStub,
+  senderFromProfile,
 } from "@/lib/letter-doc";
 import type { CoverLetterResult } from "@/lib/queries/generations";
 
@@ -143,5 +146,86 @@ describe("replaceRange", () => {
   it("clamps out-of-range indices instead of throwing", () => {
     expect(replaceRange("abc", -5, 99, "X")).toBe("X");
     expect(replaceRange("abc", 2, 1, "X")).toBe("abXc"); // end < start → collapsed at start
+  });
+});
+
+describe("fillBlanks / senderFromProfile (profile → sender defaults)", () => {
+  const profile = {
+    name: "Ada Lovelace",
+    email: "ada@x.com",
+    phone: "+49 123",
+    street: "Musterstr. 1",
+    address_line2: "",
+    zip: "10115",
+    city: "Berlin",
+    country: "Germany",
+    website: "https://ada.dev",
+    linkedin_url: "https://linkedin.com/in/ada",
+    github_url: "https://github.com/ada",
+  };
+
+  it("fills only blank fields — explicit values always win", () => {
+    const merged = fillBlanks(
+      { name: "A. Byron", city: "  ", email: "" },
+      senderFromProfile(profile),
+    );
+    expect(merged.name).toBe("A. Byron"); // explicit wins
+    expect(merged.city).toBe("Berlin"); // whitespace counts as blank
+    expect(merged.email).toBe("ada@x.com");
+    expect(merged.street).toBe("Musterstr. 1"); // missing key filled
+  });
+
+  it("never writes empty defaults", () => {
+    const merged = fillBlanks({}, senderFromProfile(profile));
+    expect(merged).not.toHaveProperty("address_line2"); // blank in the profile
+  });
+
+  it("maps the whole sender block the templates consume", () => {
+    const sender = senderFromProfile(profile);
+    for (const key of [
+      "name",
+      "email",
+      "phone",
+      "street",
+      "zip",
+      "city",
+      "country",
+      "website",
+      "linkedin",
+      "github",
+    ]) {
+      expect(sender[key]).toBeTruthy();
+    }
+  });
+});
+
+describe("contactLine (CV contact header)", () => {
+  const sender = senderFromProfile({
+    name: "Ada",
+    email: "ada@x.com",
+    phone: "+49 123",
+    street: "",
+    address_line2: "",
+    zip: "",
+    city: "",
+    country: "",
+    website: "https://ada.dev",
+    linkedin_url: "https://linkedin.com/in/ada",
+    github_url: "https://github.com/ada",
+  });
+
+  it("shows only email + phone when socials are off", () => {
+    expect(contactLine(sender, { socials: false })).toBe("ada@x.com · +49 123");
+  });
+
+  it("adds website + socials when on", () => {
+    const line = contactLine(sender, { socials: true });
+    expect(line).toContain("https://ada.dev");
+    expect(line).toContain("https://linkedin.com/in/ada");
+    expect(line).toContain("https://github.com/ada");
+  });
+
+  it("drops blank fields", () => {
+    expect(contactLine({ email: "a@b.c" }, { socials: true })).toBe("a@b.c");
   });
 });

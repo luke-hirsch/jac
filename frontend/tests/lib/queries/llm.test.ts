@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   PROVIDER_SPECS,
+  addressSearchOptions,
+  aliasesForGrade,
   buildStructuredExtra,
+  checkResultLabel,
   parseExtraJson,
   toPayload,
   rowToState,
   switchProvider,
+  type AliasInfo,
   type ConfigFormState,
   type LLMConfigRow,
   type Provider,
@@ -194,5 +198,116 @@ describe("switchProvider", () => {
   it("seeds empty structured field keys for the new provider", () => {
     const next = switchProvider(baseState(), "openai");
     expect(next.extraFields).toEqual({ reasoning_effort: "" });
+  });
+});
+
+describe("aliasesForGrade (grade ↔ model coupling)", () => {
+  const infos: AliasInfo[] = [
+    {
+      alias: "default",
+      provider: "ollama",
+      model: "llama3.2:1b",
+      strength: "light",
+      supports_embed: true,
+      supports_web_search: false,
+    },
+    {
+      alias: "opus",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      strength: "strong",
+      supports_embed: false,
+      supports_web_search: true,
+    },
+    {
+      alias: "mid",
+      provider: "custom",
+      model: "qwen3:8b",
+      strength: "standard",
+      supports_embed: false,
+      supports_web_search: false,
+    },
+  ];
+
+  it("light offers only embed-capable aliases", () => {
+    expect(aliasesForGrade(infos, "light").map((a) => a.alias)).toEqual([
+      "default",
+    ]);
+  });
+
+  it("standard drops light-only aliases (the server default)", () => {
+    expect(aliasesForGrade(infos, "standard").map((a) => a.alias)).toEqual([
+      "opus",
+      "mid",
+    ]);
+  });
+
+  it("strong offers only strong aliases", () => {
+    expect(aliasesForGrade(infos, "strong").map((a) => a.alias)).toEqual([
+      "opus",
+    ]);
+  });
+
+  it("auto (blank grade) offers everything", () => {
+    expect(aliasesForGrade(infos, "")).toEqual(infos);
+  });
+});
+
+describe("addressSearchOptions (recipient web-search buttons)", () => {
+  const base: Omit<AliasInfo, "alias" | "provider" | "supports_web_search"> = {
+    model: "m",
+    strength: "strong",
+    supports_embed: false,
+  };
+
+  it("offers one branded button per web-search-capable provider", () => {
+    const options = addressSearchOptions([
+      { ...base, alias: "default", provider: "ollama", supports_web_search: false },
+      { ...base, alias: "opus", provider: "anthropic", supports_web_search: true },
+      { ...base, alias: "gpt", provider: "openai", supports_web_search: true },
+    ]);
+    expect(options).toEqual([
+      { alias: "opus", label: "Search with Claude" },
+      { alias: "gpt", label: "Search with GPT" },
+    ]);
+  });
+
+  it("dedupes by brand — first alias of a provider wins", () => {
+    const options = addressSearchOptions([
+      { ...base, alias: "opus", provider: "anthropic", supports_web_search: true },
+      { ...base, alias: "haiku", provider: "anthropic", supports_web_search: true },
+    ]);
+    expect(options).toEqual([{ alias: "opus", label: "Search with Claude" }]);
+  });
+
+  it("is empty when nothing capable is configured (no button at all)", () => {
+    expect(
+      addressSearchOptions([
+        { ...base, alias: "default", provider: "ollama", supports_web_search: false },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("falls back to the alias name for unbranded providers", () => {
+    const options = addressSearchOptions([
+      { ...base, alias: "my-searcher", provider: "custom", supports_web_search: true },
+    ]);
+    expect(options).toEqual([
+      { alias: "my-searcher", label: "Search with my-searcher" },
+    ]);
+  });
+});
+
+describe("checkResultLabel (per-row connectivity check)", () => {
+  // NOTE: this import makes the whole file red until checkResultLabel exists
+  // in llm.ts — implement the lib side first and the file recovers.
+  it("renders success as OK + latency", () => {
+    expect(checkResultLabel({ ok: true, latency_ms: 812 })).toBe("OK · 812 ms");
+  });
+
+  it("renders failure as the raw error text", () => {
+    expect(checkResultLabel({ ok: false, error: "connection refused" })).toBe(
+      "connection refused",
+    );
   });
 });

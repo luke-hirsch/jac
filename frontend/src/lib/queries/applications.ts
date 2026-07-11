@@ -155,3 +155,20 @@ export function useRewriteParagraph() {
       }),
   });
 }
+
+export type FoundAddress = {
+  address: Record<string, string>;
+  sources: string[];
+};
+
+/** Web-search the employer's postal address (sync, like rewrite) — the caller
+ *  merges the fields into its letter_meta draft; nothing is persisted here. */
+export function useFindAddress() {
+  return useMutation({
+    mutationFn: ({ id, alias }: { id: number; alias: string }) =>
+      api<FoundAddress>(`${URL}${id}/find_address/`, {
+        method: "POST",
+        body: JSON.stringify({ alias }),
+      }),
+  });
+}

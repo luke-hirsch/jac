@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { applyDrop, countPdfPages, dropOrder, fitCv } from "@/lib/render/fit";
+import {
+  applyDrop,
+  capContent,
+  countPdfPages,
+  dropOrder,
+  fitCv,
+  overCapIds,
+} from "@/lib/render/fit";
 import type { CvContent } from "@/lib/cv-doc";
 
 /**
@@ -64,6 +71,38 @@ describe("applyDrop", () => {
     expect(out.jobs.map((e) => e.id)).toEqual(["job:1", "job:2"]);
     expect(out.skills).toHaveLength(5);
     expect(out.educations).toHaveLength(1);
+  });
+});
+
+describe("capContent (template entry budget)", () => {
+  it("cuts each section to its cap, keeping the ranked head", () => {
+    const out = capContent(content(), { skills: 2, jobs: 2 });
+    expect(out.skills.map((e) => e.id)).toEqual(["skill:1", "skill:2"]);
+    expect(out.jobs.map((e) => e.id)).toEqual(["job:1", "job:2"]);
+    expect(out.educations).toHaveLength(1); // uncapped section passes through
+  });
+
+  it("leaves content under the cap untouched", () => {
+    const out = capContent(content(), { skills: 99 });
+    expect(out.skills).toHaveLength(6);
+  });
+});
+
+describe("overCapIds (editor warning set)", () => {
+  it("flags entries past the cap, counting active entries only", () => {
+    const c = content();
+    c.skills[1] = { ...c.skills[1], deselected: true }; // skill:2 doesn't render
+    const over = overCapIds(c, { skills: 3 });
+    // Active order: 1,3,4,5,6 → 4th+ active are over.
+    expect(over).toEqual(new Set(["skill:5", "skill:6"]));
+  });
+
+  it("never flags deselected entries and ignores uncapped sections", () => {
+    const c = content();
+    c.skills[5] = { ...c.skills[5], deselected: true };
+    const over = overCapIds(c, { skills: 5 });
+    expect(over.size).toBe(0);
+    expect(overCapIds(content(), {}).size).toBe(0);
   });
 });
 

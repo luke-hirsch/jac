@@ -39,6 +39,26 @@ describe("parseLayoutSpec", () => {
     expect(FALLBACK_SPEC.cv.sections).toContain("educations");
     expect(FALLBACK_SPEC.cv.sections).not.toContain("education");
   });
+
+  it("falls back to the default entry budget when max_entries is missing", () => {
+    const spec = parseLayoutSpec({ cv: { pages: 2 } });
+    expect(spec.cv.max_entries).toEqual(FALLBACK_SPEC.cv.max_entries);
+    expect(FALLBACK_SPEC.cv.max_entries.skills).toBeGreaterThan(0);
+  });
+
+  it("keeps a provided entry budget, mapping legacy names and dropping junk", () => {
+    const spec = parseLayoutSpec({
+      cv: {
+        max_entries: {
+          skills: 5,
+          education: 1, // legacy singular
+          jobs: 0, // non-positive → no cap
+          projects: "lots" as unknown as number, // junk → no cap
+        },
+      },
+    });
+    expect(spec.cv.max_entries).toEqual({ skills: 5, educations: 1 });
+  });
 });
 
 describe("templatePath", () => {

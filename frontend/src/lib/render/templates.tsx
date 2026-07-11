@@ -3,6 +3,11 @@
  * automatically — the fit loop measures the result); `LetterPage` approximates DIN 5008
  * (address field at the window-envelope position, right-aligned date, bold subject).
  * The "complete" document is letter first, then CV — the usual application order.
+ *
+ * The CV is deliberately single-column: ATS parsers read top-to-bottom and choke on
+ * column interleaving, so machine readability beats the sidebar look. The spec's
+ * `sidebar` sections still exist — they render after the main flow as compact joined
+ * lines (one paragraph per section) instead of one block per entry.
  */
 import {
   Document,
@@ -36,9 +41,6 @@ function cvStyles(spec: LayoutSpec) {
       color: spec.colors.text,
     },
     name: { fontSize: base * 2, marginBottom: base, color: spec.colors.accent },
-    columns: { flexDirection: "row", gap: base * 1.5 },
-    main: { flex: 2 },
-    sidebar: { flex: 1 },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
@@ -67,6 +69,23 @@ function CvSectionView({
 }) {
   const entries = content[section] ?? [];
   if (entries.length === 0) return null;
+  if (compact) {
+    // One joined paragraph: "Python (expert · technical), German (native), …" —
+    // compact on paper, and a linear text run for machine parsers.
+    const line = entries
+      .map((e) => {
+        const p = entryParts(db, section, e);
+        const head = `${p.favourite ? "★ " : ""}${p.heading}`;
+        return p.meta ? `${head} (${p.meta})` : head;
+      })
+      .join(", ");
+    return (
+      <View>
+        <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
+        <Text style={styles.entry}>{line}</Text>
+      </View>
+    );
+  }
   return (
     <View>
       <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
@@ -79,9 +98,7 @@ function CvSectionView({
               {p.heading}
             </Text>
             {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
-            {!compact && p.body ? (
-              <Text style={styles.body}>{p.body}</Text>
-            ) : null}
+            {p.body ? <Text style={styles.body}>{p.body}</Text> : null}
           </View>
         );
       })}
@@ -104,31 +121,25 @@ export function CvPages({
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
       <Text style={styles.name}>{name}</Text>
-      <View style={styles.columns}>
-        <View style={styles.main}>
-          {spec.cv.sections.map((s) => (
-            <CvSectionView
-              key={s}
-              section={s as SectionKey}
-              content={content}
-              db={db}
-              styles={styles}
-            />
-          ))}
-        </View>
-        <View style={styles.sidebar}>
-          {spec.cv.sidebar.map((s) => (
-            <CvSectionView
-              key={s}
-              section={s as SectionKey}
-              content={content}
-              db={db}
-              styles={styles}
-              compact
-            />
-          ))}
-        </View>
-      </View>
+      {spec.cv.sections.map((s) => (
+        <CvSectionView
+          key={s}
+          section={s as SectionKey}
+          content={content}
+          db={db}
+          styles={styles}
+        />
+      ))}
+      {spec.cv.sidebar.map((s) => (
+        <CvSectionView
+          key={s}
+          section={s as SectionKey}
+          content={content}
+          db={db}
+          styles={styles}
+          compact
+        />
+      ))}
     </Page>
   );
 }

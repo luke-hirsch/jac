@@ -13,9 +13,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { useLLMConfigs } from "@/lib/queries/llm";
-import { type ApplicationRow } from "@/lib/queries/applications";
+import { aliasesForGrade, useLLMAliases } from "@/lib/queries/llm";
 import {
+  runToApplicationPatch,
+  useUpdateApplication,
+  type ApplicationRow,
+} from "@/lib/queries/applications";
+import {
+  aiShareBadge,
+  groundingBadge,
   isStalePending,
   pendingAgeSeconds,
   useCreateGeneration,
@@ -23,6 +29,14 @@ import {
   type RunState,
 } from "@/lib/queries/generations";
 import { type SocketStatus } from "@/lib/ws";
+
+function toneClass(tone: "green" | "amber" | "muted") {
+  return tone === "green"
+    ? "bg-green-100 text-green-800"
+    : tone === "amber"
+      ? "bg-amber-100 text-amber-900"
+      : "bg-muted text-muted-foreground";
+}
 
 export function GeneratePanel({
   app,
@@ -34,6 +48,8 @@ export function GeneratePanel({
   socket,
   onAbort,
   aborting,
+  applied,
+  onApplied,
 }: {
   app: ApplicationRow;
   activeRunId: number | null;
@@ -44,17 +60,27 @@ export function GeneratePanel({
   socket: SocketStatus;
   onAbort: () => void;
   aborting: boolean;
+  applied: boolean;
+  onApplied: () => void;
 }) {
-  const configs = useLLMConfigs();
+  const aliases = useLLMAliases();
   const create = useCreateGeneration();
+  const update = useUpdateApplication();
   const [grade, setGrade] = useState<Grade | "">("");
   const [alias, setAlias] = useState("default");
   const [verifyGrounding, setVerifyGrounding] = useState(false);
   const [personalParagraph, setPersonalParagraph] = useState(false);
 
-  const aliases = Array.from(
-    new Set(["default", ...(configs.data?.map((c) => c.alias) ?? [])]),
-  );
+  // Only aliases that can actually run the chosen grade are offered; a pick that
+  // a grade change invalidated is snapped to the first fitting one (adjust-state-
+  // during-render, same pattern as the content card's server re-seed).
+  const allowed = aliasesForGrade(aliases.data ?? [], grade);
+  const aliasFits = allowed.some((a) => a.alias === alias);
+  if (aliases.data && !aliasFits && allowed.length > 0) {
+    setAlias(allowed[0].alias);
+  }
+  const selected = aliases.data?.find((a) => a.alias === alias);
+
   const running =
     activeRunId != null &&
     (runState.status === "pending" || runState.status === "running");
@@ -79,6 +105,22 @@ export function GeneratePanel({
     }
   }
 
+  function onApply() {
+    if (!runState.result) return;
+    onApplied(); // arm the fresh-highlight before the refetched content lands
+    update.mutate(
+      { id: app.id, body: runToApplicationPatch(runState.result) },
+      {
+        onSuccess: () => toast.success("Run applied to the application"),
+        onError: () => toast.error("Could not apply the run"),
+      },
+    );
+  }
+
+  const result = runState.status === "done" ? runState.result : null;
+  const ai = result ? aiShareBadge(result.cover_letter.ai_share) : null;
+  const grounding = result ? groundingBadge(result.cover_letter.grounding) : null;
+
   return (
     <Card>
       <CardHeader>
@@ -96,7 +138,7 @@ export function GeneratePanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Auto (alias strength)</SelectItem>
+                <SelectItem value="auto">Auto (model strength)</SelectItem>
                 <SelectItem value="light">Light</SelectItem>
                 <SelectItem value="standard">Standard</SelectItem>
                 <SelectItem value="strong">Strong</SelectItem>
@@ -104,15 +146,23 @@ export function GeneratePanel({
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>Model alias</Label>
-            <Select value={alias} onValueChange={setAlias}>
-              <SelectTrigger className="w-44">
-                <SelectValue />
+            <Label>Model</Label>
+            <Select
+              value={aliasFits ? alias : ""}
+              onValueChange={setAlias}
+              disabled={allowed.length === 0}
+            >
+              <SelectTrigger className="w-64">
+                <SelectValue
+                  placeholder={
+                    aliases.isLoading ? "Loading models…" : "No fitting model"
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {aliases.map((a) => (
-                  <SelectItem key={a} value={a}>
-                    {a}
+                {allowed.map((a) => (
+                  <SelectItem key={a.alias} value={a.alias}>
+                    {a.alias} — {a.model} ({a.strength})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -132,7 +182,10 @@ export function GeneratePanel({
             />
             Personal paragraph
           </label>
-          <Button onClick={onGenerate} disabled={running || create.isPending}>
+          <Button
+            onClick={onGenerate}
+            disabled={running || create.isPending || !aliasFits}
+          >
             {running
               ? `Generating… ${runState.stage || "queued"} · ${ageSeconds}s`
               : "Generate"}
@@ -143,6 +196,20 @@ export function GeneratePanel({
             </Button>
           )}
         </div>
+
+        {grade && allowed.length === 0 && aliases.data && (
+          <p className="text-sm text-amber-700">
+            {grade === "light"
+              ? "No configured model can embed — the light rung needs an embedding-capable (Ollama) config."
+              : `No configured model is ${grade} enough for this grade — add one under Account → LLM.`}
+          </p>
+        )}
+        {personalParagraph && selected && !selected.supports_web_search && (
+          <p className="text-xs text-muted-foreground">
+            {selected.alias} cannot web-search — the personal paragraph will
+            come out as a stub to replace by hand.
+          </p>
+        )}
 
         {staleQueue && (
           <p className="text-sm text-amber-700">
@@ -167,6 +234,41 @@ export function GeneratePanel({
           <p className="text-sm text-destructive">
             Generation failed: {runState.error}
           </p>
+        )}
+
+        {result && ai && grounding && (
+          <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/40 p-2 text-sm">
+            <Badge variant="outline">
+              {result.meta.grade} · {result.meta.alias}
+            </Badge>
+            <span className={`rounded px-2 py-0.5 text-xs ${toneClass(ai.tone)}`}>
+              {ai.label}
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 text-xs ${toneClass(grounding.tone)}`}
+              title={result.cover_letter.grounding.claims.join("\n")}
+            >
+              {grounding.label}
+            </span>
+            {result.cover_letter.personal_paragraph_is_stub && (
+              <span className="rounded bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
+                personal paragraph is a stub
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {applied
+                ? "Result is in the application below."
+                : "Apply to load this result into the application below."}
+            </span>
+            <Button
+              size="sm"
+              className="ml-auto"
+              onClick={onApply}
+              disabled={applied || update.isPending}
+            >
+              {applied ? "Applied" : "Apply to application"}
+            </Button>
+          </div>
         )}
 
         {app.runs.length > 0 && (

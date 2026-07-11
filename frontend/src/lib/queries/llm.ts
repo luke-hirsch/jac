@@ -228,6 +228,72 @@ export function switchProvider(
   };
 }
 
+/* ---------- resolved alias capabilities (generation UI) ---------- */
+
+export type AliasStrength = "light" | "standard" | "strong";
+
+/** One row of GET /api/llm/aliases/ — the alias as the pipeline resolves it,
+ *  including the "default" settings fallback. */
+export type AliasInfo = {
+  alias: string;
+  provider: Provider | "";
+  model: string;
+  strength: AliasStrength;
+  supports_embed: boolean;
+  supports_web_search: boolean;
+};
+
+/**
+ * Aliases that can actually run a given grade — what the model picker offers:
+ *  - light rides on embeddings, so only embed-capable aliases qualify;
+ *  - standard/strong need at least that generative strength (a 1B chat model
+ *    can't do the strong rung; the strong picker drops the light server default).
+ * Blank grade = auto-detect from the alias, so anything goes.
+ */
+export function aliasesForGrade(
+  aliases: AliasInfo[],
+  grade: AliasStrength | "",
+): AliasInfo[] {
+  switch (grade) {
+    case "light":
+      return aliases.filter((a) => a.supports_embed);
+    case "standard":
+      return aliases.filter((a) => a.strength !== "light");
+    case "strong":
+      return aliases.filter((a) => a.strength === "strong");
+    default:
+      return aliases;
+  }
+}
+
+/** Brand names for the "Search with …" recipient-address buttons. Providers
+ *  without a household model name fall back to the alias itself. */
+const SEARCH_BRANDS: Partial<Record<Provider, string>> = {
+  anthropic: "Claude",
+  openai: "GPT",
+  google: "Gemini",
+};
+
+/**
+ * One button per web-search-capable provider ("Search with Claude" / "… GPT" /
+ * "… Gemini"), first alias of a provider wins — no button at all when nothing
+ * capable is configured.
+ */
+export function addressSearchOptions(
+  aliases: AliasInfo[],
+): { alias: string; label: string }[] {
+  const out: { alias: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const a of aliases) {
+    if (!a.supports_web_search) continue;
+    const brand = (a.provider && SEARCH_BRANDS[a.provider]) || a.alias;
+    if (seen.has(brand)) continue;
+    seen.add(brand);
+    out.push({ alias: a.alias, label: `Search with ${brand}` });
+  }
+  return out;
+}
+
 /* ---------- query hooks ---------- */
 
 const URL = "/api/llm/configs/";
@@ -238,6 +304,13 @@ export function useLLMConfigs() {
     queryKey: KEY,
     // The endpoint is paginated (PAGE_SIZE 100); a user's alias set fits one page.
     queryFn: async () => (await api<Page<LLMConfigRow>>(URL)).results,
+  });
+}
+
+export function useLLMAliases() {
+  return useQuery({
+    queryKey: ["llm", "aliases"],
+    queryFn: () => api<AliasInfo[]>("/api/llm/aliases/"),
   });
 }
 

@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, Eye, EyeOff, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Eye,
+  EyeOff,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,16 +47,30 @@ import {
   type LayoutRow,
 } from "@/lib/queries/jac";
 import {
+  fillBlanks,
   hasStub,
   normalizeLetterMeta,
+  senderFromProfile,
   type LetterMeta,
 } from "@/lib/letter-doc";
+import { useProfile } from "@/lib/queries/profile";
+import { overCapIds } from "@/lib/render/fit";
+import { useLayoutSpec } from "@/lib/render/spec";
 import { LetterEditor } from "./letter-editor";
+import { type Fresh } from "./use-fresh-highlight";
 
-export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
+export function ApplicationContentCard({
+  app,
+  fresh,
+}: {
+  app: ApplicationRow;
+  fresh: Fresh;
+}) {
   const update = useUpdateApplication();
   const layouts = useFullList<LayoutRow>("layouts");
+  const spec = useLayoutSpec(layouts.data?.find((l) => l.id === app.layout));
   const careerDb = useCvEntries();
+  const profile = useProfile();
   const [coverLetter, setCoverLetter] = useState(app.cover_letter);
   const [status, setStatus] = useState<ApplicationStatus>(app.status);
   const [cvDraft, setCvDraft] = useState<CvContent>(app.cv_content ?? {});
@@ -87,6 +108,19 @@ export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
     setLetterMeta(normalizeLetterMeta(app.letter_meta));
   }
 
+  // Sender defaults come from the user profile (same source the pipeline's
+  // _sender() uses) — filled into *blank* fields only, so explicit edits and
+  // run-provided values always win. Render-adjust: converges once merged.
+  if (profile.data) {
+    const merged = {
+      ...letterMeta,
+      sender: fillBlanks(letterMeta.sender, senderFromProfile(profile.data)),
+    };
+    if (JSON.stringify(merged.sender) !== JSON.stringify(letterMeta.sender)) {
+      setLetterMeta(merged);
+    }
+  }
+
   const dirty =
     coverLetter !== app.cover_letter ||
     status !== app.status ||
@@ -102,7 +136,12 @@ export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
     update.mutate(
       {
         id: app.id,
-        body: { cover_letter: coverLetter, status, cv_content: cvDraft },
+        body: {
+          cover_letter: coverLetter,
+          status,
+          cv_content: cvDraft,
+          letter_meta: letterMeta,
+        },
       },
       {
         onSuccess: () => toast.success("Application saved"),
@@ -120,6 +159,10 @@ export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
   }
 
   const hasCv = SECTION_ORDER.some((s) => (cvDraft[s] ?? []).length > 0);
+  // Entries past the layout's per-section budget (live on the draft): they render
+  // nowhere unless something else is trimmed, so the editor flags them.
+  const maxEntries = spec.data?.cv.max_entries ?? {};
+  const overCap = overCapIds(cvDraft, maxEntries);
 
   return (
     <Card>
@@ -175,6 +218,9 @@ export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
                 entries={cvDraft[section] ?? []}
                 db={careerDb.data}
                 onEdit={setCvDraft}
+                cap={maxEntries[section]}
+                overIds={overCap}
+                freshIds={fresh.ids}
               />
             ))}
           </div>
@@ -197,13 +243,19 @@ export function ApplicationContentCard({ app }: { app: ApplicationRow }) {
         )}
 
         <Separator />
-        <LetterEditor
-          applicationId={app.id}
-          meta={letterMeta}
-          onMeta={setLetterMeta}
-          body={coverLetter}
-          onBody={setCoverLetter}
-        />
+        <div
+          className={`rounded-lg transition-shadow duration-1000 ${
+            fresh.letter ? "ring-2 ring-emerald-300" : ""
+          }`}
+        >
+          <LetterEditor
+            applicationId={app.id}
+            meta={letterMeta}
+            onMeta={setLetterMeta}
+            body={coverLetter}
+            onBody={setCoverLetter}
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -214,28 +266,56 @@ function CvEditorSection({
   entries,
   db,
   onEdit,
+  cap,
+  overIds,
+  freshIds,
 }: {
   section: SectionKey;
   entries: CvEntry[];
   db: CvEntriesResponse | undefined;
   onEdit: (fn: (c: CvContent) => CvContent) => void;
+  cap: number | undefined;
+  overIds: Set<string>;
+  freshIds: Set<string>;
 }) {
   const missing = missingEntries(db, section, entries);
   if (entries.length === 0 && missing.length === 0) return null;
+  const active = entries.filter((e) => !e.deselected).length;
+  const over = cap != null && active > cap;
   return (
     <div>
-      <h3 className="text-sm font-semibold">{SECTION_TITLES[section]}</h3>
+      <h3 className="text-sm font-semibold">
+        {SECTION_TITLES[section]}
+        {cap != null && entries.length > 0 && (
+          <span
+            className={`ml-2 text-xs font-normal ${
+              over ? "text-amber-600" : "text-muted-foreground"
+            }`}
+          >
+            {active}/{cap} in the layout
+          </span>
+        )}
+      </h3>
       <ul className="space-y-1">
         {entries.map((e, i) => {
           const row = db ? joinEntry(db, section, e) : null;
           const gone = db != null && row == null; // deleted from the career DB
+          const isOver = overIds.has(e.id);
+          const isFresh = freshIds.has(e.id);
           return (
             <li
               key={e.id}
-              className={`flex items-center gap-1 text-sm ${
+              className={`flex items-center gap-1 rounded px-1 text-sm transition-colors duration-1000 ${
                 e.deselected ? "opacity-50" : ""
-              }`}
+              } ${isFresh ? "bg-emerald-100 dark:bg-emerald-900/40" : isOver ? "bg-amber-50 dark:bg-amber-900/20" : ""}`}
             >
+              {isOver && (
+                <span
+                  title={`Beyond the layout's ${SECTION_TITLES[section].toLowerCase()} budget (${cap}) — it won't make the rendered CV.`}
+                >
+                  <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                </span>
+              )}
               <span className={`flex-1 ${e.deselected ? "line-through" : ""}`}>
                 {row ? labelFor(section, row) : e.label}
                 {gone && (

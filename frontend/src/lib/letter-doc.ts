@@ -44,6 +44,43 @@ export function normalizeLetterMeta(raw: unknown): LetterMeta {
   };
 }
 
+/** Fill only the blank/missing keys of `target` — explicit values always win. */
+export function fillBlanks(
+  target: Record<string, string>,
+  defaults: Record<string, string>,
+): Record<string, string> {
+  const out = { ...target };
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!(out[key] ?? "").trim() && value) out[key] = value;
+  }
+  return out;
+}
+
+/** The sender block a user profile implies — mirrors backend CoverLetter._sender(). */
+export function senderFromProfile(p: {
+  name: string;
+  email: string;
+  phone: string;
+  street: string;
+  address_line2: string;
+  zip: string;
+  city: string;
+  country: string;
+  website: string;
+}): Record<string, string> {
+  return {
+    name: p.name,
+    email: p.email,
+    phone: p.phone,
+    street: p.street,
+    address_line2: p.address_line2,
+    zip: p.zip,
+    city: p.city,
+    country: p.country,
+    website: p.website,
+  };
+}
+
 export function letterMetaFromResult(letter: CoverLetterResult): LetterMeta {
   return {
     language: letter.language,

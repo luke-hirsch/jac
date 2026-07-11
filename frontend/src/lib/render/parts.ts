@@ -90,7 +90,7 @@ export function entryParts(
       const s = row as SkillRow;
       return {
         heading: s.name,
-        meta: `${s.proficiency} (${s.category})`,
+        meta: `${s.proficiency} · ${s.category}`,
         body: "",
         favourite,
       };

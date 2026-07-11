@@ -11,7 +11,14 @@ export type LayoutSpec = {
   page: { size: "A4" | "LETTER"; margin: [number, number] }; // [vertical, horizontal] pt
   font: { family: string; base_pt: number };
   colors: { accent: string; text: string; muted: string };
-  cv: { pages: number; sections: string[]; sidebar: string[] };
+  cv: {
+    pages: number;
+    sections: string[];
+    sidebar: string[];
+    /** Per-section entry budget the template is designed for. Render/export cut
+     *  to it; the editor warns beyond it. */
+    max_entries: Record<string, number>;
+  };
   cover_letter: { din5008: boolean };
 };
 
@@ -24,6 +31,14 @@ export const FALLBACK_SPEC: LayoutSpec = {
     pages: 1,
     sections: ["jobs", "educations", "projects", "certifications"],
     sidebar: ["skills", "languages"],
+    max_entries: {
+      jobs: 4,
+      educations: 2,
+      projects: 3,
+      certifications: 3,
+      skills: 10,
+      languages: 4,
+    },
   },
   cover_letter: { din5008: true },
 };
@@ -43,6 +58,15 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
   const f = FALLBACK_SPEC;
   const sections = (names: string[] | undefined, fallback: string[]) =>
     (names ?? fallback).map((n) => LEGACY_SECTIONS[n] ?? n);
+  const maxEntries = (raw: Record<string, number> | undefined) => {
+    if (!raw) return { ...f.cv.max_entries };
+    const out: Record<string, number> = {};
+    for (const [name, cap] of Object.entries(raw)) {
+      if (typeof cap === "number" && cap > 0)
+        out[LEGACY_SECTIONS[name] ?? name] = Math.floor(cap);
+    }
+    return out;
+  };
   return {
     version: r.version ?? f.version,
     page: {
@@ -58,6 +82,7 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
       pages: r.cv?.pages ?? f.cv.pages,
       sections: sections(r.cv?.sections, f.cv.sections),
       sidebar: sections(r.cv?.sidebar, f.cv.sidebar),
+      max_entries: maxEntries(r.cv?.max_entries),
     },
     cover_letter: {
       din5008: r.cover_letter?.din5008 ?? f.cover_letter.din5008,

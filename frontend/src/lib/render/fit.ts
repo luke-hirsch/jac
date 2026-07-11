@@ -63,6 +63,46 @@ export function applyDrop(content: CvContent, ids: string[]): CvContent {
 }
 
 /**
+ * Cut each section to the template's entry budget (LayoutSpec.cv.max_entries) — the
+ * hard editorial cap applied *before* the page-budget fit. Order is rank, so the cap
+ * keeps the top of each section. Sections without a cap pass through untouched.
+ */
+export function capContent(
+  content: CvContent,
+  maxEntries: Record<string, number>,
+): CvContent {
+  const out: CvContent = {};
+  for (const [section, list] of Object.entries(content)) {
+    const cap = maxEntries[section];
+    out[section] = cap != null ? list.slice(0, cap) : list;
+  }
+  return out;
+}
+
+/**
+ * Ids past the template budget, counting only active (non-deselected) entries — the
+ * editor's warning set: these render nowhere unless the user trims elsewhere.
+ * Deselected entries are never flagged (they don't render at all).
+ */
+export function overCapIds(
+  content: CvContent,
+  maxEntries: Record<string, number>,
+): Set<string> {
+  const over = new Set<string>();
+  for (const [section, list] of Object.entries(content)) {
+    const cap = maxEntries[section];
+    if (cap == null) continue;
+    let active = 0;
+    for (const e of list) {
+      if (e.deselected) continue;
+      active += 1;
+      if (active > cap) over.add(e.id);
+    }
+  }
+  return over;
+}
+
+/**
  * Page count of a rendered PDF, from its object dictionaries: one "/Type /Page" per page
  * ("/Type /Pages" is the tree node — excluded). react-pdf/pdfkit writes dictionaries
  * uncompressed, so a latin1 decode of the bytes is scannable.

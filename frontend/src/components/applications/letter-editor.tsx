@@ -11,10 +11,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useRewriteParagraph } from "@/lib/queries/applications";
+import {
+  useFindAddress,
+  useRewriteParagraph,
+} from "@/lib/queries/applications";
 import { useFullList, type ResumeSnippetRow } from "@/lib/queries/jac";
+import { addressSearchOptions, useLLMAliases } from "@/lib/queries/llm";
 import {
   appendParagraph,
+  fillBlanks,
   hasStub,
   replaceRange,
   replaceStub,
@@ -72,10 +77,40 @@ export function LetterEditor({
 }) {
   const snippets = useFullList<ResumeSnippetRow>("snippets");
   const rewrite = useRewriteParagraph();
+  const aliases = useLLMAliases();
+  const findAddress = useFindAddress();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [stubDraft, setStubDraft] = useState("");
   const [snippetId, setSnippetId] = useState("");
   const [instruction, setInstruction] = useState("");
+
+  // Empty recipient + a web-search-capable model configured → offer to find the
+  // employer's address online. The result lands in the draft only (Save persists).
+  const recipientEmpty = RECIPIENT_FIELDS.every(
+    ([field]) => !(meta.recipient[field] ?? "").trim(),
+  );
+  const searchOptions = addressSearchOptions(aliases.data ?? []);
+
+  function onFindAddress(alias: string) {
+    findAddress.mutate(
+      { id: applicationId, alias },
+      {
+        onSuccess: (r) => {
+          onMeta({
+            ...meta,
+            recipient: fillBlanks(meta.recipient, r.address),
+          });
+          toast.success(
+            r.sources.length
+              ? `Address found (${r.sources[0]}) — verify before sending.`
+              : "Address found — verify before sending.",
+          );
+        },
+        onError: () =>
+          toast.error("No address found — fill the recipient in by hand."),
+      },
+    );
+  }
 
   const setField = (field: keyof LetterMeta) => (v: string) =>
     onMeta({ ...meta, [field]: v });
@@ -143,10 +178,28 @@ export function LetterEditor({
         </div>
       </div>
 
-      <details className="rounded border p-3">
+      <details className="rounded border p-3" open={recipientEmpty}>
         <summary className="cursor-pointer text-sm font-medium">
           Recipient
         </summary>
+        {recipientEmpty && searchOptions.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              No recipient yet —
+            </span>
+            {searchOptions.map((o) => (
+              <Button
+                key={o.alias}
+                size="sm"
+                variant="outline"
+                disabled={findAddress.isPending}
+                onClick={() => onFindAddress(o.alias)}
+              >
+                {findAddress.isPending ? "Searching…" : o.label}
+              </Button>
+            ))}
+          </div>
+        )}
         <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
           {RECIPIENT_FIELDS.map(([field, label]) => (
             <MetaField

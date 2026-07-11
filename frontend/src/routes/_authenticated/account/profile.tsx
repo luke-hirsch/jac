@@ -24,6 +24,11 @@ type Profile = {
   website: string;
   linkedin_url: string;
   github_url: string;
+  street: string;
+  address_line2: string;
+  zip: string;
+  city: string;
+  country: string;
   timezone: string;
   theme: "system" | "light" | "dark";
   contrast: "normal" | "high";
@@ -37,6 +42,11 @@ const schema = z.object({
   website: z.string().url().or(z.literal("")),
   linkedin_url: z.string().url().or(z.literal("")),
   github_url: z.string().url().or(z.literal("")),
+  street: z.string().max(200),
+  address_line2: z.string().max(200),
+  zip: z.string().max(20),
+  city: z.string().max(100),
+  country: z.string().max(100),
   timezone: z.string().min(1),
   theme: z.enum(["system", "light", "dark"]),
   contrast: z.enum(["normal", "high"]),
@@ -82,6 +92,11 @@ function ProfilePage() {
         website: p.website,
         linkedin_url: p.linkedin_url,
         github_url: p.github_url,
+        street: p.street,
+        address_line2: p.address_line2,
+        zip: p.zip,
+        city: p.city,
+        country: p.country,
         timezone: p.timezone,
         theme: p.theme,
         contrast: p.contrast,
@@ -154,6 +169,21 @@ function ProfileForm({
       {text("website", "Website", "url")}
       {text("linkedin_url", "LinkedIn", "url")}
       {text("github_url", "GitHub", "url")}
+      <div className="space-y-3 pt-2">
+        <div>
+          <h3 className="text-sm font-medium">Address</h3>
+          <p className="text-xs text-muted-foreground">
+            Used as the sender block on generated cover letters.
+          </p>
+        </div>
+        {text("street", "Street")}
+        {text("address_line2", "Address line 2")}
+        <div className="grid grid-cols-[1fr_2fr] gap-3">
+          {text("zip", "ZIP / Postcode")}
+          {text("city", "City")}
+        </div>
+        {text("country", "Country")}
+      </div>
       {text("timezone", "Timezone")}
       <form.Field name="theme">
         {(field) => (

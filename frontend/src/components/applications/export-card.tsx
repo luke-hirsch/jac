@@ -19,9 +19,14 @@ import {
 } from "@/components/ui/select";
 import { type ApplicationRow } from "@/lib/queries/applications";
 import { activeContent } from "@/lib/cv-doc";
-import { normalizeLetterMeta } from "@/lib/letter-doc";
+import {
+  fillBlanks,
+  normalizeLetterMeta,
+  senderFromProfile,
+} from "@/lib/letter-doc";
 import { useCvEntries, useFullList, type LayoutRow } from "@/lib/queries/jac";
-import { fitCv, type FitResult } from "@/lib/render/fit";
+import { useProfile } from "@/lib/queries/profile";
+import { capContent, fitCv, type FitResult } from "@/lib/render/fit";
 import { isFavouriteLookup } from "@/lib/render/parts";
 import { useLayoutSpec } from "@/lib/render/spec";
 import {
@@ -53,6 +58,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   const layout = layouts.data?.find((l) => l.id === app.layout);
   const spec = useLayoutSpec(layout);
   const careerDb = useCvEntries();
+  const profile = useProfile();
   const [scope, setScope] = useState<ExportScope>("complete");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{
@@ -60,7 +66,12 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     info: BuiltPdf;
   } | null>(null);
 
-  const meta = normalizeLetterMeta(app.letter_meta);
+  // Blank sender fields fall back to the user profile (same rule as the editor),
+  // so an export never goes out with an empty sender block.
+  const stored = normalizeLetterMeta(app.letter_meta);
+  const meta = profile.data
+    ? { ...stored, sender: fillBlanks(stored.sender, senderFromProfile(profile.data)) }
+    : stored;
   const name = meta.sender.name || "CV";
   const stem = `application-${app.id}-${scope}`;
 
@@ -68,7 +79,11 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     if (!spec.data) throw new Error("layout spec not loaded");
     const s = spec.data;
     const db = careerDb.data;
-    const active = activeContent(app.cv_content ?? {});
+    // Template entry budget first (hard editorial cap), page fit second.
+    const active = capContent(
+      activeContent(app.cv_content ?? {}),
+      s.cv.max_entries,
+    );
 
     const fit =
       scope === "letter"
@@ -139,7 +154,10 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   function onDownloadMd() {
     if (blockedBy("md")) return;
     const db = careerDb.data;
-    const active = activeContent(app.cv_content ?? {});
+    // Same template budget as the PDF (md is a sendable artefact); json stays a full dump.
+    const active = spec.data
+      ? capContent(activeContent(app.cv_content ?? {}), spec.data.cv.max_entries)
+      : activeContent(app.cv_content ?? {});
     const cvMd = cvToMarkdown(name, active, db);
     const letterMd = letterToMarkdown(meta, app.cover_letter);
     const md =
