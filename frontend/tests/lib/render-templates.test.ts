@@ -1,0 +1,112 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import { renderToBuffer } from "@react-pdf/renderer";
+import type { CvContent } from "@/lib/cv-doc";
+import type { CvEntriesResponse } from "@/lib/queries/jac";
+import { FALLBACK_SPEC, type LayoutSpec } from "@/lib/render/spec";
+import { CvDocument, cvStyles } from "@/lib/render/templates";
+import { flat, pdfTextRuns } from "./_pdf-text";
+
+/**
+ * `[frontend]-cv-density`: the Compact-9pt decision, pinned in the one artifact that
+ * renders it — cvStyles — plus the header order swap (name → bio → contact) verified on
+ * a real render. Numbers are multipliers of base_pt so custom layouts scale with their
+ * own base.
+ */
+
+const spec9: LayoutSpec = {
+  ...FALLBACK_SPEC,
+  font: { ...FALLBACK_SPEC.font, base_pt: 9 },
+};
+
+describe("cvStyles density (Compact — 9pt)", () => {
+  const s = cvStyles(spec9);
+
+  it("entries sit 3pt apart within a section (was 6pt at base 10)", () => {
+    expect(s.entry.marginBottom).toBeCloseTo(3, 1);
+  });
+
+  it("meta line (dates · skills-in-a-job) reads at ~7.5pt", () => {
+    expect(s.meta.fontSize).toBeCloseTo(7.5, 1);
+  });
+
+  it("sidebar joined lines get their own compact style at ~7.5pt", () => {
+    expect(s.compact.fontSize).toBeCloseTo(7.5, 1);
+    expect(s.compact.marginBottom).toBeCloseTo(3, 1);
+  });
+
+  it("inter-section whitespace is preserved: bigger marginTop offsets the tighter entries", () => {
+    // old gap ≈ entry 6 + marginTop 10 = 16pt; new ≈ 3 + 12.6 = 15.6pt.
+    expect(s.sectionTitle.marginTop).toBeCloseTo(12.6, 1);
+  });
+
+  it("the name hugs the bio: 0.4 × base, not a full line (density Results follow-up)", () => {
+    // A full 9pt below the 18pt name made the header feel disconnected from the bio.
+    expect(s.name.marginBottom).toBeCloseTo(3.6, 1);
+  });
+
+  it("scales with the spec's base_pt instead of hardcoding points", () => {
+    const s11 = cvStyles({
+      ...FALLBACK_SPEC,
+      font: { ...FALLBACK_SPEC.font, base_pt: 11 },
+    });
+    expect(s11.meta.fontSize).toBeGreaterThan(s.meta.fontSize);
+    expect(s11.entry.marginBottom).toBeCloseTo(11 / 3, 1);
+  });
+});
+
+describe("FALLBACK_SPEC mirrors the compact default layout", () => {
+  it("base 9pt with the bumped sidebar budgets", () => {
+    expect(FALLBACK_SPEC.font.base_pt).toBe(9);
+    expect(FALLBACK_SPEC.cv.max_entries.skills).toBe(14);
+    expect(FALLBACK_SPEC.cv.max_entries.languages).toBe(6);
+  });
+});
+
+describe("CV header order", () => {
+  const db = {
+    skills: [],
+    jobs: [
+      {
+        id: 12,
+        title: "Senior Dev",
+        company: "ACME",
+        started: "2021-01-01",
+        ended: null,
+        skills: [],
+        description: "Built the pipeline.",
+        favourite: false,
+      },
+    ],
+    educations: [],
+    certifications: [],
+    projects: [],
+    languages: [],
+  } as unknown as CvEntriesResponse;
+  const content: CvContent = {
+    jobs: [{ id: "job:12", label: "Senior Dev at ACME", relevance_score: null }],
+  };
+
+  let text: string;
+  beforeAll(async () => {
+    const buf = await renderToBuffer(
+      CvDocument({
+        spec: spec9,
+        name: "Ada Lovelace",
+        content,
+        db,
+        contact: "ada@example.com · +49 123",
+        summary: "Bio: I turn coffee into software.",
+      } as Parameters<typeof CvDocument>[0]),
+    );
+    text = flat(pdfTextRuns(buf));
+  }, 30_000);
+
+  it("renders name, then bio, then contact (bio/contact swapped)", () => {
+    const name = text.indexOf(flat("Ada Lovelace"));
+    const bio = text.indexOf(flat("Bio: I turn coffee into software."));
+    const contact = text.indexOf(flat("ada@example.com"));
+    expect(name).toBeGreaterThanOrEqual(0);
+    expect(bio).toBeGreaterThan(name);
+    expect(contact).toBeGreaterThan(bio);
+  });
+});

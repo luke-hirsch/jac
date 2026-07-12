@@ -25,7 +25,8 @@ export type LayoutSpec = {
 export const FALLBACK_SPEC: LayoutSpec = {
   version: 1,
   page: { size: "A4", margin: [56, 48] },
-  font: { family: "Helvetica", base_pt: 10 },
+  // Compact-9pt density; the smaller sidebar font buys bigger skill/language budgets.
+  font: { family: "Helvetica", base_pt: 9 },
   colors: { accent: "#1a5fb4", text: "#1c1c1c", muted: "#6b6b6b" },
   cv: {
     pages: 1,
@@ -36,8 +37,8 @@ export const FALLBACK_SPEC: LayoutSpec = {
       educations: 2,
       projects: 3,
       certifications: 3,
-      skills: 10,
-      languages: 4,
+      skills: 14,
+      languages: 6,
     },
   },
   cover_letter: { din5008: true },

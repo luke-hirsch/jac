@@ -3,6 +3,7 @@ import {
   toPayload,
   aiShareBadge,
   groundingBadge,
+  qualityBadge,
   isStalePending,
   pendingAgeSeconds,
   runReducer,
@@ -68,6 +69,48 @@ describe("groundingBadge", () => {
   it("amber with a pluralised count", () => {
     expect(groundingBadge({ count: 1, claims: ["a"] }).label).toBe("1 claim");
     expect(groundingBadge({ count: 3, claims: ["a", "b", "c"] }).label).toBe("3 claims");
+  });
+  it("marks a repaired-clean strong letter", () => {
+    const b = groundingBadge({ count: 0, claims: [], repaired: true });
+    expect(b.tone).toBe("green");
+    expect(b.label).toBe("grounded · repaired");
+  });
+  it("marks surviving claims after a repair pass", () => {
+    const b = groundingBadge({ count: 2, claims: ["a", "b"], repaired: true });
+    expect(b.tone).toBe("amber");
+    expect(b.label).toBe("2 claims · repaired");
+  });
+  it("a failed repair attempt adds no suffix", () => {
+    // repaired=false means the rewrite never replaced the body — same badge as before.
+    expect(
+      groundingBadge({ count: 1, claims: ["a"], repaired: false }).label,
+    ).toBe("1 claim");
+  });
+});
+
+describe("qualityBadge", () => {
+  // The critique is advisory (letter-quality phase): when the critic did not run
+  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
+  it("hidden when the critic did not run", () => {
+    expect(qualityBadge(undefined)).toBeNull();
+    expect(qualityBadge({ count: null, claims: [] })).toBeNull();
+  });
+  it("green when the prose came back clean", () => {
+    expect(qualityBadge({ count: 0, claims: [] })).toEqual({
+      tone: "green",
+      label: "quality ok",
+    });
+  });
+  it("amber with a pluralised count and a repair suffix", () => {
+    expect(qualityBadge({ count: 1, claims: ["a"] })?.label).toBe("1 issue");
+    expect(
+      qualityBadge({ count: 2, claims: ["a", "b"], repaired: true })?.label,
+    ).toBe("2 issues · repaired");
+  });
+  it("a failed repair adds no suffix", () => {
+    expect(
+      qualityBadge({ count: 1, claims: ["a"], repaired: false })?.label,
+    ).toBe("1 issue");
   });
 });
 

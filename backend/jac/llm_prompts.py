@@ -83,6 +83,16 @@ class Embed:
         return d / (na * nb) if na and nb else 0.0
 
 
+class SnippetEmbed(Embed):
+    """Embed rung for cover-letter snippet selection: identical mechanics to the CV
+    Embed, retrieval instruction retargeted at ResumeSnippets. Entries are
+    `{"id": "<kind>:<pk>", "text": <content>}` dicts."""
+
+    _EMBED_INTSTRUCT = (
+        "Given a job posting, retrieve the resume snippets most relevant to it."
+    )
+
+
 class Conversational:
     """`strong` rung: a conversational LLM selects the CV holistically. It returns an
     ORDERED list of chosen entry ids (priority order, best first) each with a short `why`,
@@ -518,17 +528,22 @@ class AddressSearch(AddressExtract):
 
 
 class CoverLetterWriter:
-    """Weave selected `ResumeSnippet`s into cover-letter body prose with the chat model.
+    """Turn the embedding-selected `ResumeSnippet`s into cover-letter body prose.
 
-    Snippet content is authoritative: the model stitches and smooths, it does not invent facts.
-    The job posting is deliberately NOT given to the writer — it tailored the *selection* upstream,
-    and feeding its wish-list here is the main way a weak model fabricates claims about the
-    candidate. The writer sees only the chosen snippets plus the role title (for tone/addressing).
+    Snippet content is the only permitted source of facts about the candidate, at every
+    grade. What varies is the writer's licence:
+      - light: glue — join the snippets, minimal connective tissue (all a 1B model can do);
+      - standard: polish — rework the snippets into good prose, claims preserved;
+      - strong: compose — write an original letter; UNIQUELY, it sees the job posting
+        (`posting_text`) to tailor emphasis/tone/ordering. The posting is the classic
+        fabrication vector, which is why below strong it is never included, and why the
+        caller runs a mandatory grounding audit (+ one repair pass) on strong output.
 
-    `grade` tunes only how much rewriting is allowed (light = glue; standard = smooth transitions;
-    strong = polished, reordered for impact) — never the content. Output is free prose (the body),
-    the one place structured line-format I/O does not apply. Any failure -> '' so the caller falls
-    back to the raw stitched snippets.
+    `unsupported_claims` is the repair-pass channel: the audit's findings are fed back so
+    the rewrite removes or replaces them.
+
+    Output is free prose (the body), the one place structured line-format I/O does not
+    apply. Any failure -> '' so the caller falls back to the raw stitched snippets.
     """
 
     _GRADE_CLAUSE = {
@@ -537,14 +552,17 @@ class CoverLetterWriter:
             "minimal connective phrases so it reads as one piece. Do not rewrite or embellish."
         ),
         "standard": (
-            "Weave the snippets into a smooth, cohesive letter body. You may lightly rephrase "
-            "for flow and transitions, but preserve every concrete claim and the candidate's "
-            "voice. Do not invent facts the snippets do not state."
+            "Rework the snippets into a polished, cohesive letter body: reorder for flow, "
+            "tighten wording, cut redundancy, and write real transitions. Preserve every "
+            "concrete claim and the candidate's voice. Do not invent facts the snippets do "
+            "not state."
         ),
         "strong": (
-            "Compose a polished, persuasive letter body from the snippets, ordered for impact "
-            "for THIS role. Improve prose and transitions freely, but every factual claim must "
-            "come from the snippets — invent nothing."
+            "Compose an original, persuasive letter body tailored to THIS job posting. Use the "
+            "posting only to choose emphasis, ordering, and tone — the posting is NEVER a "
+            "source of facts about the candidate. Every factual claim (skills, employers, "
+            "titles, numbers, dates, achievements) must come from the snippets — invent "
+            "nothing."
         ),
     }
     _COMMON = (
@@ -564,6 +582,8 @@ class CoverLetterWriter:
         grade: str = "standard",
         alias: str = "default",
         user=None,
+        posting_text: str = "",
+        unsupported_claims: list[str] | None = None,
     ):
         self.snippets = snippets
         self.candidate_name = candidate_name
@@ -572,6 +592,8 @@ class CoverLetterWriter:
         self.grade = grade
         self.alias = alias
         self.user = user
+        self.posting_text = posting_text
+        self.unsupported_claims = unsupported_claims or []
 
     def write(self) -> str:
         """Return the woven body prose. '' when there are no snippets or the LLM fails."""
@@ -590,11 +612,22 @@ class CoverLetterWriter:
         blocks = "\n\n".join(
             f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
         )
+        posting = ""
+        if self.grade == "strong" and self.posting_text:
+            posting = f"JOB POSTING (context only, never a source of facts):\n{self.posting_text}\n\n"
+        repair = ""
+        if self.unsupported_claims:
+            claims = "\n".join(f"- {c}" for c in self.unsupported_claims)
+            repair = (
+                "A previous draft contained these unsupported claims — remove them or "
+                f"replace them with claims the snippets actually state:\n{claims}\n\n"
+            )
         return (
             f"{clause}\n{common}\n\n"
             f"CANDIDATE: {self.candidate_name}\n"
             f"ROLE: {self.title}\n\n"
-            f"SNIPPETS (in order, use them all):\n{blocks}\n\nLETTER BODY:"
+            f"{posting}{repair}"
+            f"SNIPPETS (your only source of facts):\n{blocks}\n\nLETTER BODY:"
         )
 
 
@@ -771,6 +804,79 @@ class ParagraphGroundingCheck:
             f"RESEARCH:\n{self.company_dossier or '(none)'}\n\n"
             f"PERSONALITY:\n{self.personality_dossier or '(none)'}\n\n"
             f"PARAGRAPH:\n{self.paragraph}\n\nAUDIT:"
+        )
+
+
+class LetterChat:
+    """Ephemeral letter-refinement chat for the SPA — nothing persisted server-side.
+
+    Single-prompt rendering: every rung in this app is one-shot (`complete(prompt=…)`),
+    and the adapters have never been exercised with provider-native multi-turn messages,
+    so the transcript is rendered as USER:/ASSISTANT: lines instead. Same fabrication
+    rule as the writer: facts about the candidate come from the letter and the
+    conversation; the posting is tone/emphasis context only.
+
+    A proposed replacement for the whole letter body arrives after a line-anchored
+    'REVISED BODY:' marker (same-line content accepted; never JSON — see the
+    no-json-llm-io memory). `reply()` -> {"reply": str, "revision": str | None}; any LLM
+    failure -> both empty so the view can 502.
+    """
+
+    _INSTRUCTION = (
+        "You are helping the candidate refine the body of their job-application cover "
+        "letter over chat. NEVER invent facts about the candidate — skills, employers, "
+        "job titles, numbers, dates, and achievements must come from the letter or the "
+        "conversation. The job posting is context only, for tone and emphasis — never a "
+        "source of facts about the candidate. Answer the last USER message concisely, "
+        "in {language}. If — and only if — you are proposing a complete replacement for "
+        "the letter body, end your reply with a line that is exactly 'REVISED BODY:' "
+        "followed by the full new body."
+    )
+    # The view 400s above these — a chat turn is a conversation, not a document dump.
+    _MAX_TRANSCRIPT_CHARS = 6000
+    _MAX_BODY_CHARS = 8000
+    _REVISION_RE = re.compile(r"^[ \t]*REVISED BODY:[ \t]*\n?", re.MULTILINE)
+
+    def __init__(
+        self,
+        body: str,
+        transcript: list[dict],
+        *,
+        posting_text: str = "",
+        language: str = "en",
+        alias: str = "default",
+        user=None,
+    ):
+        self.body = body
+        self.transcript = transcript
+        self.posting_text = posting_text
+        self.language = language
+        self.alias = alias
+        self.user = user
+
+    def reply(self) -> dict:
+        try:
+            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+        except Exception:
+            logger.exception("LetterChat: LLM call failed")
+            return {"reply": "", "revision": None}
+        return self._parse(raw or "")
+
+    def _parse(self, raw: str) -> dict:
+        parts = self._REVISION_RE.split(raw, maxsplit=1)
+        if len(parts) == 2:
+            return {"reply": parts[0].strip(), "revision": parts[1].strip() or None}
+        return {"reply": raw.strip(), "revision": None}
+
+    def _prompt(self) -> str:
+        convo = "\n".join(
+            f"{m['role'].upper()}: {m['content']}" for m in self.transcript
+        )
+        return (
+            f"{self._INSTRUCTION.format(language=self.language)}\n\n"
+            f"JOB POSTING (context only):\n{self.posting_text}\n\n"
+            f"CURRENT LETTER BODY:\n{self.body}\n\n"
+            f"CONVERSATION:\n{convo}\n\nASSISTANT:"
         )
 
 

@@ -14,9 +14,16 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   useFindAddress,
   useRewriteParagraph,
+  type RunSummary,
 } from "@/lib/queries/applications";
 import { useFullList, type ResumeSnippetRow } from "@/lib/queries/jac";
 import { addressSearchOptions, useLLMAliases } from "@/lib/queries/llm";
+import {
+  chatAliases,
+  preferredRefineAlias,
+  seedDiscussion,
+  type ChatMessage,
+} from "@/lib/letter-chat";
 import {
   appendParagraph,
   fillBlanks,
@@ -25,6 +32,8 @@ import {
   replaceStub,
   type LetterMeta,
 } from "@/lib/letter-doc";
+import { RefineChat } from "./refine-chat";
+import { caretOffset, RewritePopover } from "./rewrite-popover";
 
 function MetaField({
   label,
@@ -68,12 +77,14 @@ export function LetterEditor({
   onMeta,
   body,
   onBody,
+  runs,
 }: {
   applicationId: number;
   meta: LetterMeta;
   onMeta: (m: LetterMeta) => void;
   body: string;
   onBody: (b: string) => void;
+  runs: RunSummary[];
 }) {
   const snippets = useFullList<ResumeSnippetRow>("snippets");
   const rewrite = useRewriteParagraph();
@@ -82,7 +93,41 @@ export function LetterEditor({
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [stubDraft, setStubDraft] = useState("");
   const [snippetId, setSnippetId] = useState("");
-  const [instruction, setInstruction] = useState("");
+
+  // Selection popover (Apple-Pages-style writing tools): tracked from the textarea's
+  // own selection events; the range is state, not read at click time, so popover
+  // clicks (which blur the textarea) still operate on the highlighted passage.
+  const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
+  const [anchor, setAnchor] = useState<{
+    top: number;
+    left: number;
+    flip: boolean;
+  } | null>(null);
+  const [pickedAlias, setPickedAlias] = useState<string | null>(null);
+  const [chatSeed, setChatSeed] = useState<ChatMessage | null>(null);
+
+  // The rewrite model defaults to whatever wrote the letter (the latest done run) —
+  // the old bar silently used the "default" 1B alias. The user can still switch.
+  const rewriteAlias =
+    pickedAlias ??
+    preferredRefineAlias(aliases.data ?? [], runs) ??
+    "default";
+  const canDiscuss = chatAliases(aliases.data ?? []).length > 0;
+
+  function onBodySelect() {
+    const el = bodyRef.current;
+    if (!el) return;
+    const { selectionStart: start, selectionEnd: end } = el;
+    if (start === end || !el.value.slice(start, end).trim()) {
+      setSel(null);
+      return;
+    }
+    setSel({ start, end });
+    const pos = caretOffset(el, end);
+    // Selections in the lower half flip the popover above the caret — the Card's
+    // overflow-hidden would otherwise cut it off mid-panel (refine-chat Results).
+    setAnchor({ ...pos, flip: pos.top - el.offsetTop > el.clientHeight / 2 });
+  }
 
   // Empty recipient + a web-search-capable model configured → offer to find the
   // employer's address online. The result lands in the draft only (Save persists).
@@ -125,25 +170,31 @@ export function LetterEditor({
     setSnippetId("");
   }
 
-  function onRewrite() {
-    const el = bodyRef.current;
-    if (!el) return;
-    // The selection indexes into the *draft* string the textarea renders, so the splice
-    // below is exact. The selection is read at click time — mutate on the captured range.
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    if (!body.slice(start, end).trim()) {
-      toast.error("Select the passage to rewrite in the body first");
-      return;
-    }
+  function onRewrite(instruction: string) {
+    if (!sel) return;
+    const { start, end } = sel;
     rewrite.mutate(
-      { id: applicationId, text: body.slice(start, end), instruction },
       {
-        onSuccess: (r) => onBody(replaceRange(body, start, end, r.text)),
+        id: applicationId,
+        text: body.slice(start, end),
+        instruction,
+        alias: rewriteAlias,
+      },
+      {
+        onSuccess: (r) => {
+          onBody(replaceRange(body, start, end, r.text));
+          setSel(null);
+        },
         onError: () =>
           toast.error("Rewrite failed — is the model server running?"),
       },
     );
+  }
+
+  function onDiscuss() {
+    if (!sel) return;
+    setChatSeed(seedDiscussion(body.slice(sel.start, sel.end)));
+    setSel(null);
   }
 
   return (
@@ -226,36 +277,37 @@ export function LetterEditor({
         </div>
       </details>
 
-      <div className="space-y-1">
-        <Label>Cover letter body</Label>
+      <div className="relative space-y-1">
+        <Label>
+          Cover letter body
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            select text for AI rewrite styles
+          </span>
+        </Label>
         <Textarea
           ref={bodyRef}
           rows={12}
           value={body}
           onChange={(e) => onBody(e.target.value)}
+          onSelect={onBodySelect}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setSel(null);
+          }}
           placeholder="The applied run's letter body lands here — or write your own."
         />
-      </div>
-
-      <div className="flex items-end gap-2">
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs">
-            AI rewrite (select text in the body first)
-          </Label>
-          <Input
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder="Optional instruction — e.g. shorter, more formal…"
+        {sel && anchor && (
+          <RewritePopover
+            anchor={anchor}
+            aliases={aliases.data ?? []}
+            alias={rewriteAlias}
+            onAlias={setPickedAlias}
+            pending={rewrite.isPending}
+            canDiscuss={canDiscuss}
+            onRewrite={onRewrite}
+            onDiscuss={onDiscuss}
+            onClose={() => setSel(null)}
           />
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onRewrite}
-          disabled={rewrite.isPending}
-        >
-          {rewrite.isPending ? "Rewriting…" : "Rewrite selection"}
-        </Button>
+        )}
       </div>
 
       {hasStub(body) && (
@@ -317,6 +369,15 @@ export function LetterEditor({
           Append
         </Button>
       </div>
+
+      <RefineChat
+        applicationId={applicationId}
+        body={body}
+        onBody={onBody}
+        runs={runs}
+        seed={chatSeed}
+        onSeedConsumed={() => setChatSeed(null)}
+      />
     </div>
   );
 }

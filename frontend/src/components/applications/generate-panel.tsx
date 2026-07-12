@@ -250,6 +250,14 @@ export function GeneratePanel({
             >
               {grounding.label}
             </span>
+            {result.cover_letter.snippet_ranking && (
+              <span
+                className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                title="How the letter's snippets were picked: embedding = ranked against the posting; structural = no embedder was reachable, career-DB links decided."
+              >
+                snippets: {result.cover_letter.snippet_ranking}
+              </span>
+            )}
             {result.cover_letter.personal_paragraph_is_stub && (
               <span className="rounded bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
                 personal paragraph is a stub

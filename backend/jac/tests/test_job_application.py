@@ -349,6 +349,99 @@ class RewriteEndpointTests(APITestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class ChatEndpointTests(APITestCase):
+    """POST /api/jac/applications/<pk>/chat/ — the ephemeral letter-refinement chat.
+    Client sends its draft body + transcript; nothing is persisted. Standard+ aliases
+    only (the UI filters; get_alias_strength is the backstop). The LLM is patched at
+    jac.llm_prompts.complete; the strength probe at jac.views.get_alias_strength."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="chat_user", password="pass")
+        cls.other = User.objects.create_user(username="chat_other", password="pass")
+        cls.app = _application(cls.user, posting_text="We need a dev.")
+
+    def _post(self, body=None):
+        payload = {
+            "alias": "writer",
+            "body": "I build things.",
+            "messages": [{"role": "user", "content": "Make it warmer."}],
+        }
+        payload.update(body or {})
+        return self.client.post(
+            f"/api/jac/applications/{self.app.pk}/chat/", payload, format="json"
+        )
+
+    def _capable(self):
+        return patch("jac.views.get_alias_strength", return_value="standard")
+
+    def test_reply_only(self):
+        self.client.force_login(self.user)
+        with self._capable(), patch(
+            "jac.llm_prompts.complete", return_value="Open with the impact."
+        ):
+            r = self._post()
+        self.assertEqual(r.status_code, 200, getattr(r, "data", r.content))
+        self.assertEqual(r.data, {"reply": "Open with the impact.", "revision": None})
+
+    def test_revision_extracted(self):
+        self.client.force_login(self.user)
+        raw = "Tighter version below.\nREVISED BODY:\nI ship things."
+        with self._capable(), patch("jac.llm_prompts.complete", return_value=raw):
+            r = self._post()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["revision"], "I ship things.")
+
+    def test_empty_messages_is_400(self):
+        self.client.force_login(self.user)
+        with self._capable():
+            r = self._post({"messages": []})
+        self.assertEqual(r.status_code, 400)
+
+    def test_last_message_must_be_user(self):
+        self.client.force_login(self.user)
+        with self._capable():
+            r = self._post(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello"},
+                    ]
+                }
+            )
+        self.assertEqual(r.status_code, 400)
+
+    def test_light_alias_is_400(self):
+        self.client.force_login(self.user)
+        with patch("jac.views.get_alias_strength", return_value="light"), patch(
+            "jac.llm_prompts.complete"
+        ) as mock_complete:
+            r = self._post()
+        self.assertEqual(r.status_code, 400)
+        mock_complete.assert_not_called()
+
+    def test_overlong_transcript_is_400_without_llm_call(self):
+        self.client.force_login(self.user)
+        with self._capable(), patch("jac.llm_prompts.complete") as mock_complete:
+            r = self._post(
+                {"messages": [{"role": "user", "content": "x" * 7000}]}
+            )
+        self.assertEqual(r.status_code, 400)
+        mock_complete.assert_not_called()
+
+    def test_empty_model_reply_is_502(self):
+        self.client.force_login(self.user)
+        with self._capable(), patch("jac.llm_prompts.complete", return_value=""):
+            r = self._post()
+        self.assertEqual(r.status_code, 502)
+
+    def test_foreign_application_is_404(self):
+        self.client.force_login(self.other)
+        with self._capable(), patch("jac.llm_prompts.complete", return_value="x"):
+            r = self._post()
+        self.assertEqual(r.status_code, 404)
+
+
 class FindAddressEndpointTests(APITestCase):
     """POST /api/jac/applications/<pk>/find_address/ — web-search the employer's postal
     address for the recipient block. Capability-gated (400 for a non-web-search alias),

@@ -30,9 +30,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from llm_connector import can_web_search
+from llm_connector.conf import get_alias_strength
 
 from jac.cv import CV
-from jac.llm_prompts import AddressSearch, ParagraphRewrite
+from jac.llm_prompts import AddressSearch, LetterChat, ParagraphRewrite
 from jac.models import (
     ApplicationLayout,
     Certification,
@@ -404,6 +405,83 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response({"text": rewritten})
+
+    @extend_schema(
+        request=inline_serializer(
+            "LetterChatRequest",
+            {
+                "alias": serializers.CharField(required=False),
+                "body": serializers.CharField(required=False, allow_blank=True),
+                "messages": serializers.ListField(child=serializers.DictField()),
+            },
+        ),
+        responses=OpenApiResponse(description="{'reply': str, 'revision': str | None}"),
+    )
+    @action(detail=True, methods=["post"])
+    def chat(self, request, pk=None):
+        """Ephemeral letter-refinement chat. The client sends its current draft body plus
+        the transcript so far; only the model's reply (and an optional proposed revision)
+        travels back — nothing is persisted. Standard+ aliases only: the UI filters, the
+        strength probe here is the backstop. Sync like `rewrite` — one completion per
+        turn."""
+        application = self.get_object()
+        body = request.data.get("body") or ""
+        messages = request.data.get("messages") or []
+        alias = (request.data.get("alias") or "default").strip() or "default"
+        problem = self._chat_problem(body, messages)
+        if problem:
+            return Response(problem, status=status.HTTP_400_BAD_REQUEST)
+        if get_alias_strength(alias, user=request.user) == "light":
+            return Response(
+                {
+                    "alias": [
+                        "This model is too small to chat usefully — pick a "
+                        "standard or strong one."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        out = LetterChat(
+            body,
+            messages,
+            posting_text=application.posting.posting_text,
+            language=application.posting.language or "en",
+            alias=alias,
+            user=request.user,
+        ).reply()
+        if not out["reply"] and not out["revision"]:
+            return Response(
+                {"detail": "The language model returned nothing — try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(out)
+
+    @staticmethod
+    def _chat_problem(body, messages) -> dict | None:
+        """First 400-worthy problem with a chat request, or None. Shape-checks the
+        transcript (roles, non-empty content, user speaks last) and the size caps —
+        all before any LLM cost."""
+        if not isinstance(messages, list) or not messages:
+            return {"messages": ["At least one message is required."]}
+        for m in messages:
+            if (
+                not isinstance(m, dict)
+                or m.get("role") not in ("user", "assistant")
+                or not isinstance(m.get("content"), str)
+                or not m["content"].strip()
+            ):
+                return {
+                    "messages": [
+                        "Each message needs a user/assistant role and text content."
+                    ]
+                }
+        if messages[-1]["role"] != "user":
+            return {"messages": ["The last message must be the user's."]}
+        if sum(len(m["content"]) for m in messages) > LetterChat._MAX_TRANSCRIPT_CHARS:
+            return {"messages": ["Transcript too long — start a fresh chat."]}
+        if len(body) > LetterChat._MAX_BODY_CHARS:
+            return {"body": ["Letter body too long."]}
+        return None
 
     @extend_schema(
         request=inline_serializer(

@@ -7,6 +7,7 @@ import {
   letterMetaFromResult,
   type LetterMeta,
 } from "@/lib/letter-doc";
+import type { ChatPayload } from "@/lib/letter-chat";
 
 export type ApplicationStatus =
   | "draft"
@@ -144,14 +145,34 @@ export function useRewriteParagraph() {
       id,
       text,
       instruction,
+      alias,
     }: {
       id: number;
       text: string;
       instruction?: string;
+      alias?: string;
     }) =>
       api<{ text: string }>(`${URL}${id}/rewrite/`, {
         method: "POST",
-        body: JSON.stringify({ text, instruction: instruction ?? "" }),
+        body: JSON.stringify({
+          text,
+          instruction: instruction ?? "",
+          alias: alias ?? "default",
+        }),
+      }),
+  });
+}
+
+export type ChatReply = { reply: string; revision: string | null };
+
+/** One turn of the ephemeral letter-refinement chat (sync, like rewrite) — the client
+ *  holds the transcript; nothing is persisted server-side. */
+export function useLetterChat() {
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: ChatPayload }) =>
+      api<ChatReply>(`${URL}${id}/chat/`, {
+        method: "POST",
+        body: JSON.stringify(payload),
       }),
   });
 }

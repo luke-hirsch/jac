@@ -183,6 +183,18 @@ class GradeCohesionTests(TestCase):
         self.assertEqual(normalize_grade("standard"), "standard")
 
 
+class GenerationRunDefaultsTests(TestCase):
+    """`[backend]-letter-pipeline-v2`: the letter carries the best THREE body snippets by
+    default — embedding-ranked selection replaced 'use everything vaguely related'."""
+
+    def test_max_body_snippets_defaults_to_three(self):
+        from jac.models import GenerationRun
+
+        self.assertEqual(
+            GenerationRun._meta.get_field("max_body_snippets").default, 3
+        )
+
+
 class SerializerLoggerTests(TestCase):
     """`[backend]-correctness-bugs`: the serializers logger is module-scoped, not the root logger."""
 

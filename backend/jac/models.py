@@ -573,7 +573,8 @@ class GenerationRun(models.Model):
     verifier_alias = models.CharField(max_length=100, blank=True)
     personal_paragraph = models.BooleanField(default=True)
     research_alias = models.CharField(max_length=100, blank=True)
-    max_body_snippets = models.PositiveSmallIntegerField(default=5)
+    # "The best three", embedding-ranked — not everything vaguely related (pipeline v2).
+    max_body_snippets = models.PositiveSmallIntegerField(default=3)
     evaluation = models.TextField(blank=True)
     score = models.CharField(max_length=50, blank=True)
 

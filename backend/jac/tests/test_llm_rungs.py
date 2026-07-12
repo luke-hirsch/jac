@@ -336,6 +336,155 @@ class CoverLetterWriterPromptTests(TestCase):
         w = CoverLetterWriter([], title="X")
         self.assertEqual(w.write(), "")
 
+    # --- pipeline v2: only the strong grade composes with the posting in view -------
+
+    def _writer_with_posting(self, grade):
+        return CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            title="Backend Engineer",
+            grade=grade,
+            posting_text="We need Kubernetes wizards.",
+        )
+
+    def test_strong_prompt_includes_the_posting(self):
+        p = self._writer_with_posting("strong")._prompt()
+        self.assertIn("JOB POSTING", p)
+        self.assertIn("We need Kubernetes wizards.", p)
+
+    def test_light_and_standard_prompts_stay_posting_blind(self):
+        # The posting is the fabrication vector for weak models — passing posting_text
+        # to a non-strong writer must be a no-op, not a leak.
+        for grade in ("light", "standard"):
+            with self.subTest(grade=grade):
+                p = self._writer_with_posting(grade)._prompt()
+                self.assertNotIn("We need Kubernetes wizards.", p)
+                self.assertNotIn("JOB POSTING", p)
+
+    def test_unsupported_claims_block_renders_for_repair_pass(self):
+        w = CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            grade="strong",
+            unsupported_claims=["Led a team of 10", "Certified in GCP"],
+        )
+        p = w._prompt()
+        self.assertIn("Led a team of 10", p)
+        self.assertIn("Certified in GCP", p)
+        self.assertIn("unsupported", p.lower())
+
+    def test_no_claims_block_by_default(self):
+        p = self._writer_with_posting("strong")._prompt()
+        self.assertNotIn("unsupported", p.lower())
+
+    # --- letter quality: the critique repair channel + anti-summary clauses ---------
+
+    def test_revision_notes_block_renders_for_quality_repair(self):
+        w = CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            grade="standard",
+            revision_notes=["says the same thing twice", "reads like a summary"],
+        )
+        p = w._prompt()
+        self.assertIn("says the same thing twice", p)
+        self.assertIn("reads like a summary", p)
+        self.assertIn("reviewer", p.lower())
+
+    def test_no_revision_block_by_default(self):
+        self.assertNotIn("reviewer", self._writer()._prompt().lower())
+
+    def test_claims_and_notes_blocks_coexist(self):
+        # Strong repair feeds BOTH channels into one rewrite: the audit's unsupported
+        # claims and the critic's writing notes.
+        w = CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            grade="strong",
+            unsupported_claims=["Led a team of 10"],
+            revision_notes=["intro retold in the closing"],
+        )
+        p = w._prompt()
+        self.assertIn("Led a team of 10", p)
+        self.assertIn("intro retold in the closing", p)
+
+    def test_standard_clause_demands_a_full_letter_not_a_summary(self):
+        # The old "tighten wording, cut redundancy" clause read as "summarize" to a
+        # small model — the anti-summary wording is pinned here on purpose.
+        w = CoverLetterWriter([_StubSnippet("A", "x")], grade="standard")
+        self.assertIn("not a summary", w._prompt())
+
+    def test_strong_clause_caps_each_story_at_one_telling(self):
+        w = CoverLetterWriter([_StubSnippet("A", "x")], grade="strong")
+        self.assertIn("at most once", w._prompt())
+
+
+class LetterChatTests(TestCase):
+    """`[fullstack]-letter-refine-chat`: the ephemeral letter-refinement chat rung.
+    Single-prompt rendering (no multi-turn messages=), same fabrication rule as the
+    writer; a proposed replacement body arrives after a line-anchored 'REVISED BODY:'
+    marker — never JSON."""
+
+    def _chat(self, transcript=None):
+        from jac.llm_prompts import LetterChat
+
+        return LetterChat(
+            body="I build things.\n\nShipped Y.",
+            transcript=transcript
+            or [
+                {"role": "user", "content": "Make the intro warmer."},
+                {"role": "assistant", "content": "Happy to — any length limit?"},
+                {"role": "user", "content": "Keep it short."},
+            ],
+            posting_text="We need a dev.",
+            language="en",
+            alias="writer",
+        )
+
+    def test_prompt_carries_body_posting_and_transcript(self):
+        p = self._chat()._prompt()
+        self.assertIn("I build things.", p)
+        self.assertIn("We need a dev.", p)
+        self.assertIn("USER: Make the intro warmer.", p)
+        self.assertIn("ASSISTANT: Happy to — any length limit?", p)
+        self.assertTrue(p.rstrip().endswith("ASSISTANT:"))
+
+    def test_prompt_forbids_invention_and_scopes_posting(self):
+        p = self._chat()._prompt()
+        self.assertIn("never invent", p.lower())
+        self.assertIn("context only", p.lower())
+
+    def test_reply_without_revision(self):
+        with patch(
+            "jac.llm_prompts.complete", return_value="Try opening with the impact."
+        ):
+            out = self._chat().reply()
+        self.assertEqual(out, {"reply": "Try opening with the impact.", "revision": None})
+
+    def test_revision_split_on_own_line(self):
+        raw = "Here is a tighter version.\nREVISED BODY:\nI build things that ship."
+        with patch("jac.llm_prompts.complete", return_value=raw):
+            out = self._chat().reply()
+        self.assertEqual(out["reply"], "Here is a tighter version.")
+        self.assertEqual(out["revision"], "I build things that ship.")
+
+    def test_revision_split_same_line(self):
+        raw = "Sure.\nREVISED BODY: I build things that ship."
+        with patch("jac.llm_prompts.complete", return_value=raw):
+            out = self._chat().reply()
+        self.assertEqual(out["revision"], "I build things that ship.")
+
+    def test_marker_only_in_prose_is_not_a_revision(self):
+        # Mid-line mention must not trigger the split — the marker is line-anchored.
+        raw = "I could give you a REVISED BODY: if you want one."
+        with patch("jac.llm_prompts.complete", return_value=raw):
+            out = self._chat().reply()
+        self.assertIsNone(out["revision"])
+        self.assertEqual(out["reply"], raw)
+
+    def test_llm_failure_returns_empty(self):
+        with _muted(), patch(
+            "jac.llm_prompts.complete", side_effect=RuntimeError("down")
+        ):
+            out = self._chat().reply()
+        self.assertEqual(out, {"reply": "", "revision": None})
+
 
 class FaithfulnessCheckParseTests(TestCase):
     """_parse_unsupported / FaithfulnessCheck.critique: tolerant line parsing, honest failure
@@ -391,6 +540,59 @@ class FaithfulnessCheckParseTests(TestCase):
         ):
             self.assertEqual(
                 self._check().critique(), {"count": 1, "claims": ["Fake cert"]}
+            )
+
+
+class LetterCriticTests(TestCase):
+    """`[fullstack]-letter-quality`: the advisory prose-quality rung. Same shared
+    line-format parser as the grounding audit (`ISSUES <n>` + '- <issue>' lines),
+    same honesty rule (unreadable -> None) — but advisory: a None just skips the
+    repair pass, it is never surfaced as an "unchecked" warning."""
+
+    def _critic(self):
+        from jac.llm_prompts import LetterCritic
+
+        return LetterCritic(
+            "I shipped billing. I also shipped billing.",
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+        )
+
+    def test_prompt_carries_snippets_and_body(self):
+        p = self._critic()._prompt()
+        self.assertIn("Shipped the billing service.", p)
+        self.assertIn("I also shipped billing.", p)
+        self.assertIn("ISSUES", p)
+
+    def test_prompt_scopes_out_fact_checking(self):
+        # Faithfulness stays FaithfulnessCheck's job — the critic is told hands-off.
+        self.assertIn("fact-check", self._critic()._prompt().lower())
+
+    def test_counts_listed_issues(self):
+        raw = "ISSUES 2\n- the billing story is told twice\n- closing repeats the intro"
+        with patch("jac.llm_prompts.complete", return_value=raw):
+            out = self._critic().critique()
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(len(out["claims"]), 2)
+
+    def test_clean_verdict_is_zero(self):
+        with patch("jac.llm_prompts.complete", return_value="ISSUES 0"):
+            self.assertEqual(self._critic().critique(), {"count": 0, "claims": []})
+
+    def test_listed_lines_win_over_declared_count(self):
+        raw = "ISSUES 1\n- issue a\n- issue b"
+        with patch("jac.llm_prompts.complete", return_value=raw):
+            self.assertEqual(self._critic().critique()["count"], 2)
+
+    def test_garbage_is_none_not_zero(self):
+        with patch("jac.llm_prompts.complete", return_value="looks fine to me!"):
+            self.assertIsNone(self._critic().critique()["count"])
+
+    def test_critique_none_on_llm_error(self):
+        with _muted(), patch(
+            "jac.llm_prompts.complete", side_effect=RuntimeError("down")
+        ):
+            self.assertEqual(
+                self._critic().critique(), {"count": None, "claims": []}
             )
 
 

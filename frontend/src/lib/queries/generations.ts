@@ -4,7 +4,12 @@ import { api } from "@/lib/api";
 export type Grade = "light" | "standard" | "strong";
 export type RunStatus = "pending" | "running" | "done" | "failed";
 
-export type Grounding = { count: number | null; claims: string[] };
+export type Grounding = {
+  count: number | null;
+  claims: string[];
+  /** Strong runs only: a repair pass replaced the body (true) or failed to (false). */
+  repaired?: boolean;
+};
 
 export type CoverLetterResult = {
   language: string;
@@ -19,6 +24,8 @@ export type CoverLetterResult = {
   snippet_provenance: { native: string[]; translated: string[] };
   ai_share: number;
   grounding: Grounding;
+  /** How the snippets were picked: embedding cosine vs the structural fallback. */
+  snippet_ranking?: "embedding" | "structural";
   personal_paragraph: string;
   personal_paragraph_is_stub: boolean;
   personal_paragraph_sources: string[];
@@ -98,10 +105,13 @@ export function aiShareBadge(share: number): Badge {
 
 export function groundingBadge(g: Grounding): Badge {
   if (g.count === null) return { tone: "muted", label: "not checked" };
-  if (g.count === 0) return { tone: "green", label: "grounded" };
+  // repaired=true says a strong repair pass replaced the body — worth surfacing both
+  // when it cleaned the letter and when claims survived it.
+  const suffix = g.repaired ? " · repaired" : "";
+  if (g.count === 0) return { tone: "green", label: `grounded${suffix}` };
   return {
     tone: "amber",
-    label: `${g.count} claim${g.count === 1 ? "" : "s"}`,
+    label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
   };
 }
 

@@ -36,30 +36,49 @@ export const mm = (n: number) => n * 2.83465;
  * 1pt text at opacity 0, absolutely positioned: zero layout impact (page counts and the
  * fit loop are untouched — render-hidden-pdf.test.ts guards the invariance), but the
  * glyphs land in the content stream where text extraction reads them. Bottom-anchored so
- * geometric extractors order it after the visible content. Never `fixed` — that would
- * duplicate the payload on every page.
+ * geometric extractors order it after the visible content.
+ *
+ * MUST be `fixed` + last-page-only via the render prop: a non-fixed bottom-anchored
+ * absolute element joins react-pdf's pagination and gets a blank page of its own when
+ * the flow content ends near the page bottom (the density guide's empty-trailing-page
+ * bug — fitCv measures without ink, so the export grew a page the fit loop never saw).
+ * `fixed` opts out of pagination entirely; the pageNumber === totalPages guard keeps
+ * the payload single instead of repeating it on every page.
  */
 function HiddenInk({ text }: { text?: string }) {
   if (!text) return null;
+  // A single fixed Text, not a View: only Text's render prop is typed with
+  // totalPages (react-pdf exposes it on fixed text for "Page X of Y" use).
   return (
-    <View
+    <Text
+      fixed
       style={{
         position: "absolute",
         bottom: 6,
         left: 24,
         right: 24,
         opacity: 0,
+        fontSize: 1,
       }}
-    >
-      <Text style={{ fontSize: 1 }}>{text}</Text>
-    </View>
+      render={({ pageNumber, totalPages }) =>
+        pageNumber === totalPages ? text : null
+      }
+    />
   );
 }
 
 /* ---------- CV ---------- */
 
-function cvStyles(spec: LayoutSpec) {
+/**
+ * Compact-9pt density ([frontend]-cv-density): tight *within* a section (entry gap
+ * base/3, meta + sidebar lines at 0.833 × base ≈ 7.5pt on the 9pt default), while the
+ * inter-section whitespace stays — the bigger sectionTitle.marginTop offsets the
+ * shrunken entry gap. Everything is a multiplier of base_pt so custom layouts scale.
+ * Exported for the density tests — the numbers are a design decision, not an accident.
+ */
+export function cvStyles(spec: LayoutSpec) {
   const base = spec.font.base_pt;
+  const small = base * 0.833;
   return StyleSheet.create({
     page: {
       paddingVertical: spec.page.margin[0],
@@ -68,23 +87,32 @@ function cvStyles(spec: LayoutSpec) {
       fontSize: base,
       color: spec.colors.text,
     },
-    name: { fontSize: base * 2, marginBottom: base, color: spec.colors.accent },
+    // 0.4 × base under the name — a full line's gap made the header feel
+    // disconnected from the bio (density Results follow-up).
+    name: {
+      fontSize: base * 2,
+      marginBottom: base * 0.4,
+      color: spec.colors.accent,
+    },
     contact: {
       color: spec.colors.muted,
       fontSize: base * 0.9,
       marginBottom: base,
     },
-    summary: { marginBottom: base, lineHeight: 1.4 },
+    summary: { marginBottom: base * 0.4, lineHeight: 1.4 },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
-      marginTop: base,
+      marginTop: base * 1.4,
       marginBottom: base * 0.4,
     },
-    entry: { marginBottom: base * 0.6 },
+    entry: { marginBottom: base / 3 },
     heading: { fontFamily: `${spec.font.family}-Bold` },
-    meta: { color: spec.colors.muted, fontSize: base * 0.85 },
-    body: { marginTop: base * 0.2 },
+    meta: { color: spec.colors.muted, fontSize: small },
+    body: { marginTop: base * 0.15 },
+    // Sidebar sections as one joined line per section — smaller still, so skills and
+    // languages carry more information per line.
+    compact: { fontSize: small, marginBottom: base / 3 },
   });
 }
 
@@ -116,7 +144,7 @@ function CvSectionView({
     return (
       <View>
         <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
-        <Text style={styles.entry}>{line}</Text>
+        <Text style={styles.compact}>{line}</Text>
       </View>
     );
   }
@@ -160,9 +188,10 @@ export function CvPages({
   const styles = cvStyles(spec);
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
+      {/* Header order: name → bio → contact (Lukas's call, 2026-07-11). */}
       <Text style={styles.name}>{name}</Text>
-      {contact ? <Text style={styles.contact}>{contact}</Text> : null}
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
+      {contact ? <Text style={styles.contact}>{contact}</Text> : null}
       {spec.cv.sections.map((s) => (
         <CvSectionView
           key={s}

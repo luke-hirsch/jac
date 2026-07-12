@@ -1,10 +1,11 @@
-"""Cover-letter pipeline: pick the right ResumeSnippets for a filtered CV + posting, weave
-them into a letter body with the chat model, and assemble the sender/recipient/subject around
-that body.
+"""Cover-letter pipeline: pick the right ResumeSnippets for a posting, turn them into a
+letter body with the chat model, and assemble the sender/recipient/subject around that body.
 
-Snippet *selection* is deterministic — driven by which CV entries survived filtering — so the
-LLM only *weaves* (see CoverLetterWriter in llm_prompts.py). Grade tunes the weave's writing
-quality, not the content: snippet text stays authoritative, which is the anti-AI-slop guard.
+Pipeline v2: snippet *selection* is embedding-ranked against the posting on every grade
+(structural fallback when no embedder is reachable); the *writer's licence* scales with
+grade — light glues, standard polishes, strong composes (and uniquely sees the posting,
+compensated by an always-on grounding audit with one repair pass). Snippet text remains the
+only permitted source of facts at every grade — that is the anti-AI-slop guard.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from jac.llm_prompts import (
     FaithfulnessCheck,
     ParagraphGroundingCheck,
     PersonalParagraphWriter,
+    SnippetEmbed,
 )
 from jac.models import ResumeSnippet
 from jac.research import CompanyResearcher
@@ -53,12 +55,19 @@ def editable_body(letter: dict) -> str:
 
 
 class SnippetSelector:
-    """Pick 1 intro + 1 closing + up to `max_body` body snippets for a filtered CV.
+    """Pick 1 intro + 1 closing + up to `max_body` body snippets for a posting.
 
-    Scoring is relevance to what survived filtering: a snippet linked to a kept job/project
-    scores high; domain/skill overlap with the kept set adds to it. Body snippets are only
-    kept if they score > 0 (i.e. they actually connect to the tailored CV). Intro/closing are
-    the best-scoring of their kind, or None when the user has none.
+    Primary ranking (every grade) is embedding cosine against the posting text: the alias
+    chain `embed_alias` → `alias` → "default" is walked and the first embedder that yields
+    usable vectors wins — the server default always carries an `embed_model`, so commercial
+    writer aliases still rank via the local embedder. When no alias can embed (or there is
+    no posting text), selection degrades to the legacy structural scorer — relevance to what
+    survived CV filtering, with its > 0 keep-gate. The embed path has no gate: the ranking
+    is the gate ("the best three", not "everything vaguely related").
+
+    Native posting-language is a tiebreak only on both paths, never a gate; intro/closing
+    are the best-scoring of their kind, or None when the user has none. `select()` reports
+    which path ran under `"ranking"`.
     """
 
     _BODY_KINDS = (
@@ -68,13 +77,26 @@ class SnippetSelector:
     )
 
     def __init__(
-        self, cv, user_pk: int, max_body: int = 4, posting_language: str = "en"
+        self,
+        cv,
+        user_pk: int,
+        max_body: int = 3,
+        posting_language: str = "en",
+        *,
+        posting_text: str = "",
+        user=None,
+        alias: str = "default",
+        embed_alias: str | None = None,
     ):
         self.cv = cv
         self.user_pk = user_pk
         self.max_body = max_body
         self._ctx = self._kept_context()
         self.lang = posting_language
+        self.posting_text = posting_text
+        self.user = user
+        self.alias = alias
+        self.embed_alias = embed_alias
 
     def _kept_context(self) -> dict:
         """Gather the pks/domains/skills of the entries that survived filtering."""
@@ -104,6 +126,32 @@ class SnippetSelector:
         sc += 1 * len({sk.pk for sk in s.skills.all()} & self._ctx["skills"])
         return sc
 
+    def _sid(self, s: ResumeSnippet) -> str:
+        return f"{s.kind}:{s.pk}"
+
+    def _embed_scores(self, active: list) -> dict | None:
+        """{snippet id: cosine vs the posting} via the first embed-capable alias in the
+        chain, or None when nothing can embed. Failure walks the chain instead of raising
+        — a letter must never die because an embedder is down."""
+        if not active or not self.posting_text:
+            return None
+        entries = [{"id": self._sid(s), "text": s.content} for s in active]
+        tried: list[str] = []
+        for alias in (self.embed_alias, self.alias, "default"):
+            if not alias or alias in tried:
+                continue
+            tried.append(alias)
+            try:
+                ranked = SnippetEmbed(
+                    self.posting_text, entries, user=self.user, alias=alias
+                ).ranked_entries()
+            except Exception as exc:  # noqa: BLE001 — walk the chain on any failure
+                logger.info("snippet embedding via %r unavailable: %s", alias, exc)
+                continue
+            if ranked:
+                return {r["id"]: r["score"] for r in ranked}
+        return None
+
     def select(self) -> dict:
         active = list(
             ResumeSnippet.objects.filter(
@@ -115,21 +163,30 @@ class SnippetSelector:
         bodies = [s for s in active if s.kind in self._BODY_KINDS]
 
         # Relevance dominates; posting-language breaks ties so an already-native snippet
-        # sorts ahead of an equally-relevant translated one. The > 0 keep-gate stays on
-        # relevance alone, so the tie-break reorders but never resurrects a 0-score snippet.
-        intro = max(
-            intros, key=lambda s: (self._score(s), self._native(s)), default=None
-        )
-        closing = max(
-            closings, key=lambda s: (self._score(s), self._native(s)), default=None
-        )
-        scored = sorted(
-            bodies, key=lambda s: (self._score(s), self._native(s)), reverse=True
-        )
-        body = [s for s in scored if self._score(s) > 0][: self.max_body]
+        # sorts ahead of an equally-relevant translated one — but never resurrects or
+        # promotes an irrelevant snippet.
+        scores = self._embed_scores(active)
+        if scores is not None:
+            ranking = "embedding"
+            key = lambda s: (scores.get(self._sid(s), 0.0), self._native(s))
+            body = sorted(bodies, key=key, reverse=True)[: self.max_body]
+        else:
+            ranking = "structural"
+            key = lambda s: (self._score(s), self._native(s))
+            scored = sorted(bodies, key=key, reverse=True)
+            # The > 0 keep-gate stays on structural relevance alone.
+            body = [s for s in scored if self._score(s) > 0][: self.max_body]
+        intro = max(intros, key=key, default=None)
+        closing = max(closings, key=key, default=None)
 
         ordered = [s for s in (intro, *body, closing) if s is not None]
-        return {"intro": intro, "body": body, "closing": closing, "ordered": ordered}
+        return {
+            "intro": intro,
+            "body": body,
+            "closing": closing,
+            "ordered": ordered,
+            "ranking": ranking,
+        }
 
 
 class CoverLetter:
@@ -140,7 +197,9 @@ class CoverLetter:
     `job_posting.address`. `build()` returns a dict of letter parts plus a rendered `text`.
     """
 
-    _REWRITE_TAX = {"light": 0.05, "standard": 0.20, "strong": 0.45}
+    # How much the writer reshapes even same-language prose, by grade. Strong composes its
+    # own letter (pipeline v2), so its tax reflects free composition, not polished stitching.
+    _REWRITE_TAX = {"light": 0.05, "standard": 0.20, "strong": 0.60}
 
     def __init__(
         self,
@@ -151,11 +210,12 @@ class CoverLetter:
         address=None,
         grade: str = "standard",
         alias: str = "default",
-        max_body_snippets: int = 4,
+        max_body_snippets: int = 3,
         verify_grounding: bool = False,
         verifier_alias: str | None = None,
         personal_paragraph: bool = False,
         research_alias: str | None = None,
+        embed_alias: str | None = None,
     ):
         self.user = user if isinstance(user, User) else User.objects.get(pk=user)
         self.job_posting = job_posting
@@ -174,6 +234,7 @@ class CoverLetter:
         self.verifier_alias = verifier_alias
         self.personal_paragraph = personal_paragraph
         self.research_alias = research_alias
+        self.embed_alias = embed_alias
 
     def build(self) -> dict:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
@@ -183,6 +244,10 @@ class CoverLetter:
             self.user.pk,
             max_body=self.max_body_snippets,
             posting_language=language,
+            posting_text=self._posting_text(),
+            user=self.user,
+            alias=self.alias,
+            embed_alias=self.embed_alias,
         ).select()
 
         woven = CoverLetterWriter(
@@ -193,12 +258,22 @@ class CoverLetter:
             grade=self.grade,
             alias=self.alias,
             user=self.user,
+            posting_text=self._posting_text(),
         ).write()
         # The writer returns '' when the LLM failed OR there were no snippets to weave. Either
         # way fall back to the raw stitched snippets (no slop), and remember it for _grounding.
         weave_failed = not woven
         body = woven or "\n\n".join(s.content for s in sel["ordered"])
         body_is_ai_fallback = not sel["ordered"]
+
+        # Strong composes freely (and sees the posting), so its audit is not optional; the
+        # repair pass gets one shot at removing whatever the audit flags.
+        verify = self.verify_grounding or self.grade == "strong"
+        grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
+        if self.grade == "strong":
+            body, grounding = self._strong_repair(
+                body, sel["ordered"], grounding, language, title
+            )
 
         result = {
             "language": language,
@@ -219,7 +294,8 @@ class CoverLetter:
                     f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language != language
                 ],
             },
-            "grounding": self._grounding(body, sel["ordered"], weave_failed),
+            "grounding": grounding,
+            "snippet_ranking": sel["ranking"],
         }
 
         # Personal paragraph: a researched, company-specific paragraph with zero snippet support.
@@ -279,6 +355,9 @@ class CoverLetter:
             "email": g("email"),
             "phone": g("phone"),
         }
+
+    def _posting_text(self) -> str:
+        return getattr(self.job_posting, "posting_text", "") or ""
 
     def _subject(self, language: str, title: str) -> str:
         title = title or "the advertised position"
@@ -342,8 +421,6 @@ class CoverLetter:
         out.append(r["closing"])
         return "\n".join(out).rstrip() + "\n"
 
-    # How much the writer reshapes even same-language prose, by grade. Native words are
-
     def _ai_share(self, snippets, language, ai_fallback, personal_words=0) -> float:
         """Fraction of the body attributable to the machine, 0.0–1.0.
 
@@ -369,7 +446,7 @@ class CoverLetter:
         ai_w = trans_w + tax * native_w + personal_words
         return round(ai_w / total, 2)
 
-    def _grounding(self, body, snippets, weave_failed) -> dict:
+    def _grounding(self, body, snippets, weave_failed, verify) -> dict:
         """Audit the woven body against the snippets. {'count': int | None, 'claims': [str]}.
 
         count=None  -> not checked: audit off, no snippets to check against, or the audit LLM
@@ -378,10 +455,12 @@ class CoverLetter:
                        IS the verbatim snippet text, so by construction nothing is unsupported.
         count>0     -> that many claims in the body the snippets do not support.
 
-        Opt-in (one extra LLM call) and run under verifier_alias — a 1B writer cannot fact-check
-        itself, so point verifier_alias at a strong model.
+        `verify` is `verify_grounding` for light/standard (opt-in, one extra LLM call) and
+        forced True for strong — the grade that composes freely never ships unaudited. Runs
+        under verifier_alias: a 1B writer cannot fact-check itself, so point it at a strong
+        model.
         """
-        if not self.verify_grounding or not snippets:
+        if not verify or not snippets:
             return {"count": None, "claims": []}
         if (
             weave_failed
@@ -393,6 +472,29 @@ class CoverLetter:
             alias=self.verifier_alias or self.alias,
             user=self.user,
         ).critique()
+
+    def _strong_repair(self, body, snippets, grounding, language, title) -> tuple:
+        """One repair pass for a dirty strong audit: the unsupported claims go back to the
+        writer, the rewrite is re-audited once, survivors stay flagged. `repaired` marks
+        that a rewrite actually replaced the body — a failed rewrite keeps draft one and
+        its audit, and never loops."""
+        if not grounding.get("count") or not grounding.get("claims"):
+            return body, {**grounding, "repaired": False}
+        rewritten = CoverLetterWriter(
+            snippets,
+            candidate_name=self._candidate_name(),
+            title=title,
+            language=language,
+            grade=self.grade,
+            alias=self.alias,
+            user=self.user,
+            posting_text=self._posting_text(),
+            unsupported_claims=grounding["claims"],
+        ).write()
+        if not rewritten:
+            return body, {**grounding, "repaired": False}
+        audited = self._grounding(rewritten, snippets, weave_failed=False, verify=True)
+        return rewritten, {**audited, "repaired": True}
 
     # --- personal paragraph (company research × personality) ----------------------------
 

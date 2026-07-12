@@ -1,4 +1,3 @@
-import { inflateSync } from "node:zlib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToBuffer } from "@react-pdf/renderer";
 import type { CvContent } from "@/lib/cv-doc";
@@ -8,6 +7,7 @@ import { countPdfPages } from "@/lib/render/fit";
 import { docMetadata, hiddenPayload, HIDDEN_DELIMITER } from "@/lib/render/hidden";
 import { FALLBACK_SPEC } from "@/lib/render/spec";
 import { CvDocument } from "@/lib/render/templates";
+import { flat, infoField, pdfTextRuns } from "./_pdf-text";
 
 /**
  * The hidden layer's physical properties, on a real render (guide
@@ -100,73 +100,7 @@ const render = (extra: Record<string, unknown>) =>
     } as Parameters<typeof CvDocument>[0]),
   );
 
-/**
- * Every Flate stream inflated (raw fallback for uncompressed ones), then all string
- * literals concatenated: kerning may split one text run into many literals with
- * positioning numbers between them, so only the concatenation is comparable — and
- * word spacing may swallow blanks entirely, hence the `flat` comparisons below.
- *
- * react-pdf/pdfkit renders a kerned run as a `TJ` array of *hex* strings (`<...>`)
- * interleaved with position adjustments, not the plain `(...)` literal `Tj` uses for an
- * unkerned run — both forms show up depending on the text. WinAnsi hex bytes decode
- * 1:1 to chars via `fromCharCode`, which is exact for the ASCII this suite renders.
- */
-function pdfTextRuns(buf: Buffer): string {
-  const latin1 = buf.toString("latin1");
-  const chunks: string[] = [];
-  const re = /stream\r?\n/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(latin1))) {
-    const start = m.index + m[0].length;
-    const end = latin1.indexOf("endstream", start);
-    if (end < 0) break;
-    let data = buf.subarray(start, end);
-    while (
-      data.length &&
-      (data[data.length - 1] === 0x0a || data[data.length - 1] === 0x0d)
-    ) {
-      data = data.subarray(0, data.length - 1);
-    }
-    try {
-      chunks.push(inflateSync(data).toString("latin1"));
-    } catch {
-      chunks.push(latin1.slice(start, end)); // not Flate — take it raw
-    }
-    re.lastIndex = end;
-  }
-  const literals =
-    chunks.join("\n").match(/\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>/g) ?? [];
-  return literals
-    .map((s) => {
-      if (s[0] === "(") return s.slice(1, -1).replace(/\\(.)/g, "$1");
-      const hex = s.slice(1, -1).replace(/\s+/g, "");
-      let out = "";
-      for (let i = 0; i < hex.length; i += 2) {
-        out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
-      }
-      return out;
-    })
-    .join("");
-}
-
-/**
- * The Info dict's string values: pdfkit stores each as either an inline `(literal)`
- * right after the key, or (seen once enough metadata fields are set) an indirect
- * `/Key N 0 R` pointing at a standalone `N 0 obj (literal) endobj` — both are the info
- * dictionary, just PDF's normal indirection, so dereference rather than assume inline.
- */
-function infoField(latin1: string, key: string): string | undefined {
-  const inline = latin1.match(new RegExp(`/${key} \\(((?:\\\\.|[^\\\\)])*)\\)`));
-  if (inline) return inline[1].replace(/\\(.)/g, "$1");
-  const ref = latin1.match(new RegExp(`/${key} (\\d+) 0 R`));
-  if (!ref) return undefined;
-  const obj = latin1.match(
-    new RegExp(`\\n${ref[1]} 0 obj\\s*\\(((?:\\\\.|[^\\\\)])*)\\)\\s*endobj`),
-  );
-  return obj ? obj[1].replace(/\\(.)/g, "$1") : undefined;
-}
-
-const flat = (s: string) => s.replace(/\s+/g, "");
+// pdfTextRuns / infoField / flat live in ./_pdf-text — shared with the density tests.
 
 let plain: Buffer;
 let inked: Buffer;
@@ -198,6 +132,56 @@ describe("invisible ink in a rendered PDF", () => {
     expect(countPdfPages(inked.toString("latin1"))).toBe(pages);
     expect(countPdfPages(jumbo.toString("latin1"))).toBe(pages);
   });
+});
+
+describe("empty-trailing-page regression (cv-density Results)", () => {
+  // react-pdf gives a trailing absolute element a blank page of its own when the
+  // wrapped flow content ends near the page bottom — Lukas's "one-page layout
+  // appends one empty page". Sweep across the page-1→2 boundary (n≈20 for this
+  // fixture): the ink must never change the count, exactly at the boundary too.
+  const filler = (n: number) => {
+    const jobs = Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      title: `Role ${i + 1}`,
+      company: `Company ${i + 1}`,
+      started: "2020-01-01",
+      ended: null,
+      skills: [],
+      description:
+        "Built and maintained a mid-sized service landscape with reviews, on-call and mentoring duties across two teams.",
+      favourite: false,
+    }));
+    return {
+      fdb: { ...db, jobs } as unknown as CvEntriesResponse,
+      content: {
+        jobs: jobs.map((j) => ({
+          id: `job:${j.id}`,
+          label: `${j.title} at ${j.company}`,
+          relevance_score: 0.5,
+        })),
+      } as CvContent,
+    };
+  };
+
+  it("ink adds no page even when the flow ends near the page bottom", async () => {
+    for (let n = 16; n <= 24; n += 2) {
+      const { fdb, content } = filler(n);
+      const base = { spec: FALLBACK_SPEC, name: "Ada", content, db: fdb };
+      const plain = await renderToBuffer(
+        CvDocument(base as Parameters<typeof CvDocument>[0]),
+      );
+      const inked = await renderToBuffer(
+        CvDocument({
+          ...base,
+          hidden: "payload ".repeat(200),
+        } as Parameters<typeof CvDocument>[0]),
+      );
+      expect(
+        countPdfPages(inked.toString("latin1")),
+        `n=${n} jobs`,
+      ).toBe(countPdfPages(plain.toString("latin1")));
+    }
+  }, 60_000);
 });
 
 describe("info dictionary", () => {

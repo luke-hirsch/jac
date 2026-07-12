@@ -7,6 +7,7 @@ suite redefines these locally anymore.
 
 import logging
 from contextlib import contextmanager
+from unittest.mock import patch
 
 from jac.cv import CV
 from jac.models import JobApplication, JobPosting
@@ -71,7 +72,21 @@ def _application(user, *, posting_text="We need a dev.", title="", **kw):
 class _CoverLetterCVMixin:
     """Shared cover-letter fixture: a CV with only `self.job` kept, plus a
     JobPosting factory bound to `self.user`. Every cover-letter test class used
-    to redefine these identically."""
+    to redefine these identically.
+
+    `setUp` pins snippet selection to the structural path by making the embed
+    call unavailable — no cover-letter test silently depends on a live embedder.
+    Embedding-path tests re-patch `jac.llm_prompts.embed` inside the test body;
+    the inner patch wins and unwinds first."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch(
+            "jac.llm_prompts.embed",
+            side_effect=NotImplementedError("no embedder in tests"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _cv(self):
         return _cv_with(self.user.pk, jobs=[self.job])

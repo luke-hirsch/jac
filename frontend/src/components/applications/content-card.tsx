@@ -254,6 +254,7 @@ export function ApplicationContentCard({
             onMeta={setLetterMeta}
             body={coverLetter}
             onBody={setCoverLetter}
+            runs={app.runs}
           />
         </div>
       </CardContent>
