@@ -33,6 +33,7 @@ import { Route as AuthenticatedCvCertificationsRouteImport } from './routes/_aut
 import { Route as AuthenticatedApplicationsApplicationIdRouteImport } from './routes/_authenticated/applications/$applicationId'
 import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
 import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
+import { Route as AuthenticatedAccountPersonalityRouteImport } from './routes/_authenticated/account/personality'
 import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authenticated/account/llm'
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
 import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
@@ -164,6 +165,12 @@ const AuthenticatedAccountProfileRoute =
     path: '/profile',
     getParentRoute: () => AuthenticatedAccountRoute,
   } as any)
+const AuthenticatedAccountPersonalityRoute =
+  AuthenticatedAccountPersonalityRouteImport.update({
+    id: '/personality',
+    path: '/personality',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
 const AuthenticatedAccountLlmRoute = AuthenticatedAccountLlmRouteImport.update({
   id: '/llm',
   path: '/llm',
@@ -196,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
+  '/account/personality': typeof AuthenticatedAccountPersonalityRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
@@ -222,6 +230,7 @@ export interface FileRoutesByTo {
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
+  '/account/personality': typeof AuthenticatedAccountPersonalityRoute
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
@@ -252,6 +261,7 @@ export interface FileRoutesById {
   '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
   '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
+  '/_authenticated/account/personality': typeof AuthenticatedAccountPersonalityRoute
   '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
   '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
   '/_authenticated/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
@@ -282,6 +292,7 @@ export interface FileRouteTypes {
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
+    | '/account/personality'
     | '/account/profile'
     | '/account/security'
     | '/applications/$applicationId'
@@ -308,6 +319,7 @@ export interface FileRouteTypes {
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
+    | '/account/personality'
     | '/account/profile'
     | '/account/security'
     | '/applications/$applicationId'
@@ -337,6 +349,7 @@ export interface FileRouteTypes {
     | '/_authenticated/account/danger'
     | '/_authenticated/account/email'
     | '/_authenticated/account/llm'
+    | '/_authenticated/account/personality'
     | '/_authenticated/account/profile'
     | '/_authenticated/account/security'
     | '/_authenticated/applications/$applicationId'
@@ -528,6 +541,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountProfileRouteImport
       parentRoute: typeof AuthenticatedAccountRoute
     }
+    '/_authenticated/account/personality': {
+      id: '/_authenticated/account/personality'
+      path: '/personality'
+      fullPath: '/account/personality'
+      preLoaderRoute: typeof AuthenticatedAccountPersonalityRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
     '/_authenticated/account/llm': {
       id: '/_authenticated/account/llm'
       path: '/llm'
@@ -556,6 +576,7 @@ interface AuthenticatedAccountRouteChildren {
   AuthenticatedAccountDangerRoute: typeof AuthenticatedAccountDangerRoute
   AuthenticatedAccountEmailRoute: typeof AuthenticatedAccountEmailRoute
   AuthenticatedAccountLlmRoute: typeof AuthenticatedAccountLlmRoute
+  AuthenticatedAccountPersonalityRoute: typeof AuthenticatedAccountPersonalityRoute
   AuthenticatedAccountProfileRoute: typeof AuthenticatedAccountProfileRoute
   AuthenticatedAccountSecurityRoute: typeof AuthenticatedAccountSecurityRoute
 }
@@ -564,6 +585,7 @@ const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
   AuthenticatedAccountDangerRoute: AuthenticatedAccountDangerRoute,
   AuthenticatedAccountEmailRoute: AuthenticatedAccountEmailRoute,
   AuthenticatedAccountLlmRoute: AuthenticatedAccountLlmRoute,
+  AuthenticatedAccountPersonalityRoute: AuthenticatedAccountPersonalityRoute,
   AuthenticatedAccountProfileRoute: AuthenticatedAccountProfileRoute,
   AuthenticatedAccountSecurityRoute: AuthenticatedAccountSecurityRoute,
 }

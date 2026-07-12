@@ -29,6 +29,7 @@ import {
   type RunState,
 } from "@/lib/queries/generations";
 import { type SocketStatus } from "@/lib/ws";
+import { personalityHint, usePersonality } from "@/lib/queries/personality";
 
 function toneClass(tone: "green" | "amber" | "muted") {
   return tone === "green"
@@ -90,6 +91,9 @@ export function GeneratePanel({
     runCreatedAt != null &&
     isStalePending(runState.status, runCreatedAt, now);
 
+  const personality = usePersonality(personalParagraph);
+  const hint = personalityHint(personalParagraph, personality.data);
+
   async function onGenerate() {
     try {
       const run = await create.mutateAsync({
@@ -119,7 +123,9 @@ export function GeneratePanel({
 
   const result = runState.status === "done" ? runState.result : null;
   const ai = result ? aiShareBadge(result.cover_letter.ai_share) : null;
-  const grounding = result ? groundingBadge(result.cover_letter.grounding) : null;
+  const grounding = result
+    ? groundingBadge(result.cover_letter.grounding)
+    : null;
 
   return (
     <Card>
@@ -210,6 +216,7 @@ export function GeneratePanel({
             come out as a stub to replace by hand.
           </p>
         )}
+        {hint && <p className="text-xs text-amber-700">{hint}</p>}
 
         {staleQueue && (
           <p className="text-sm text-amber-700">
@@ -241,7 +248,9 @@ export function GeneratePanel({
             <Badge variant="outline">
               {result.meta.grade} · {result.meta.alias}
             </Badge>
-            <span className={`rounded px-2 py-0.5 text-xs ${toneClass(ai.tone)}`}>
+            <span
+              className={`rounded px-2 py-0.5 text-xs ${toneClass(ai.tone)}`}
+            >
               {ai.label}
             </span>
             <span

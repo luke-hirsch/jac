@@ -7,6 +7,7 @@ const ITEMS = [
   { to: "/account/security", label: "Security" },
   { to: "/account/llm", label: "LLM providers" },
   { to: "/account/danger", label: "Danger zone" },
+  { to: "/account/personality", label: "Personality" },
 ] as const;
 
 export const Route = createFileRoute("/_authenticated/account")({
