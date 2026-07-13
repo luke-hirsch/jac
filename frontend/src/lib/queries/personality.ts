@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
 /** `/api/spa/personality/` — the questionnaire the personal paragraph grounds "you" in. */
-export type PersonalityQuestion = { id: string; prompt: string };
+export type PersonalityQuestion = {
+  pk: number;
+  slug: string;
+  prompt: string;
+  editable: boolean;
+};
 
 export type PersonalityRow = {
   id: number;
@@ -20,7 +25,17 @@ const KEY = ["personality"];
 
 /** Mirrors the serializer's per-answer cap (spa/personality_questions.py). */
 export const MAX_ANSWER_LEN = 280;
+/** Mirrors the CRUD serializer's validate_prompt (spa/serializers.py). */
+export const MAX_QUESTION_LEN = 280;
 
+/** Add-a-question input validation — mirror of the serializer. Error string or null. */
+export function validateQuestionPrompt(prompt: string): string | null {
+  const text = prompt.trim();
+  if (!text) return "A question needs a prompt.";
+  if (text.length > MAX_QUESTION_LEN)
+    return `Keep it under ${MAX_QUESTION_LEN} characters.`;
+  return null;
+}
 /* ---------- pure helpers (unit-tested) ---------- */
 
 /** Trim + drop blanks — exactly what the backend will store from a PATCH. */
@@ -116,8 +131,36 @@ export function useUpdateAnswers() {
 export function useRebuildDossier() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      api<{ dossier: string }>(`${URL}rebuild/`, { method: "POST" }),
+    // The distiller runs on whatever alias the user picked (any model can distil —
+    // no grade gate, unlike generation). Defaults to the settings "default" alias.
+    mutationFn: (alias: string = "default") =>
+      api<{ dossier: string }>(
+        `${URL}rebuild/?alias=${encodeURIComponent(alias)}`,
+        { method: "POST" },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+const QUESTIONS_URL = "/api/spa/personality/questions/";
+
+export function useCreateQuestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (prompt: string) =>
+      api<PersonalityQuestion>(QUESTIONS_URL, {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+export function useDeleteQuestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (pk: number) =>
+      api<void>(`${QUESTIONS_URL}${pk}/`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }
