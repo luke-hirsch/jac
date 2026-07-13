@@ -7,6 +7,7 @@ writes own-only). The layout FK is non-null with a callable default resolving to
 "default" layout — also the SET_DEFAULT target when a custom layout is deleted.
 """
 
+from datetime import date
 from unittest.mock import patch
 
 from django.conf import settings
@@ -20,6 +21,7 @@ from jac.models import (
     JobApplication,
     JobPostAddress,
     JobPosting,
+    TransitionError,
     default_application_layout,
 )
 
@@ -132,6 +134,9 @@ class JobApplicationCrudTests(APITestCase):
             {
                 "cover_letter": "rewritten",
                 "cv_content": {"skills": [{"id": "skill:1", "label": "Python"}]},
+                "deadline": "2026-09-01",
+                "notes": "chase the recruiter",
+                # status is read-only over PATCH now — the transition action owns it.
                 "status": "sent",
             },
             format="json",
@@ -140,7 +145,10 @@ class JobApplicationCrudTests(APITestCase):
         app.refresh_from_db()
         self.assertEqual(app.cover_letter, "rewritten")
         self.assertEqual(app.cv_content["skills"][0]["label"], "Python")
-        self.assertEqual(app.status, "sent")
+        self.assertEqual(str(app.deadline), "2026-09-01")
+        self.assertEqual(app.notes, "chase the recruiter")
+        # The status PATCH was silently ignored (read-only field).
+        self.assertEqual(app.status, JobApplication.StatusChoices.draft)
 
     def test_posting_is_immutable_after_create(self):
         self.client.force_login(self.user)
@@ -165,6 +173,182 @@ class JobApplicationCrudTests(APITestCase):
         self.assertEqual(r.status_code, 204)
         self.assertFalse(JobApplication.objects.filter(pk=app.pk).exists())
         self.assertFalse(GenerationRun.objects.filter(pk=run.pk).exists())
+
+
+class JobApplicationTransitionModelTests(TestCase):
+    """`JobApplication.apply_transition` — the guarded state-machine (foundation lifecycle
+    guide). It validates the move against `TRANSITIONS`, stamps the side-effect fields, and
+    never saves (the caller persists), so a rejected move leaves the row untouched."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="trans_model", password="pass")
+        cls.posting = JobPosting.objects.create(user=cls.user, posting_text="x")
+
+    def _app(self, status=JobApplication.StatusChoices.draft):
+        return JobApplication.objects.create(
+            user=self.user, posting=self.posting, status=status
+        )
+
+    def test_approve_stamps_approved_at(self):
+        app = self._app()
+        app.apply_transition(JobApplication.StatusChoices.approved)
+        self.assertEqual(app.status, JobApplication.StatusChoices.approved)
+        self.assertIsNotNone(app.approved_at)
+
+    def test_sent_stamps_sent_at_and_delivery_method(self):
+        app = self._app(JobApplication.StatusChoices.approved)
+        app.apply_transition(
+            JobApplication.StatusChoices.sent, delivery_method="manual"
+        )
+        self.assertEqual(app.status, JobApplication.StatusChoices.sent)
+        self.assertIsNotNone(app.sent_at)
+        self.assertEqual(app.delivery_method, "manual")
+        # Marking sent by hand never sets the backend-sent flag (chunk 2's job).
+        self.assertFalse(app.sent_by_system)
+
+    def test_response_stamps_outcome_note_and_responded_at(self):
+        app = self._app(JobApplication.StatusChoices.sent)
+        app.apply_transition(
+            JobApplication.StatusChoices.response,
+            response_outcome="interview",
+            note="call Tuesday",
+        )
+        self.assertEqual(app.status, JobApplication.StatusChoices.response)
+        self.assertEqual(app.response_outcome, "interview")
+        self.assertEqual(app.notes, "call Tuesday")
+        self.assertIsNotNone(app.responded_at)
+
+    def test_can_transition_map(self):
+        app = self._app()
+        self.assertTrue(app.can_transition(JobApplication.StatusChoices.approved))
+        self.assertFalse(app.can_transition(JobApplication.StatusChoices.sent))
+
+    def test_illegal_move_raises(self):
+        app = self._app()  # draft
+        with self.assertRaises(TransitionError):
+            app.apply_transition(JobApplication.StatusChoices.sent)
+
+    def test_unknown_target_raises(self):
+        app = self._app()
+        with self.assertRaises(TransitionError):
+            app.apply_transition("bogus")
+
+    def test_unknown_delivery_method_raises(self):
+        app = self._app(JobApplication.StatusChoices.approved)
+        with self.assertRaises(TransitionError):
+            app.apply_transition(
+                JobApplication.StatusChoices.sent, delivery_method="carrier_pigeon"
+            )
+
+    def test_unknown_outcome_raises(self):
+        app = self._app(JobApplication.StatusChoices.sent)
+        with self.assertRaises(TransitionError):
+            app.apply_transition(
+                JobApplication.StatusChoices.response, response_outcome="maybe"
+            )
+
+
+class JobApplicationTransitionApiTests(APITestCase):
+    """POST /api/jac/applications/<pk>/transition/ — the only way to change `status` now that
+    the serializer field is read-only. Legal moves 200 + stamp; illegal/unknown 400; the
+    payload (delivery_method / response_outcome / note) is carried into the model."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="trans_api", password="pass")
+        cls.other = User.objects.create_user(username="trans_other", password="pass")
+        cls.posting = JobPosting.objects.create(user=cls.user, posting_text="x")
+
+    def _app(self, status=JobApplication.StatusChoices.draft):
+        return JobApplication.objects.create(
+            user=self.user, posting=self.posting, status=status
+        )
+
+    def _post(self, app, body):
+        return self.client.post(
+            f"/api/jac/applications/{app.pk}/transition/", body, format="json"
+        )
+
+    def test_legal_move_returns_200_and_stamps(self):
+        self.client.force_login(self.user)
+        app = self._app()
+        r = self._post(app, {"to": "approved"})
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["status"], "approved")
+        self.assertIsNotNone(r.data["approved_at"])
+
+    def test_illegal_move_returns_400_and_does_not_change(self):
+        self.client.force_login(self.user)
+        app = self._app()  # draft
+        r = self._post(app, {"to": "sent"})
+        self.assertEqual(r.status_code, 400)
+        app.refresh_from_db()
+        self.assertEqual(app.status, JobApplication.StatusChoices.draft)
+
+    def test_unknown_target_returns_400(self):
+        self.client.force_login(self.user)
+        app = self._app()
+        r = self._post(app, {"to": "bogus"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_missing_target_returns_400(self):
+        self.client.force_login(self.user)
+        app = self._app()
+        r = self._post(app, {})
+        self.assertEqual(r.status_code, 400)
+
+    def test_sent_carries_delivery_method(self):
+        self.client.force_login(self.user)
+        app = self._app(JobApplication.StatusChoices.approved)
+        r = self._post(app, {"to": "sent", "delivery_method": "email"})
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["delivery_method"], "email")
+        self.assertIsNotNone(r.data["sent_at"])
+        self.assertFalse(r.data["sent_by_system"])
+
+    def test_response_carries_outcome_and_note(self):
+        self.client.force_login(self.user)
+        app = self._app(JobApplication.StatusChoices.sent)
+        r = self._post(
+            app,
+            {"to": "response", "response_outcome": "offer", "note": "verbal offer"},
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["response_outcome"], "offer")
+        self.assertEqual(r.data["notes"], "verbal offer")
+        self.assertIsNotNone(r.data["responded_at"])
+
+    def test_foreign_application_is_404(self):
+        self.client.force_login(self.other)
+        app = self._app()
+        r = self._post(app, {"to": "approved"})
+        self.assertEqual(r.status_code, 404)
+
+
+class JobApplicationDeadlineApiTests(APITestCase):
+    """`deadline` is user-writable over PATCH (the manual-override half of the deadline
+    strategy — the generation task fills it automatically when empty)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(username="deadline_api", password="pass")
+        cls.posting = JobPosting.objects.create(user=cls.user, posting_text="x")
+
+    def test_deadline_defaults_null_and_is_patchable(self):
+        self.client.force_login(self.user)
+        app = JobApplication.objects.create(user=self.user, posting=self.posting)
+        r = self.client.get(f"/api/jac/applications/{app.pk}/")
+        self.assertIsNone(r.data["deadline"])
+
+        r = self.client.patch(
+            f"/api/jac/applications/{app.pk}/",
+            {"deadline": "2026-09-01"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        app.refresh_from_db()
+        self.assertEqual(app.deadline, date(2026, 9, 1))
 
 
 class JobApplicationContentV2Tests(APITestCase):

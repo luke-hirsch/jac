@@ -237,6 +237,13 @@ class AddressExtractParseTests(TestCase):
         self.assertEqual(out["email"], "jobs@acme.com")
         self.assertEqual(out["language"], "de")
 
+    def test_parses_deadline(self):
+        # `deadline` joins the address-extract field set (foundation lifecycle guide); the
+        # value is kept verbatim here — jac.tasks._parse_deadline turns it into a real date.
+        raw = "company: Acme GmbH\ndeadline: 2026-08-01"
+        out = self.x._parse(raw)
+        self.assertEqual(out["deadline"], "2026-08-01")
+
     def test_skips_unknown_blank_and_placeholder(self):
         raw = "company: Acme\nfoo: bar\ncity:\nemail: none\nphone: n/a"
         self.assertEqual(self.x._parse(raw), {"company": "Acme"})

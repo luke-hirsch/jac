@@ -170,6 +170,48 @@ class GenerateRunTaskTests(TestCase):
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
+    def test_run_fills_application_deadline(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        """The extracted `deadline` line is parsed to a real date and written to the owning
+        application (foundation lifecycle guide) — same fill-if-empty hand-off as cv/letter."""
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+        mock_extract.return_value.extract.return_value = {
+            "title": "Dev",
+            "deadline": "2026-08-01",
+        }
+
+        run = self._run()
+        generate_run(run.pk)
+
+        app = run.job_application
+        app.refresh_from_db()
+        self.assertEqual(app.deadline, date(2026, 8, 1))
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_run_does_not_clobber_manual_deadline(
+        self, mock_cv, mock_letter, mock_extract, _mock_strength
+    ):
+        """A deadline the user already set is never overwritten by a later run's extraction."""
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+        mock_extract.return_value.extract.return_value = {"deadline": "2026-08-01"}
+
+        run = self._run(deadline=date(2026, 6, 30))
+        generate_run(run.pk)
+
+        app = run.job_application
+        app.refresh_from_db()
+        self.assertEqual(app.deadline, date(2026, 6, 30))
+
+    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
     def test_done_never_clobbers_edited_application(
         self, mock_cv, mock_letter, mock_extract, _mock_strength
     ):
