@@ -1,9 +1,11 @@
-# [fullstack] letter quality — MMR snippet diversity, LetterCritic + repair, anti-summary standard
+# [fullstack] letter quality — MMR diversity, LetterCritic + repair, anti-summary standard, paragraph-as-opener
 
-> **Mode note:** default-strict — Lukas types the non-test source from this guide.
-> Tests land first (red) as acceptance criteria. Branch: `fullstack/letter-quality`
-> (cut off a *dirty* main that still carries the uncommitted pipeline-v2 phase — commit
-> or wrap that up before/with this work so the phases don't tangle in one commit).
+> **Mode note:** volatile — Lukas delegated implementation ("implement this for me",
+> 2026-07-12) after the paragraph-as-opener extension; Claude wrote the source. Tests
+> landed first (red) and went green with the implementation; Lukas owns the live
+> verification below. Branch: `fullstack/letter-quality` (cut off a *dirty* main that
+> still carries the uncommitted pipeline-v2 phase — commit or wrap that up
+> before/with this work so the phases don't tangle in one commit).
 
 ## why
 
@@ -31,6 +33,27 @@ Diagnosis (decisions cleared with Lukas 2026-07-12):
    shrinkage backstop — a standard body under 0.6× the snippets' word count is a failed
    polish and triggers the repair even when the critic is clean or down.
 
+Live findings from the personality questionnaire round (Lukas, 2026-07-12 — the
+paragraph now generates for real, revealing two flaws):
+
+4. **The paragraph sits at the wrong end.** It lands after the body, displacing the
+   closing's call-to-action-and-thanks. Best structure: the personal "why this
+   company" paragraph **opens** the letter, the bottom keeps a warm CTA + gratitude,
+   and the closing arcs back to the opener to tie the letter together. Fix: `build()`
+   creates the paragraph FIRST; the writer receives it as a context-only
+   `OPENING PARAGRAPH` block (echo its theme in one closing clause, never repeat or
+   mine it for facts); `editable_body`/`render_markdown`/frontend `editableBody` flip
+   to paragraph-first.
+5. **Brutal honesty reads as a liability.** The dossier's neutral truths ("values
+   autonomy, speaks their mind") went into the paragraph verbatim — a hiring manager
+   reads "independent and mouthy". The dossier stays honest (it serves the portfolio
+   too); the **paragraph writer** learns the two-sides-of-the-coin rule: render every
+   trait as the professional strength it implies (autonomy → works independently,
+   delivers without hand-holding; speaks their mind → cares enough to speak up).
+   `ParagraphGroundingCheck` correspondingly learns that a positively-reframed trait
+   is supported by the underlying trait — reframing is not fabrication, or the audit
+   would flag exactly the reframings we ask for.
+
 ## decisions
 
 - **MMR, body pick only**: greedy; each next snippet maximises
@@ -53,29 +76,41 @@ Diagnosis (decisions cleared with Lukas 2026-07-12):
   design; the polish contract is what implies preservation.
 - Result dict gains `critique: {count, claims[, repaired]}`; frontend shows a quality
   badge next to the grounding badge.
+- **Paragraph-as-opener**: only a REAL paragraph is fed to the writer as context — the
+  stub never enters a prompt (`opening = "" if pp["is_stub"] else pp["text"]`). The
+  stub still renders loudly, now at the top. The CTA-and-thanks close is pinned in the
+  standard/strong clauses (light glue can't follow shape instructions); the arc-echo
+  line rides inside the dynamic opening block, so it only appears when there is an
+  opener to arc back to.
+- **Result-dict shape unchanged** (`personal_paragraph` stays its own key) — only the
+  *assembled* orders flip: `editable_body()`, `render_markdown()`, and the frontend
+  mirror `editableBody()`.
 
 ## call order (for reading the tests' `side_effect` lists)
 
 ```
-writer → grounding audit (strong always / opt-in) → critic (standard+strong)
+personal paragraph (research → write → opt-in check)   # FIRST now — it opens the letter
+      → writer (opening as context) → grounding audit (strong always / opt-in)
+      → critic (standard+strong)
       → [repair rewrite → grounding re-audit (iff auditing)]   # only when triggered
-      → personal paragraph (unchanged, after everything)
 ```
 
-Strong worst case: 5 calls (was 4). Standard default: 2 calls, 3 when the critic
-triggers a repair.
+Strong worst case: 5 letter calls (was 4) + the paragraph calls when requested.
+Standard default: 2 calls, 3 when the critic triggers a repair.
 
 ## affected files
 
 | file                                             | change                                                                             |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `backend/jac/llm_prompts.py`                     | `Embed.ranked_vectors()` + `_cos` → staticmethod; `LetterCritic`; writer clauses + `revision_notes` |
-| `backend/jac/cover_letter.py`                    | `SnippetSelector` MMR body pick; `CoverLetter` critique/repair flow (replaces `_strong_repair`) |
+| `backend/jac/llm_prompts.py`                     | `Embed.ranked_vectors()` + `_cos` → staticmethod; `LetterCritic`; writer clauses + `revision_notes` + `opening_paragraph`; `PersonalParagraphWriter`/`ParagraphGroundingCheck` instructions |
+| `backend/jac/cover_letter.py`                    | `SnippetSelector` MMR body pick; `CoverLetter` critique/repair flow (replaces `_strong_repair`); `build()` reordered paragraph-first; `editable_body`/`render_markdown` flip |
 | `frontend/src/lib/queries/generations.ts`        | `Critique` type, `critique` key on `CoverLetterResult`, `qualityBadge()`            |
+| `frontend/src/lib/letter-doc.ts`                 | `editableBody()` mirror flips to paragraph-first                                    |
 | `frontend/src/components/applications/generate-panel.tsx` | render the quality badge                                                  |
-| `backend/jac/tests/test_llm_rungs.py`            | (AI, on disk) `LetterCriticTests`, writer prompt extensions                        |
-| `backend/jac/tests/test_cover_letter.py`         | (AI, on disk) `SnippetSelectorMMRTests`, `CoverLetterCritiqueTests`, existing classes updated to the new call order |
+| `backend/jac/tests/test_llm_rungs.py`            | (AI, on disk) `LetterCriticTests`, writer/paragraph/check prompt extensions        |
+| `backend/jac/tests/test_cover_letter.py`         | (AI, on disk) `SnippetSelectorMMRTests`, `CoverLetterCritiqueTests`, existing classes updated to the new call order, opener-order tests |
 | `frontend/tests/lib/generations.test.ts`         | (AI, on disk) `qualityBadge` variants                                              |
+| `frontend/tests/lib/letter-doc.test.ts`          | (AI, on disk) `editableBody` order flip                                            |
 
 No model change, no migration, no serializer/tasks/WS change — `critique` rides inside
 the existing `result.cover_letter` JSON exactly like `snippet_ranking` did.
@@ -129,8 +164,9 @@ the existing `result.cover_letter` JSON exactly like `snippet_ranking` did.
             "letter, not a summary: keep every concrete claim, keep roughly the combined "
             "length of the snippets, and write one paragraph per theme with real "
             "transitions. Reorder for flow and tighten wording where it repeats — but "
-            "never compress the substance away. Do not invent facts the snippets do not "
-            "state."
+            "never compress the substance away. Close with a brief final paragraph: a "
+            "call to action and genuine thanks for the consideration. Do not invent "
+            "facts the snippets do not state."
         ),
         "strong": (
             "Compose an original, persuasive letter body tailored to THIS job posting. Use the "
@@ -138,17 +174,21 @@ the existing `result.cover_letter` JSON exactly like `snippet_ranking` did.
             "source of facts about the candidate. Every factual claim (skills, employers, "
             "titles, numbers, dates, achievements) must come from the snippets — invent "
             "nothing. State each experience, project, and achievement at most once — never "
-            "retell the same fact in different words."
+            "retell the same fact in different words. Close with a brief final paragraph: "
+            "a call to action and genuine thanks for the consideration."
         ),
 ```
 
-**1c. `CoverLetterWriter`** — `revision_notes` kwarg (the critique repair channel,
-parallel to `unsupported_claims`). `__init__` signature gains the last parameter:
+**1c. `CoverLetterWriter`** — two new kwargs: `revision_notes` (the critique repair
+channel, parallel to `unsupported_claims`) and `opening_paragraph` (the already-written
+personal paragraph that now OPENS the letter — context, never a fact source). `__init__`
+signature gains the last parameters:
 
 ```python
         posting_text: str = "",
         unsupported_claims: list[str] | None = None,
         revision_notes: list[str] | None = None,
+        opening_paragraph: str = "",
     ):
 ```
 
@@ -156,11 +196,23 @@ body of `__init__` gains:
 
 ```python
         self.revision_notes = revision_notes or []
+        self.opening_paragraph = opening_paragraph
 ```
 
-and `_prompt()` gets a `notes` block after `repair` (return line changes too):
+and `_prompt()` gets `opening` + `notes` blocks (return line changes too). The
+arc-echo instruction lives inside the dynamic block, so it only exists when there is
+an opener to arc back to:
 
 ```python
+        opening = ""
+        if self.opening_paragraph:
+            opening = (
+                "OPENING PARAGRAPH (already written; it appears directly above your "
+                "text): context only, never a source of facts about the candidate, and "
+                "do not repeat it — but you may echo its theme in one clause of your "
+                "closing to tie the letter together.\n"
+                f"{self.opening_paragraph}\n\n"
+            )
         repair = ""
         if self.unsupported_claims:
             claims = "\n".join(f"- {c}" for c in self.unsupported_claims)
@@ -179,17 +231,18 @@ and `_prompt()` gets a `notes` block after `repair` (return line changes too):
             f"{clause}\n{common}\n\n"
             f"CANDIDATE: {self.candidate_name}\n"
             f"ROLE: {self.title}\n\n"
-            f"{posting}{repair}{notes}"
+            f"{opening}{posting}{repair}{notes}"
             f"SNIPPETS (your only source of facts):\n{blocks}\n\nLETTER BODY:"
         )
 ```
 
-Also update the class docstring's last paragraph to mention both channels:
+Also update the class docstring's last paragraph to mention the channels:
 
 ```python
     `unsupported_claims` and `revision_notes` are the repair-pass channels: the
     grounding audit's findings and the LetterCritic's writing notes are fed back so
-    one rewrite can fix both.
+    one rewrite can fix both. `opening_paragraph` is the personal paragraph that will
+    sit above this body — context for the arc, never a source of candidate facts.
 ```
 
 **1d. `LetterCritic`** — new class, place directly **after `FaithfulnessCheck`**
@@ -260,6 +313,46 @@ class LetterCritic:
             f"LETTER BODY:\n{self.body}\n\n"
             f"REVIEW:"
         )
+```
+
+**1e. `PersonalParagraphWriter._INSTRUCTION`** — replace entirely (opener role +
+the two-sides-of-the-coin framing rule):
+
+```python
+    _INSTRUCTION = (
+        "Write ONE short paragraph (3-5 sentences) that OPENS a cover letter: why this "
+        "candidate is personally drawn to and a strong fit for THIS company. Connect a "
+        "specific thing about the company (from RESEARCH) to who the candidate is (from "
+        "PERSONALITY). Use ONLY facts from RESEARCH for company claims and ONLY traits "
+        "from PERSONALITY for the candidate — invent nothing, add no skills/employers/"
+        "numbers. Every trait is one side of a coin: render each PERSONALITY trait as "
+        "the professional strength it implies (values autonomy -> works independently "
+        "and delivers without hand-holding; speaks their mind -> cares enough to speak "
+        "up) — never word one so it could read as a liability. First person, genuine, "
+        "not fawning. End on a short bridge that leads naturally into the "
+        "qualifications below. No salutation, no sign-off, no markdown, no headers — "
+        "just the paragraph."
+    )
+```
+
+Also update the class docstring's first line ("Write ONE cover-letter paragraph…" →
+"…the OPENING paragraph of a cover letter…").
+
+**1f. `ParagraphGroundingCheck._INSTRUCTION`** — one sentence added after the
+UNSUPPORTED definition, so the audit doesn't flag exactly the reframings 1e asks for:
+
+```python
+    _INSTRUCTION = (
+        "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "
+        "and PERSONALITY (the candidate). A claim is UNSUPPORTED if neither source states or clearly "
+        "implies it. A PERSONALITY trait rendered in a positive professional light is supported by "
+        "the underlying trait — reframing is not fabrication. List every unsupported factual claim.\n"
+        "Reply in this EXACT line format, nothing else:\n"
+        "  - first line: 'UNSUPPORTED <n>';\n"
+        "  - then ONE line per claim, '- <claim>' (<=20 words), worst first;\n"
+        "  - if all grounded, write 'UNSUPPORTED 0' and nothing else.\n"
+        "Do not flag tone, opinion, or first-person framing — only checkable facts. No prose, no JSON."
+    )
 ```
 
 ### 2. `backend/jac/cover_letter.py`
@@ -377,22 +470,48 @@ Also update the class docstring's embed sentence:
     )
 ```
 
-In `build()`, replace the current grounding/repair block
+`build()` is restructured — the personal paragraph moves to the FRONT (it opens the
+letter and the writer needs it as context), the critique/repair flow lands after the
+audit, and `ai_share` collapses to a single computation. Full new body:
 
 ```python
-        # Strong composes freely (and sees the posting), so its audit is not optional; the
-        # repair pass gets one shot at removing whatever the audit flags.
-        verify = self.verify_grounding or self.grade == "strong"
-        grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
-        if self.grade == "strong":
-            body, grounding = self._strong_repair(
-                body, sel["ordered"], grounding, language, title
-            )
-```
+    def build(self) -> dict:
+        language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
+        title = getattr(self.job_posting, "title", "") or ""
+        sel = SnippetSelector(
+            self.cv,
+            self.user.pk,
+            max_body=self.max_body_snippets,
+            posting_language=language,
+            posting_text=self._posting_text(),
+            user=self.user,
+            alias=self.alias,
+            embed_alias=self.embed_alias,
+        ).select()
 
-with
+        # Personal paragraph FIRST (letter-quality decision, 2026-07-12): it opens the
+        # letter, so the writer gets it as context and can arc back to it. Only a real
+        # paragraph enters a prompt — the stub is a UI artifact, not writer input.
+        pp = self._personal_paragraph(language, title)
+        opening = "" if pp["is_stub"] else pp["text"]
 
-```python
+        woven = CoverLetterWriter(
+            sel["ordered"],
+            candidate_name=self._candidate_name(),
+            title=title,
+            language=language,
+            grade=self.grade,
+            alias=self.alias,
+            user=self.user,
+            posting_text=self._posting_text(),
+            opening_paragraph=opening,
+        ).write()
+        # The writer returns '' when the LLM failed OR there were no snippets to weave. Either
+        # way fall back to the raw stitched snippets (no slop), and remember it for _grounding.
+        weave_failed = not woven
+        body = woven or "\n\n".join(s.content for s in sel["ordered"])
+        body_is_ai_fallback = not sel["ordered"]
+
         # Strong composes freely (and sees the posting), so its audit is not optional.
         # The critic reviews prose quality on standard+strong; audit claims and critic
         # notes then share ONE repair rewrite (strong re-audits the rewrite; the
@@ -401,14 +520,44 @@ with
         grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
         critique = self._critique(body, sel["ordered"], weave_failed)
         body, grounding, critique = self._repair(
-            body, sel["ordered"], grounding, critique, language, title, verify
+            body, sel["ordered"], grounding, critique, language, title, verify, opening
         )
-```
 
-and add to the `result` dict, right after `"grounding": grounding,`:
-
-```python
+        result = {
+            "language": language,
+            "subject": self._subject(language, title),
+            "salutation": self._salutation(language),
+            "body": body,
+            "sender": self._sender(),
+            "recipient": self._recipient(),
+            "date": timezone.localdate().isoformat(),
+            "closing": _CLOSING.get(language, _CLOSING["en"]),
+            "snippets_used": [f"{s.kind}:{s.pk}" for s in sel["ordered"]],
+            "ai_share": self._ai_share(
+                sel["ordered"],
+                language,
+                body_is_ai_fallback,
+                personal_words=0 if pp["is_stub"] else len(pp["text"].split()),
+            ),
+            "snippet_provenance": {
+                "native": [
+                    f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language == language
+                ],
+                "translated": [
+                    f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language != language
+                ],
+            },
+            "grounding": grounding,
             "critique": critique,
+            "snippet_ranking": sel["ranking"],
+            "personal_paragraph": pp["text"],
+            "personal_paragraph_is_stub": pp["is_stub"],
+            "personal_paragraph_sources": pp["sources"],
+            "personal_paragraph_grounding": pp["grounding"],
+        }
+
+        result["text"] = self.render_markdown(result)
+        return result
 ```
 
 Replace `_strong_repair` entirely with:
@@ -437,14 +586,17 @@ Replace `_strong_repair` entirely with:
             self._MIN_BODY_RATIO * snippet_words
         )
 
-    def _repair(self, body, snippets, grounding, critique, language, title, verify):
+    def _repair(
+        self, body, snippets, grounding, critique, language, title, verify, opening
+    ):
         """ONE combined repair pass over draft one, never a loop: strong's unsupported
         claims and any critique notes ride the same rewrite. Afterwards the grounding
         is re-audited when auditing is on (safety stays honest about the shipped body);
         the critique is NOT re-run — advisory — its `repaired` flag means "the flagged
         draft was replaced", set only when the critique itself contributed notes.
         `grounding.repaired` keeps its v2 contract on strong: True only when a rewrite
-        actually replaced the body."""
+        actually replaced the body. `opening` travels along so the rewrite keeps the
+        same arc context as draft one."""
         strong = self.grade == "strong"
         claims = (grounding.get("claims") or []) if strong else []
         notes = critique.get("claims") or []
@@ -463,6 +615,7 @@ Replace `_strong_repair` entirely with:
             posting_text=self._posting_text(),
             unsupported_claims=claims,
             revision_notes=notes,
+            opening_paragraph=opening,
         ).write()
         if not rewritten:
             out_g = {**grounding, "repaired": False} if strong else grounding
@@ -484,7 +637,33 @@ Replace `_strong_repair` entirely with:
 >   LLM call, which equals the untouched dict — no special-casing needed.
 > - Docstring of `build()`/module header: update the pipeline-v2 header paragraph to
 >   mention the critic ("…compensated by an always-on grounding audit **plus a prose
->   critic whose findings share the single repair pass**").
+>   critic whose findings share the single repair pass**") and the paragraph-as-opener.
+
+**2d. assembly order flips** — `editable_body()` (module level) becomes:
+
+```python
+def editable_body(letter: dict) -> str:
+    """The sendable middle of a built letter: personal paragraph (real or stub) first,
+    then the body — the paragraph OPENS the letter (letter-quality decision,
+    2026-07-12); subject/salutation/date/closing/addresses live in `letter_meta` and
+    are re-assembled at render/export time.
+    """
+    parts = [letter.get("personal_paragraph") or "", letter.get("body", "")]
+    return "\n\n".join(p for p in parts if p)
+```
+
+and in `render_markdown()`, the personal-paragraph block moves ABOVE the body:
+
+```python
+        out.append(r["salutation"])
+        out.append("")
+        if r.get("personal_paragraph"):
+            out.append(r["personal_paragraph"])
+            out.append("")
+        out.append(r["body"])
+        out.append("")
+        out.append(_CLOSING.get(r["language"], _CLOSING["en"]))
+```
 
 ### 3. `frontend/src/lib/queries/generations.ts`
 
@@ -522,6 +701,20 @@ export function qualityBadge(c: Critique | undefined): Badge | null {
 }
 ```
 
+### 3b. `frontend/src/lib/letter-doc.ts`
+
+`editableBody()` flips to mirror the backend (comment included — the mirror claim is
+the contract):
+
+```ts
+/** Mirror of backend jac/cover_letter.py editable_body(): the personal paragraph
+ *  (real or stub) OPENS the letter, then the body. */
+export function editableBody(letter: CoverLetterResult): string {
+  const parts = [letter.personal_paragraph, letter.body];
+  return parts.filter(Boolean).join("\n\n");
+}
+```
+
 ### 4. `frontend/src/components/applications/generate-panel.tsx`
 
 Import `qualityBadge` from `@/lib/queries/generations`. Next to the existing badge
@@ -549,21 +742,30 @@ and render it right after the grounding `<span>` (same pattern, tooltip = the is
 | file                                       | class / block                        | covers                                                                                                                                                          |
 | ------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend/jac/tests/test_llm_rungs.py`      | `LetterCriticTests` (new)            | prompt carries snippets/body/no-fact-check scope; ISSUES parse (n, 0, listed-lines-win, garbage→None); LLM error → None, muted                                    |
-| `backend/jac/tests/test_llm_rungs.py`      | `CoverLetterWriterPromptTests` (ext) | `revision_notes` block renders / absent by default / coexists with `unsupported_claims`; standard clause pins "not a summary"; strong clause pins "at most once" |
+| `backend/jac/tests/test_llm_rungs.py`      | `CoverLetterWriterPromptTests` (ext) | `revision_notes` block renders / absent by default / coexists with `unsupported_claims`; `opening_paragraph` block renders with "do not repeat" / absent by default; standard clause pins "not a summary"; strong pins "at most once"; both pin "call to action" |
+| `backend/jac/tests/test_llm_rungs.py`      | `PersonalParagraphWriterTests` / `ParagraphGroundingCheckTests` (ext) | writer prompt pins the opener role + "professional strength" framing; check prompt pins "reframing is not fabrication" |
 | `backend/jac/tests/test_cover_letter.py`   | `SnippetSelectorMMRTests` (new)      | near-duplicate #2 loses its slot to the distinct #3; first pick stays pure relevance; ranking still "embedding"                                                   |
 | `backend/jac/tests/test_cover_letter.py`   | `CoverLetterCritiqueTests` (new)     | light never critiques; standard clean/dirty/repair-prompt-carries-notes; shrinkage backstop (clean critic + tiny body → repair); critic failure skips repair; empty rewrite keeps draft 1 |
-| `backend/jac/tests/test_cover_letter.py`   | existing classes (updated)           | strong flow re-pinned to the new call order (writer→audit→critic→repair→re-audit) with new `side_effect` lists + call counts; standard opt-in now writer+critic; personal-paragraph orderings updated |
+| `backend/jac/tests/test_cover_letter.py`   | existing classes (updated)           | flows re-pinned to the new call order (**paragraph→writer→audit→critic→repair→re-audit**) with new `side_effect` lists + call counts; the paragraph opens `text`; the real opener reaches the writer prompt, the stub never does; `editable_body` order flipped |
 | `frontend/tests/lib/generations.test.ts`   | `qualityBadge` (ext)                 | null when unchecked/absent; green clean; amber count + `· repaired` suffix; failed repair no suffix                                                               |
+| `frontend/tests/lib/letter-doc.test.ts`    | `editableBody` (updated)             | paragraph (and stub) precede the body                                                                                                                              |
+| `frontend/tests/lib/applications.test.ts`  | `runToApplicationPatch` (updated)    | the applied `cover_letter` string flows through `editableBody` — expectation flipped to opener order (missed in the original map, caught by the full-suite run)   |
 
-Red-state verified 2026-07-12: backend 29 red (all in the new/re-pinned tests, zero
-collateral), frontend 4 red / 19 green in `generations.test.ts` (`qualityBadge is not
-a function` until section 3 is typed).
+Red-state verified 2026-07-12 (after the paragraph-as-opener extension): backend 37
+red (21 failures + 16 errors), all in the new/re-pinned tests, zero collateral;
+frontend 6 red / 40 green across `generations.test.ts` (4 — `qualityBadge` missing)
+and `letter-doc.test.ts` (2 — order flip). `test_stub_is_never_fed_to_the_writer`
+starts green by design — it guards a property the current code already has.
+
+**Implemented 2026-07-12 (volatile, Claude).** Green-state: full backend suite
+547 OK, full frontend suite 242/242, `npx tsc -b` clean. Remaining work = the live
+verification below (Lukas).
 
 Run:
 
 ```
 cd backend && python manage.py test jac.tests.test_cover_letter jac.tests.test_llm_rungs
-cd frontend && npx vitest run tests/lib/generations.test.ts
+cd frontend && npx vitest run tests/lib/generations.test.ts tests/lib/letter-doc.test.ts
 ```
 
 ## Verification (Lukas)
@@ -578,9 +780,17 @@ cd frontend && npx vitest run tests/lib/generations.test.ts
      ("quality ok" / "n issues · repaired").
    - `snippets: embedding` badge still shows; with ≥4 active body snippets covering
      overlapping stories, check the chosen 3 actually differ in topic (MMR working).
-3. `cover_letter` management command smoke run over the corpus still passes.
-4. Judgement call for Results: is 0.7/0.3 the right MMR balance, and is the 0.6
-   shrinkage floor right for your snippet lengths?
+3. **Personal paragraph, live** (web-capable alias + questionnaire filled): the
+   paragraph now OPENS the letter; the body's last paragraph carries a call to action
+   + thanks and — when the opener is real — one clause echoing its theme. Read the
+   paragraph as a hiring manager: traits should land as strengths ("works
+   independently, delivers without hand-holding"), never as liabilities ("values
+   their independence, speaks their mind"). Editor/export: the paragraph (or the loud
+   stub) sits at the top of the body textarea and the rendered PDF.
+4. `cover_letter` management command smoke run over the corpus still passes.
+5. Judgement call for Results: is 0.7/0.3 the right MMR balance, is the 0.6 shrinkage
+   floor right for your snippet lengths, and does the corporate reframing stay honest
+   enough for your taste?
 
 ## Results
 

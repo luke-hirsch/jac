@@ -11,6 +11,13 @@ export type Grounding = {
   repaired?: boolean;
 };
 
+export type Critique = {
+  count: number | null;
+  claims: string[];
+  /** Standard+ only: a quality repair replaced the body (true) or the rewrite failed (false). */
+  repaired?: boolean;
+};
+
 export type CoverLetterResult = {
   language: string;
   subject: string;
@@ -24,6 +31,8 @@ export type CoverLetterResult = {
   snippet_provenance: { native: string[]; translated: string[] };
   ai_share: number;
   grounding: Grounding;
+  /** Prose-quality critique (standard+strong): advisory, feeds the repair pass. */
+  critique?: Critique;
   /** How the snippets were picked: embedding cosine vs the structural fallback. */
   snippet_ranking?: "embedding" | "structural";
   personal_paragraph: string;
@@ -112,6 +121,18 @@ export function groundingBadge(g: Grounding): Badge {
   return {
     tone: "amber",
     label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
+  };
+}
+
+export function qualityBadge(c: Critique | undefined): Badge | null {
+  // Advisory rung: when the critic didn't run (light grade, old runs, critic down)
+  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
+  if (!c || c.count === null) return null;
+  const suffix = c.repaired ? " · repaired" : "";
+  if (c.count === 0) return { tone: "green", label: "quality ok" };
+  return {
+    tone: "amber",
+    label: `${c.count} issue${c.count === 1 ? "" : "s"}${suffix}`,
   };
 }
 

@@ -42,8 +42,9 @@ describe("runToApplicationPatch", () => {
     const patch = runToApplicationPatch(result);
     expect(patch).toEqual({
       cv_content: result.cv,
-      // The editable body: letter body + personal paragraph — never the furnished text.
-      cover_letter: "I build things.\n\nI admire ACME.",
+      // The editable body: personal paragraph first (it opens the letter), then the
+      // letter body — never the furnished text.
+      cover_letter: "I admire ACME.\n\nI build things.",
       letter_meta: {
         language: "en",
         subject: "Application for Dev",

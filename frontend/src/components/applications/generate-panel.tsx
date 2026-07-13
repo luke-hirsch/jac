@@ -24,6 +24,7 @@ import {
   groundingBadge,
   isStalePending,
   pendingAgeSeconds,
+  qualityBadge,
   useCreateGeneration,
   type Grade,
   type RunState,
@@ -126,6 +127,7 @@ export function GeneratePanel({
   const grounding = result
     ? groundingBadge(result.cover_letter.grounding)
     : null;
+  const quality = result ? qualityBadge(result.cover_letter.critique) : null;
 
   return (
     <Card>
@@ -259,6 +261,14 @@ export function GeneratePanel({
             >
               {grounding.label}
             </span>
+            {quality && (
+              <span
+                className={`rounded px-2 py-0.5 text-xs ${toneClass(quality.tone)}`}
+                title={(result.cover_letter.critique?.claims ?? []).join("\n")}
+              >
+                {quality.label}
+              </span>
+            )}
             {result.cover_letter.snippet_ranking && (
               <span
                 className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"

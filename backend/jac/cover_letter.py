@@ -1,11 +1,14 @@
 """Cover-letter pipeline: pick the right ResumeSnippets for a posting, turn them into a
 letter body with the chat model, and assemble the sender/recipient/subject around that body.
 
-Pipeline v2: snippet *selection* is embedding-ranked against the posting on every grade
-(structural fallback when no embedder is reachable); the *writer's licence* scales with
-grade — light glues, standard polishes, strong composes (and uniquely sees the posting,
-compensated by an always-on grounding audit with one repair pass). Snippet text remains the
-only permitted source of facts at every grade — that is the anti-AI-slop guard.
+Pipeline v3: snippet *selection* is embedding-ranked against the posting on every grade
+(structural fallback when no embedder is reachable) with an MMR-diversified body pick;
+the *writer's licence* scales with grade — light glues, standard polishes, strong
+composes (and uniquely sees the posting, compensated by an always-on grounding audit
+plus a prose critic whose findings share the single repair pass). The personal
+paragraph OPENS the letter and travels into the writer as arc context. Snippet text
+remains the only permitted source of facts at every grade — that is the anti-AI-slop
+guard.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from django.utils import timezone
 from jac.llm_prompts import (
     CoverLetterWriter,
     FaithfulnessCheck,
+    LetterCritic,
     ParagraphGroundingCheck,
     PersonalParagraphWriter,
     SnippetEmbed,
@@ -42,15 +46,15 @@ _CLOSING = {"en": "Kind regards,", "de": "Mit freundlichen Grüßen,"}
 
 
 def editable_body(letter: dict) -> str:
-    """The sendable middle of a built letter: body + personal paragraph (real or stub).
+    """The sendable middle of a built letter: personal paragraph (real or stub) first,
+    then the body — the paragraph OPENS the letter (letter-quality decision,
+    2026-07-12).
 
     This — not the fully furnished `text` — is what belongs in the editable
     `JobApplication.cover_letter`; subject/salutation/date/closing/addresses live in
     `letter_meta` and are re-assembled at render/export time.
     """
-    parts = [letter.get("body", "")]
-    if letter.get("personal_paragraph"):
-        parts.append(letter["personal_paragraph"])
+    parts = [letter.get("personal_paragraph") or "", letter.get("body", "")]
     return "\n\n".join(p for p in parts if p)
 
 
@@ -63,7 +67,9 @@ class SnippetSelector:
     writer aliases still rank via the local embedder. When no alias can embed (or there is
     no posting text), selection degrades to the legacy structural scorer — relevance to what
     survived CV filtering, with its > 0 keep-gate. The embed path has no gate: the ranking
-    is the gate ("the best three", not "everything vaguely related").
+    is the gate — and the body pick is MMR-diversified (relevance minus overlap with
+    what's already picked), so the "best three" are three different stories, not one
+    story three times.
 
     Native posting-language is a tiebreak only on both paths, never a gate; intro/closing
     are the best-scoring of their kind, or None when the user has none. `select()` reports
@@ -75,6 +81,9 @@ class SnippetSelector:
         ResumeSnippet.Kind.value_statement,
         ResumeSnippet.Kind.other,
     )
+    # MMR: relevance weight on the greedy body pick; (1-λ) penalises similarity to
+    # what is already picked, so three tellings of one story can't sweep the top-3.
+    _MMR_LAMBDA = 0.7
 
     def __init__(
         self,
@@ -130,9 +139,10 @@ class SnippetSelector:
         return f"{s.kind}:{s.pk}"
 
     def _embed_scores(self, active: list) -> dict | None:
-        """{snippet id: cosine vs the posting} via the first embed-capable alias in the
-        chain, or None when nothing can embed. Failure walks the chain instead of raising
-        — a letter must never die because an embedder is down."""
+        """{snippet id: {'score': cosine vs the posting, 'vec': raw vector}} via the
+        first embed-capable alias in the chain, or None when nothing can embed. Failure
+        walks the chain instead of raising — a letter must never die because an
+        embedder is down."""
         if not active or not self.posting_text:
             return None
         entries = [{"id": self._sid(s), "text": s.content} for s in active]
@@ -144,13 +154,48 @@ class SnippetSelector:
             try:
                 ranked = SnippetEmbed(
                     self.posting_text, entries, user=self.user, alias=alias
-                ).ranked_entries()
+                ).ranked_vectors()
             except Exception as exc:  # noqa: BLE001 — walk the chain on any failure
                 logger.info("snippet embedding via %r unavailable: %s", alias, exc)
                 continue
             if ranked:
-                return {r["id"]: r["score"] for r in ranked}
+                return {r["id"]: {"score": r["score"], "vec": r["vec"]} for r in ranked}
         return None
+
+    def _rel(self, scores: dict, s) -> float:
+        e = scores.get(self._sid(s))
+        return e["score"] if e else 0.0
+
+    def _vec(self, scores: dict, s) -> list:
+        e = scores.get(self._sid(s))
+        return e["vec"] if e else []
+
+    def _mmr_body(self, bodies: list, scores: dict) -> list:
+        """Greedy maximal-marginal-relevance pick of the body snippets: the first pick
+        is pure relevance; each next pick maximises relevance minus its worst cosine
+        overlap with what is already picked. Kills the near-duplicate top-3 that made
+        letters retell one experience three times. Native language stays the tiebreak."""
+        pool = list(bodies)
+        picked: list = []
+        while pool and len(picked) < self.max_body:
+
+            def mmr(s):
+                overlap = max(
+                    (
+                        SnippetEmbed._cos(self._vec(scores, s), self._vec(scores, p))
+                        for p in picked
+                    ),
+                    default=0.0,
+                )
+                return (
+                    self._MMR_LAMBDA * self._rel(scores, s)
+                    - (1 - self._MMR_LAMBDA) * overlap
+                )
+
+            best = max(pool, key=lambda s: (mmr(s), self._native(s)))
+            picked.append(best)
+            pool.remove(best)
+        return picked
 
     def select(self) -> dict:
         active = list(
@@ -168,8 +213,8 @@ class SnippetSelector:
         scores = self._embed_scores(active)
         if scores is not None:
             ranking = "embedding"
-            key = lambda s: (scores.get(self._sid(s), 0.0), self._native(s))
-            body = sorted(bodies, key=key, reverse=True)[: self.max_body]
+            key = lambda s: (self._rel(scores, s), self._native(s))
+            body = self._mmr_body(bodies, scores)
         else:
             ranking = "structural"
             key = lambda s: (self._score(s), self._native(s))
@@ -200,6 +245,16 @@ class CoverLetter:
     # How much the writer reshapes even same-language prose, by grade. Strong composes its
     # own letter (pipeline v2), so its tax reflects free composition, not polished stitching.
     _REWRITE_TAX = {"light": 0.05, "standard": 0.20, "strong": 0.60}
+    # Prose-quality critique runs on the grades whose writers actually reshape text;
+    # light glue is exempt (a 1B can't act on critique — and glue is the point there).
+    _CRITIC_GRADES = ("standard", "strong")
+    # A standard "polish" that lost >40% of the snippets' words is a summary, not a
+    # polish — deterministic backstop, works even when the critic model is down.
+    _MIN_BODY_RATIO = 0.6
+    _SHRINKAGE_NOTE = (
+        "the body summarizes the snippets instead of writing them out — rewrite at "
+        "full length, one paragraph per theme, keeping every concrete claim"
+    )
 
     def __init__(
         self,
@@ -250,6 +305,12 @@ class CoverLetter:
             embed_alias=self.embed_alias,
         ).select()
 
+        # Personal paragraph FIRST (letter-quality decision, 2026-07-12): it opens the
+        # letter, so the writer gets it as context and can arc back to it. Only a real
+        # paragraph enters a prompt — the stub is a UI artifact, not writer input.
+        pp = self._personal_paragraph(language, title)
+        opening = "" if pp["is_stub"] else pp["text"]
+
         woven = CoverLetterWriter(
             sel["ordered"],
             candidate_name=self._candidate_name(),
@@ -259,6 +320,7 @@ class CoverLetter:
             alias=self.alias,
             user=self.user,
             posting_text=self._posting_text(),
+            opening_paragraph=opening,
         ).write()
         # The writer returns '' when the LLM failed OR there were no snippets to weave. Either
         # way fall back to the raw stitched snippets (no slop), and remember it for _grounding.
@@ -266,14 +328,16 @@ class CoverLetter:
         body = woven or "\n\n".join(s.content for s in sel["ordered"])
         body_is_ai_fallback = not sel["ordered"]
 
-        # Strong composes freely (and sees the posting), so its audit is not optional; the
-        # repair pass gets one shot at removing whatever the audit flags.
+        # Strong composes freely (and sees the posting), so its audit is not optional.
+        # The critic reviews prose quality on standard+strong; audit claims and critic
+        # notes then share ONE repair rewrite (strong re-audits the rewrite; the
+        # advisory critique is not re-run).
         verify = self.verify_grounding or self.grade == "strong"
         grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
-        if self.grade == "strong":
-            body, grounding = self._strong_repair(
-                body, sel["ordered"], grounding, language, title
-            )
+        critique = self._critique(body, sel["ordered"], weave_failed)
+        body, grounding, critique = self._repair(
+            body, sel["ordered"], grounding, critique, language, title, verify, opening
+        )
 
         result = {
             "language": language,
@@ -285,7 +349,12 @@ class CoverLetter:
             "date": timezone.localdate().isoformat(),
             "closing": _CLOSING.get(language, _CLOSING["en"]),
             "snippets_used": [f"{s.kind}:{s.pk}" for s in sel["ordered"]],
-            "ai_share": self._ai_share(sel["ordered"], language, body_is_ai_fallback),
+            "ai_share": self._ai_share(
+                sel["ordered"],
+                language,
+                body_is_ai_fallback,
+                personal_words=0 if pp["is_stub"] else len(pp["text"].split()),
+            ),
             "snippet_provenance": {
                 "native": [
                     f"{s.kind}:{s.pk}" for s in sel["ordered"] if s.language == language
@@ -295,23 +364,13 @@ class CoverLetter:
                 ],
             },
             "grounding": grounding,
+            "critique": critique,
             "snippet_ranking": sel["ranking"],
+            "personal_paragraph": pp["text"],
+            "personal_paragraph_is_stub": pp["is_stub"],
+            "personal_paragraph_sources": pp["sources"],
+            "personal_paragraph_grounding": pp["grounding"],
         }
-
-        # Personal paragraph: a researched, company-specific paragraph with zero snippet support.
-        # Real only when capable (grade != light, web-search model, research ok, personality
-        # present); otherwise a loud stub. Folds its words into ai_share (it's ~100% AI prose).
-        pp = self._personal_paragraph(language, title)
-        result["personal_paragraph"] = pp["text"]
-        result["personal_paragraph_is_stub"] = pp["is_stub"]
-        result["personal_paragraph_sources"] = pp["sources"]
-        result["personal_paragraph_grounding"] = pp["grounding"]
-        result["ai_share"] = self._ai_share(
-            sel["ordered"],
-            language,
-            body_is_ai_fallback,
-            personal_words=0 if pp["is_stub"] else len(pp["text"].split()),
-        )
 
         result["text"] = self.render_markdown(result)
         return result
@@ -410,11 +469,11 @@ class CoverLetter:
         out.append("")
         out.append(r["salutation"])
         out.append("")
-        out.append(r["body"])
-        out.append("")
         if r.get("personal_paragraph"):
             out.append(r["personal_paragraph"])
             out.append("")
+        out.append(r["body"])
+        out.append("")
         out.append(_CLOSING.get(r["language"], _CLOSING["en"]))
         out.append("")
         out.append(snd["name"])
@@ -473,13 +532,47 @@ class CoverLetter:
             user=self.user,
         ).critique()
 
-    def _strong_repair(self, body, snippets, grounding, language, title) -> tuple:
-        """One repair pass for a dirty strong audit: the unsupported claims go back to the
-        writer, the rewrite is re-audited once, survivors stay flagged. `repaired` marks
-        that a rewrite actually replaced the body — a failed rewrite keeps draft one and
-        its audit, and never loops."""
-        if not grounding.get("count") or not grounding.get("claims"):
-            return body, {**grounding, "repaired": False}
+    def _critique(self, body, snippets, weave_failed) -> dict:
+        """Advisory prose-quality review: {'count': int | None, 'claims': [str]}.
+
+        Runs only on _CRITIC_GRADES with a real woven body (the raw-fallback body IS
+        the snippets — nothing to review). The standard grade adds a deterministic
+        shrinkage backstop: a polish that lost >40% of the snippet words is
+        summarising, and that finding must not depend on the critic model being up."""
+        if self.grade not in self._CRITIC_GRADES or weave_failed or not snippets:
+            return {"count": None, "claims": []}
+        critique = LetterCritic(
+            body, snippets, alias=self.verifier_alias or self.alias, user=self.user
+        ).critique()
+        if self.grade == "standard" and self._shrunk(body, snippets):
+            claims = critique["claims"] + [self._SHRINKAGE_NOTE]
+            critique = {"count": len(claims), "claims": claims}
+        return critique
+
+    def _shrunk(self, body, snippets) -> bool:
+        snippet_words = sum(len(s.content.split()) for s in snippets)
+        return snippet_words > 0 and len(body.split()) < (
+            self._MIN_BODY_RATIO * snippet_words
+        )
+
+    def _repair(
+        self, body, snippets, grounding, critique, language, title, verify, opening
+    ):
+        """ONE combined repair pass over draft one, never a loop: strong's unsupported
+        claims and any critique notes ride the same rewrite. Afterwards the grounding
+        is re-audited when auditing is on (safety stays honest about the shipped body);
+        the critique is NOT re-run — advisory — its `repaired` flag means "the flagged
+        draft was replaced", set only when the critique itself contributed notes.
+        `grounding.repaired` keeps its v2 contract on strong: True only when a rewrite
+        actually replaced the body. `opening` travels along so the rewrite keeps the
+        same arc context as draft one."""
+        strong = self.grade == "strong"
+        claims = (grounding.get("claims") or []) if strong else []
+        notes = critique.get("claims") or []
+        if not claims and not notes:
+            if strong:
+                return body, {**grounding, "repaired": False}, critique
+            return body, grounding, critique
         rewritten = CoverLetterWriter(
             snippets,
             candidate_name=self._candidate_name(),
@@ -489,12 +582,19 @@ class CoverLetter:
             alias=self.alias,
             user=self.user,
             posting_text=self._posting_text(),
-            unsupported_claims=grounding["claims"],
+            unsupported_claims=claims,
+            revision_notes=notes,
+            opening_paragraph=opening,
         ).write()
         if not rewritten:
-            return body, {**grounding, "repaired": False}
-        audited = self._grounding(rewritten, snippets, weave_failed=False, verify=True)
-        return rewritten, {**audited, "repaired": True}
+            out_g = {**grounding, "repaired": False} if strong else grounding
+            out_c = {**critique, "repaired": False} if notes else critique
+            return body, out_g, out_c
+        new_g = self._grounding(rewritten, snippets, weave_failed=False, verify=verify)
+        if strong:
+            new_g = {**new_g, "repaired": True}
+        out_c = {**critique, "repaired": True} if notes else critique
+        return rewritten, new_g, out_c
 
     # --- personal paragraph (company research × personality) ----------------------------
 

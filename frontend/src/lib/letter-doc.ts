@@ -99,10 +99,10 @@ export function letterMetaFromResult(letter: CoverLetterResult): LetterMeta {
   };
 }
 
-/** Mirror of backend jac/cover_letter.py editable_body(): body + personal paragraph/stub. */
+/** Mirror of backend jac/cover_letter.py editable_body(): the personal paragraph
+ *  (real or stub) OPENS the letter, then the body. */
 export function editableBody(letter: CoverLetterResult): string {
-  const parts = [letter.body];
-  if (letter.personal_paragraph) parts.push(letter.personal_paragraph);
+  const parts = [letter.personal_paragraph, letter.body];
   return parts.filter(Boolean).join("\n\n");
 }
 

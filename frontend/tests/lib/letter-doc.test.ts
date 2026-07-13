@@ -78,16 +78,18 @@ describe("editableBody", () => {
     expect(editableBody(letter)).toBe("Ich baue Dinge.");
   });
 
-  it("appends the personal paragraph as its own block", () => {
+  it("opens with the personal paragraph (letter-quality: paragraph-as-opener)", () => {
     expect(
       editableBody({ ...letter, personal_paragraph: "Ich bewundere ACME." }),
-    ).toBe("Ich baue Dinge.\n\nIch bewundere ACME.");
+    ).toBe("Ich bewundere ACME.\n\nIch baue Dinge.");
   });
 
-  it("keeps a stub paragraph loud", () => {
+  it("keeps a stub paragraph loud, right at the top", () => {
     expect(
-      editableBody({ ...letter, personal_paragraph: PERSONAL_STUB }),
-    ).toContain(PERSONAL_STUB);
+      editableBody({ ...letter, personal_paragraph: PERSONAL_STUB }).startsWith(
+        PERSONAL_STUB,
+      ),
+    ).toBe(true);
   });
 });
 

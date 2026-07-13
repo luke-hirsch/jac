@@ -904,17 +904,18 @@ class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
         ).build()
 
     def test_real_paragraph_when_capable(self):
-        # Strong always audits and reviews: writer, audit, critic, paragraph writer.
+        # Paragraph-as-opener order: the paragraph is built FIRST (it opens the
+        # letter), then writer, audit, critic.
         with patch("jac.research.can_web_search", return_value=True), patch(
             "jac.research.web_search",
             return_value={"text": "Acme builds rockets.", "sources": ["https://acme"]},
         ), patch(
             "jac.llm_prompts.complete",
             side_effect=[
+                "I love Acme's mission.",
                 "Snippet body.",
                 "UNSUPPORTED 0",
                 "ISSUES 0",
-                "I love Acme's mission.",
             ],
         ):
             r = self._build(grade="strong", personal_paragraph=True)
@@ -922,6 +923,44 @@ class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
         self.assertEqual(r["personal_paragraph"], "I love Acme's mission.")
         self.assertEqual(r["personal_paragraph_sources"], ["https://acme"])
         self.assertIn("I love Acme's mission.", r["text"])
+        # The paragraph OPENS the assembled letter — before the woven body.
+        self.assertLess(
+            r["text"].index("I love Acme's mission."),
+            r["text"].index("Snippet body."),
+        )
+
+    def test_writer_gets_the_real_paragraph_as_arc_context(self):
+        # The second complete is the letter writer; its prompt must carry the opener
+        # as a context-only block so the closing can arc back to it.
+        with patch("jac.research.can_web_search", return_value=True), patch(
+            "jac.research.web_search",
+            return_value={"text": "Acme builds rockets.", "sources": []},
+        ), patch(
+            "jac.llm_prompts.complete",
+            side_effect=[
+                "I love Acme's mission.",
+                "Snippet body.",
+                "UNSUPPORTED 0",
+                "ISSUES 0",
+            ],
+        ) as m:
+            self._build(grade="strong", personal_paragraph=True)
+        writer_prompt = m.call_args_list[1].kwargs["prompt"]
+        self.assertIn("OPENING PARAGRAPH", writer_prompt)
+        self.assertIn("I love Acme's mission.", writer_prompt)
+
+    def test_stub_is_never_fed_to_the_writer(self):
+        # A stub is a UI artifact, not writer context — no OPENING block on stub paths.
+        with patch("jac.research.can_web_search", return_value=False), patch(
+            "jac.research.web_search"
+        ), patch(
+            "jac.llm_prompts.complete", return_value="A grown letter body here."
+        ) as m:
+            r = self._build(grade="standard", personal_paragraph=True)
+        self.assertTrue(r["personal_paragraph_is_stub"])
+        writer_prompt = m.call_args_list[0].kwargs["prompt"]
+        self.assertNotIn("OPENING PARAGRAPH", writer_prompt)
+        self.assertNotIn(PERSONAL_STUB, writer_prompt)
 
     def test_light_grade_always_stubs(self):
         with patch("jac.research.web_search") as ws, patch(
@@ -982,13 +1021,13 @@ class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
             return_value={"text": "Acme builds rockets.", "sources": []},
         ), patch("jac.cover_letter.FaithfulnessCheck") as FC, patch(
             "jac.llm_prompts.complete",
-            # writer -> (FC is mocked, no call) -> critic -> paragraph writer -> its
-            # own grounding check.
+            # paragraph writer -> its grounding check -> letter writer -> (FC is
+            # mocked, no call) -> critic.
             side_effect=[
-                "Snippet body.",
-                "ISSUES 0",
                 "I love Acme rockets.",
                 "UNSUPPORTED 0",
+                "Snippet body.",
+                "ISSUES 0",
             ],
         ):
             FC.return_value.critique.return_value = {"count": 0, "claims": []}
@@ -1005,15 +1044,16 @@ class CoverLetterPersonalParagraphTests(_CoverLetterCVMixin, TestCase):
 
 class EditableBodyTests(TestCase):
     """editable_body(): the body-only slice that lands in JobApplication.cover_letter —
-    body + personal paragraph (real or stub), never the furnished full text."""
+    personal paragraph (real or stub) first, then the body (the paragraph OPENS the
+    letter — letter-quality decision, 2026-07-12), never the furnished full text."""
 
     def test_body_only_when_no_personal_paragraph(self):
         self.assertEqual(editable_body({"body": "Hi.", "personal_paragraph": ""}), "Hi.")
 
-    def test_appends_personal_paragraph_as_own_block(self):
+    def test_personal_paragraph_opens_the_letter(self):
         letter = {"body": "Hi.", "personal_paragraph": "I admire ACME."}
-        self.assertEqual(editable_body(letter), "Hi.\n\nI admire ACME.")
+        self.assertEqual(editable_body(letter), "I admire ACME.\n\nHi.")
 
-    def test_stub_paragraph_stays_loud(self):
+    def test_stub_paragraph_stays_loud_and_leads(self):
         letter = {"body": "Hi.", "personal_paragraph": PERSONAL_STUB}
-        self.assertIn(PERSONAL_STUB, editable_body(letter))
+        self.assertTrue(editable_body(letter).startswith(PERSONAL_STUB))

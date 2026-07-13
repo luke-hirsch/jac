@@ -414,6 +414,30 @@ class CoverLetterWriterPromptTests(TestCase):
         w = CoverLetterWriter([_StubSnippet("A", "x")], grade="strong")
         self.assertIn("at most once", w._prompt())
 
+    # --- paragraph-as-opener: the personal paragraph as arc context -----------------
+
+    def test_opening_paragraph_block_renders_as_context(self):
+        w = CoverLetterWriter(
+            [_StubSnippet("Achv", "Shipped the billing service.")],
+            grade="standard",
+            opening_paragraph="Acme's mission speaks to me.",
+        )
+        p = w._prompt()
+        self.assertIn("OPENING PARAGRAPH", p)
+        self.assertIn("Acme's mission speaks to me.", p)
+        self.assertIn("do not repeat", p.lower())
+
+    def test_no_opening_block_by_default(self):
+        self.assertNotIn("OPENING PARAGRAPH", self._writer()._prompt())
+
+    def test_standard_and_strong_close_with_a_call_to_action(self):
+        # The bottom keeps a warm CTA + thanks now that the personal paragraph
+        # opens the letter (Lukas, 2026-07-12).
+        for grade in ("standard", "strong"):
+            with self.subTest(grade=grade):
+                w = CoverLetterWriter([_StubSnippet("A", "x")], grade=grade)
+                self.assertIn("call to action", w._prompt())
+
 
 class LetterChatTests(TestCase):
     """`[fullstack]-letter-refine-chat`: the ephemeral letter-refinement chat rung.
@@ -630,6 +654,17 @@ class PersonalParagraphWriterTests(TestCase):
             ).write()
         self.assertEqual(txt, "")
 
+    def test_prompt_frames_traits_as_professional_strengths(self):
+        # Live finding (2026-07-12): the dossier's neutral truths ("values autonomy,
+        # speaks their mind") went into the paragraph verbatim and read as liabilities.
+        # The writer must render each trait's employer-facing side — and it writes the
+        # letter's OPENER now, not a mid-letter aside.
+        p = PersonalParagraphWriter(
+            company_dossier="Acme builds X", personality_dossier="Values autonomy."
+        )._prompt()
+        self.assertIn("professional strength", p)
+        self.assertIn("OPENS", p)
+
 
 class ParagraphGroundingCheckTests(TestCase):
     def test_counts_unsupported_claims(self):
@@ -650,6 +685,12 @@ class ParagraphGroundingCheckTests(TestCase):
         with _muted(), patch("jac.llm_prompts.complete", side_effect=RuntimeError("x")):
             out = ParagraphGroundingCheck("para", "C", "P").critique()
         self.assertEqual(out, {"count": None, "claims": []})
+
+    def test_reframed_traits_are_not_fabrication(self):
+        # The writer is TOLD to render traits in a positive professional light — the
+        # audit must not flag exactly that reframing as unsupported.
+        p = ParagraphGroundingCheck("para", "C", "P")._prompt()
+        self.assertIn("reframing is not fabrication", p)
 
 
 class EmbedCapJobPostTests(TestCase):
@@ -682,10 +723,11 @@ class ParagraphRewriteTests(TestCase):
         return ParagraphRewrite("I did stuff at my job.", **kw)
 
     def test_prompt_carries_passage_instruction_and_language(self):
+        # ISO code -> language name: 'Write in German.', never a bare 'Write in de.'.
         p = self._rw(instruction="more formal", language="de")._prompt()
         self.assertIn("I did stuff at my job.", p)
         self.assertIn("REQUEST: more formal", p)
-        self.assertIn("Write in de.", p)
+        self.assertIn("Write in German.", p)
 
     def test_prompt_omits_request_line_without_instruction(self):
         self.assertNotIn("REQUEST:", self._rw()._prompt())
