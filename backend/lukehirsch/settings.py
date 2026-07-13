@@ -6,6 +6,7 @@ from lukehirsch.prod import (
     DEV_SECRET_KEY,
     env_bool,
     env_int,
+    env_list,
     verify_production_secrets,
 )
 
@@ -194,6 +195,18 @@ LLM = {
 
 
 LLM_LOGGING = True
+
+# SSRF policy for user-supplied `custom` / `ollama` urls (see llm_connector/validators.py).
+# By default the validator refuses private / loopback destinations. Self-hosting Ollama over a
+# VPN is a first-class use case, so the *operator* can vouch for specific internal destinations:
+#   LLM_URL_ALLOWLIST — comma-separated hostnames and/or CIDRs (e.g.
+#       "localhost,127.0.0.1,100.64.0.0/10,ollama.tail1234.ts.net"). Dev allows localhost.
+#   LLM_URL_ALLOW_PRIVATE — blanket "trust my whole private net" escape hatch (pure self-host).
+# Neither lifts the hard block on cloud-metadata / link-local, multicast or unspecified addresses.
+LLM_URL_ALLOWLIST = env_list(
+    "LLM_URL_ALLOWLIST", ["localhost", "127.0.0.1", "::1"] if DEBUG else []
+)
+LLM_URL_ALLOW_PRIVATE = env_bool("LLM_URL_ALLOW_PRIVATE", False)
 
 LLM_ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", DEV_ENCRYPTION_KEY)
 

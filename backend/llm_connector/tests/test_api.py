@@ -91,9 +91,12 @@ class LLMRequestLogViewSetScopingTests(APITestCase):
         self.assertEqual(r.status_code, 404)
 
 
+@override_settings(LLM_URL_ALLOWLIST=[], LLM_URL_ALLOW_PRIVATE=False)
 class LLMConfigSSRFValidationTests(APITestCase):
     """`[backend]-ssrf-signup-gate`: the API refuses to store a custom/ollama config whose url
-    resolves to an internal address. Red until LLMConfigSerializer.validate calls the validator."""
+    resolves to an internal address. Pinned to the deny-by-default policy (no operator allowance)
+    so it's independent of the DEBUG-seeded LLM_URL_ALLOWLIST. Red until LLMConfigSerializer.validate
+    calls the validator."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="ssrf_user", password="pass")

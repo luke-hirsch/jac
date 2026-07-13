@@ -46,6 +46,18 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_list(name: str, default: list[str]) -> list[str]:
+    """Parse a comma-separated env var into a list of stripped, non-empty strings.
+
+    Missing var -> `default`. `FOO="a, b ,,c"` -> `["a", "b", "c"]`. An empty/whitespace-only
+    value yields `[]` (an explicit "no entries"), not `default`.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def verify_production_secrets(
     *, debug: bool, secret_key: str, encryption_key: str
 ) -> None:

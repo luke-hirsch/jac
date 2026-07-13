@@ -21,6 +21,7 @@ from lukehirsch.prod import (
     DEV_SECRET_KEY,
     env_bool,
     env_int,
+    env_list,
     verify_production_secrets,
 )
 
@@ -74,6 +75,21 @@ class EnvIntTests(TestCase):
     def test_non_integer_returns_default(self):
         with mock.patch.dict("os.environ", {"N": "later"}):
             self.assertEqual(env_int("N", 7), 7)
+
+
+class EnvListTests(TestCase):
+    def test_parses_comma_separated_and_strips(self):
+        with mock.patch.dict("os.environ", {"L": "a, b ,,c"}):
+            self.assertEqual(env_list("L", []), ["a", "b", "c"])
+
+    def test_missing_returns_default(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(env_list("NOPE", ["x"]), ["x"])
+
+    def test_empty_value_is_explicit_no_entries(self):
+        # A set-but-blank var means "clear the list", not "fall back to default".
+        with mock.patch.dict("os.environ", {"L": "  ,, "}):
+            self.assertEqual(env_list("L", ["x"]), [])
 
 
 class VerifyProductionSecretsTests(TestCase):
