@@ -1,7 +1,21 @@
+from django.utils.text import slugify
 from rest_framework import serializers
 
-from spa.models import PersonalityProfile, UserProfile
-from spa.personality_questions import MAX_ANSWER_LEN, PERSONALITY_QUESTIONS
+from spa.models import PersonalityProfile, PersonalityQuestion, UserProfile
+from spa.personality_questions import MAX_ANSWER_LEN
+
+
+def _unique_question_slug(user, prompt: str) -> str:
+    """A slug for a new user question, unique within the user's *visible* set (own rows +
+    system defaults) so a user's key can never collide with — and shadow — a default's."""
+    base = slugify(prompt)[:40] or "question"
+    taken = set(
+        PersonalityQuestion.objects.for_user(user).values_list("slug", flat=True)
+    )
+    slug, n = base, 2
+    while slug in taken:
+        slug, n = f"{base}-{n}", n + 1
+    return slug
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -86,7 +100,19 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
         )
 
     def get_questions(self, obj):
-        return PERSONALITY_QUESTIONS
+        rows = sorted(
+            PersonalityQuestion.objects.for_user(obj.user),
+            key=lambda q: (q.user_id == obj.user_id, q.order, q.pk),
+        )
+        return [
+            {
+                "pk": q.pk,
+                "slug": q.slug,
+                "prompt": q.prompt,
+                "editable": q.user_id == obj.user_id,
+            }
+            for q in rows
+        ]
 
     def validate_answers(self, answers):
         """Drop blank/whitespace-only answers; reject any answer over the one-tweet cap.
@@ -116,3 +142,37 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
 
             instance.answers_updated_at = timezone.now()
         return super().update(instance, validated_data)
+
+
+class PersonalityQuestionSerializer(serializers.ModelSerializer):
+    """CRUD over a user's own personality questions. `slug` is server-assigned on create and
+    read-only thereafter (editing a prompt keeps the answer key intact). `editable` mirrors the
+    embedded-questions flag so one shape serves both endpoints."""
+
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    editable = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PersonalityQuestion
+        fields = ("pk", "user", "slug", "prompt", "order", "editable")
+        read_only_fields = ("slug", "order")
+
+    def get_editable(self, obj) -> bool:
+        request = self.context.get("request")
+        return bool(request and obj.user_id == request.user.id)
+
+    def validate_prompt(self, value):
+        text = (value or "").strip()
+        if not text:
+            raise serializers.ValidationError("A question needs a prompt.")
+        if len(text) > MAX_ANSWER_LEN:
+            raise serializers.ValidationError(
+                f"Question exceeds the {MAX_ANSWER_LEN}-character limit."
+            )
+        return text
+
+    def create(self, validated_data):
+        validated_data["slug"] = _unique_question_slug(
+            validated_data["user"], validated_data["prompt"]
+        )
+        return super().create(validated_data)

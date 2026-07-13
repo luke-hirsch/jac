@@ -2,8 +2,6 @@ import logging
 
 from llm_connector import complete
 
-from spa.personality_questions import _QUESTION_LABEL
-
 logger = logging.getLogger(__name__)
 
 
@@ -22,8 +20,18 @@ class PersonalityDistiller:
         "achievements. No headers, no markdown, no preamble."
     )
 
-    def __init__(self, answers: dict, *, alias: str = "default", user=None):
+    def __init__(
+        self,
+        answers: dict,
+        *,
+        labels: dict | None = None,
+        alias: str = "default",
+        user=None,
+    ):
         self.answers = answers or {}
+        self.labels = (
+            labels or {}
+        )  # {slug: prompt}; falls back to the slug when missing
         self.alias = alias
         self.user = user
 
@@ -39,7 +47,7 @@ class PersonalityDistiller:
 
     def _prompt(self) -> str:
         blocks = "\n\n".join(
-            f"Q: {_QUESTION_LABEL.get(qid, qid)}\nA: {ans}"
+            f"Q: {self.labels.get(qid, qid)}\nA: {ans}"
             for qid, ans in self.answers.items()
             if ans
         )

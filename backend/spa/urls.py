@@ -4,6 +4,8 @@ from spa.views import (
     AccountDeleteView,
     PersonalityDossierRebuildView,
     PersonalityProfileView,
+    PersonalityQuestionDetailView,
+    PersonalityQuestionListCreateView,
     UserProfileView,
 )
 
@@ -16,4 +18,14 @@ urlpatterns = [
         name="personality-rebuild",
     ),
     path("account/", AccountDeleteView.as_view(), name="account-delete"),
+    path(
+        "personality/questions/",
+        PersonalityQuestionListCreateView.as_view(),
+        name="personality-questions",
+    ),
+    path(
+        "personality/questions/<int:pk>/",
+        PersonalityQuestionDetailView.as_view(),
+        name="personality-question-detail",
+    ),
 ]

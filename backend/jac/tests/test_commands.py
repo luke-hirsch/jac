@@ -15,6 +15,8 @@ from django.test import TestCase, override_settings
 
 from jac.management.commands.cv_eval import _resolve_runs
 from jac.models import ApplicationLayout, Domain, Job, Skill
+from spa.models import PersonalityQuestion
+from spa.personality_questions import PERSONALITY_QUESTIONS
 
 from ._helpers import _muted, _keep_all
 
@@ -101,16 +103,27 @@ class CVCommandSmokeTests(TestCase):
             self.assertTrue((Path(tmp) / "findings.md").exists())
 
 
-class SeedDefaultsTests(TestCase):
-    """seed_default_domains: system domains + BOTH system layouts ("default" one-page,
-    "two-page"), idempotent, and refreshing a stored template when the resource changed."""
+class SeedSystemDefaultsTests(TestCase):
+    """seed_system_defaults (renamed from seed_default_domains): system domains, the
+    personality-question pool, and BOTH system layouts ("default" one-page, "two-page"),
+    idempotent, and refreshing a stored template when the resource changed."""
 
-    def test_seeds_domains_and_both_layouts_with_templates(self):
+    def test_seeds_domains_questions_and_both_layouts_with_templates(self):
         with tempfile.TemporaryDirectory() as media:
             with override_settings(MEDIA_ROOT=media):
-                call_command("seed_default_domains", stdout=io.StringIO())
+                call_command("seed_system_defaults", stdout=io.StringIO())
                 system = User.objects.get(username=settings.SYSTEM_USER_USERNAME)
                 self.assertTrue(Domain.objects.filter(user=system).exists())
+
+                # The whole default question pool is seeded, system-owned, by slug.
+                seeded = set(
+                    PersonalityQuestion.objects.filter(user=system).values_list(
+                        "slug", flat=True
+                    )
+                )
+                self.assertEqual(
+                    seeded, {q["slug"] for q in PERSONALITY_QUESTIONS}
+                )
 
                 one = ApplicationLayout.objects.get(user=system, name="default")
                 self.assertTrue(one.template)
@@ -127,10 +140,38 @@ class SeedDefaultsTests(TestCase):
                     spec2 = json.load(fh)
                 self.assertEqual(spec2["cv"]["pages"], 2)
 
-                # Re-run: idempotent — still exactly the two system layouts.
-                call_command("seed_default_domains", stdout=io.StringIO())
+                # Re-run: idempotent — still exactly the two system layouts and one
+                # question per slug (no duplicates).
+                call_command("seed_system_defaults", stdout=io.StringIO())
                 self.assertEqual(
                     ApplicationLayout.objects.filter(user=system).count(), 2
+                )
+                self.assertEqual(
+                    PersonalityQuestion.objects.filter(user=system).count(),
+                    len(PERSONALITY_QUESTIONS),
+                )
+
+    def test_prune_drops_stale_system_question(self):
+        with tempfile.TemporaryDirectory() as media:
+            with override_settings(MEDIA_ROOT=media):
+                system, _ = User.objects.get_or_create(
+                    username=settings.SYSTEM_USER_USERNAME,
+                    defaults={"is_active": False},
+                )
+                PersonalityQuestion.objects.create(
+                    user=system, slug="retired", prompt="An old question?"
+                )
+                call_command("seed_system_defaults", "--prune", stdout=io.StringIO())
+                self.assertFalse(
+                    PersonalityQuestion.objects.filter(
+                        user=system, slug="retired"
+                    ).exists()
+                )
+                # A current default is created, not pruned.
+                self.assertTrue(
+                    PersonalityQuestion.objects.filter(
+                        user=system, slug=PERSONALITY_QUESTIONS[0]["slug"]
+                    ).exists()
                 )
 
     def test_seed_refreshes_stale_template(self):
@@ -145,7 +186,7 @@ class SeedDefaultsTests(TestCase):
                     "default_layout.json", ContentFile(b'{"stale": true}')
                 )
 
-                call_command("seed_default_domains", stdout=io.StringIO())
+                call_command("seed_system_defaults", stdout=io.StringIO())
 
                 layout.refresh_from_db()
                 with layout.template.open() as fh:

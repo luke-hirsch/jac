@@ -3,9 +3,10 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import OuterRef, Q, Subquery, UniqueConstraint
+from django.db.models import OuterRef, Subquery, UniqueConstraint
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from lukehirsch.managers import SystemScopedManager
 
 
 def _earliest_started_subquery(related_model):
@@ -58,22 +59,6 @@ class Grade(models.TextChoices):
 def normalize_grade(value: str | None) -> str:
     """Coerce any input to a valid Grade value, defaulting to `light`."""
     return str(value) if value in Grade.values else Grade.light
-
-
-class SystemScopedManager(models.Manager):
-    """Manager for user-owned models that also ship read-only system defaults
-    (rows owned by the `SYSTEM_USER_USERNAME` sentinel). `for_user(user)`
-    returns the user's own rows plus the system defaults in a single query,
-    so viewsets and the pipeline don't have to repeat the union.
-    """
-
-    def for_user(self, user):
-        return self.filter(
-            Q(user=user) | Q(user__username=settings.SYSTEM_USER_USERNAME)
-        )
-
-    def defaults(self):
-        return self.filter(user__username=settings.SYSTEM_USER_USERNAME)
 
 
 class DomainManager(SystemScopedManager):

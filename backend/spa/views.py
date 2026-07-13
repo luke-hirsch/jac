@@ -7,8 +7,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from spa.models import PersonalityProfile, UserProfile
-from spa.serializers import PersonalityProfileSerializer, UserProfileSerializer
+from spa.models import PersonalityProfile, PersonalityQuestion, UserProfile
+from spa.serializers import (
+    PersonalityProfileSerializer,
+    PersonalityQuestionSerializer,
+    UserProfileSerializer,
+)
 
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
@@ -67,3 +71,27 @@ class PersonalityDossierRebuildView(APIView):
             alias=request.query_params.get("alias", "default"), user=request.user
         )
         return Response({"dossier": text})
+
+
+class PersonalityQuestionListCreateView(generics.ListCreateAPIView):
+    """GET the user's visible questions (system defaults + own); POST adds one of the user's
+    own. Small list — pagination off, so the response is a plain array matching the shape
+    embedded in the personality endpoint."""
+
+    serializer_class = PersonalityQuestionSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return PersonalityQuestion.objects.for_user(self.request.user)
+
+
+class PersonalityQuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """PATCH/DELETE a question the user OWNS. System defaults are read-only: they are absent
+    from this queryset, so addressing one 404s (no guard needed)."""
+
+    serializer_class = PersonalityQuestionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PersonalityQuestion.objects.filter(user=self.request.user)

@@ -8,7 +8,7 @@
 ## why
 
 The pipeline-v2 Results: "the personality paragraph is missing in all instances,
-because the frontend has not implemented this." Precisely: the generate panel *does*
+because the frontend has not implemented this." Precisely: the generate panel _does_
 send `personal_paragraph` (the checkbox exists, default off) — what's missing is any
 UI for the **personality questionnaire**. The spa backend is fully in place
 (`/api/spa/personality/` RetrieveUpdate + `/api/spa/personality/rebuild/`,
@@ -24,7 +24,7 @@ hint when "Personal paragraph" is ticked with zero answers.
 ## backend contract (already live — nothing to change)
 
 - `GET /api/spa/personality/` → `{id, answers: {qid: text}, dossier, questions:
-  [{id, prompt}], answers_updated_at, dossier_built_at, updated_at}`. The `questions`
+[{id, prompt}], answers_updated_at, dossier_built_at, updated_at}`. The `questions`
   array is server-owned — render from it, never hardcode the pool.
 - `PATCH /api/spa/personality/` body `{answers: {...}}` — **replaces the whole dict**
   (send every kept answer, not a delta). Serializer drops blank answers and 400s over
@@ -34,13 +34,13 @@ hint when "Personal paragraph" is ticked with zero answers.
 
 ## affected files
 
-| file                                                       | change                                                             |
-| ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| `frontend/src/lib/queries/personality.ts` (new)            | types, pure helpers (unit-tested), `usePersonality` / mutations    |
-| `frontend/src/routes/_authenticated/account.tsx`           | nav item                                                            |
-| `frontend/src/routes/_authenticated/account/personality.tsx` (new) | the questionnaire page                                     |
-| `frontend/src/components/applications/generate-panel.tsx`  | zero-answers hint under the Personal-paragraph checkbox            |
-| `frontend/tests/lib/queries/personality.test.ts` (new)     | (AI, on disk) pure-helper tests                                    |
+| file                                                               | change                                                          |
+| ------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `frontend/src/lib/queries/personality.ts` (new)                    | types, pure helpers (unit-tested), `usePersonality` / mutations |
+| `frontend/src/routes/_authenticated/account.tsx`                   | nav item                                                        |
+| `frontend/src/routes/_authenticated/account/personality.tsx` (new) | the questionnaire page                                          |
+| `frontend/src/components/applications/generate-panel.tsx`          | zero-answers hint under the Personal-paragraph checkbox         |
+| `frontend/tests/lib/queries/personality.test.ts` (new)             | (AI, on disk) pure-helper tests                                 |
 
 ## the code
 
@@ -165,7 +165,8 @@ export function useUpdateAnswers() {
 export function useRebuildDossier() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api<{ dossier: string }>(`${URL}rebuild/`, { method: "POST" }),
+    mutationFn: () =>
+      api<{ dossier: string }>(`${URL}rebuild/`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }
@@ -250,8 +251,9 @@ function PersonalityPage() {
         <h2 className="text-lg font-medium">Personality</h2>
         <p className="text-sm text-muted-foreground">
           Oblique questions, on purpose — answer the ones that spark something
-          (about five is plenty, one tweet each). A small model distils them into
-          the dossier the cover letter's personal paragraph grounds "you" in.
+          (about five is plenty, one tweet each). A small model distils them
+          into the dossier the cover letter's personal paragraph grounds "you"
+          in.
         </p>
       </div>
 
@@ -312,8 +314,8 @@ function PersonalityPage() {
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            No dossier yet — save some answers first. It is built automatically on
-            the next generation, or on demand here (one LLM call).
+            No dossier yet — save some answers first. It is built automatically
+            on the next generation, or on demand here (one LLM call).
           </p>
         )}
       </div>
@@ -338,14 +340,16 @@ Inside `GeneratePanel`, next to the other hooks (fetch only when the box is tick
 no personality request on plain page views):
 
 ```ts
-  const personality = usePersonality(personalParagraph);
-  const hint = personalityHint(personalParagraph, personality.data);
+const personality = usePersonality(personalParagraph);
+const hint = personalityHint(personalParagraph, personality.data);
 ```
 
 Render right after the existing "cannot web-search" hint paragraph:
 
 ```tsx
-        {hint && <p className="text-xs text-amber-700">{hint}</p>}
+{
+  hint && <p className="text-xs text-amber-700">{hint}</p>;
+}
 ```
 
 (Amber, not muted: unlike the web-search case this one is fixable before burning a
@@ -353,8 +357,8 @@ run.)
 
 ## tests (already on disk, land red)
 
-| file                                            | covers                                                                                                                                                       |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| file                                             | covers                                                                                                                                                                                                                |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `frontend/tests/lib/queries/personality.test.ts` | `cleanAnswers` trim/drop; `answeredCount`; `overlongAnswers` boundary at 280; `answersDirty` incl. blank-only edits; `dossierState` none/stale/fresh matrix; `personalityHint` unticked/loading/zero-answers/answered |
 
 The module doesn't exist yet, so the whole (new) file is red on import — no
@@ -378,4 +382,8 @@ Run: `cd frontend && npx vitest run tests/lib/queries/personality.test.ts`
 
 ## Results
 
-_(filled by Lukas after testing — raw test output, observed issues, what works)_
+- thinking about extending the questionair.
+  - in the frist run it has been very coporate
+  - now it is very non coporate leading to very non corporate dossiers
+  - maybe middle ground is good. the more question the better.
+- in the frontedn while creating the dossier in the profile, there is not clear what model is generating it. let the user pick and choose like in the application

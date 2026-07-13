@@ -1,21 +1,22 @@
-"""Seed the shared system defaults: the Domain taxonomy + the "default" ApplicationLayout.
+"""Seed the shared system defaults: the Domain taxonomy, the personality-question pool, and
+the default ApplicationLayouts.
 
-Rows owned by the ``settings.SYSTEM_USER_USERNAME`` user are read-only defaults
-visible to every user (see ``SystemScopedManager.for_user``). There is no fixture
-or data migration for them — this command is the single, idempotent source of
-truth, so a freshly deployed box gets the same picker defaults as dev.
+Rows owned by the ``settings.SYSTEM_USER_USERNAME`` user are read-only defaults visible to
+every user (see ``SystemScopedManager.for_user``). There is no fixture or data migration for
+them — this command is the single, idempotent source of truth, so a freshly deployed box gets
+the same picker/questionnaire defaults as dev.
 
-The default layout also carries its template file (``jac/resources/default_layout.json``,
-a declarative spec the frontend react-pdf renderer consumes); it backs the
-``JobApplication.layout`` field default / SET_DEFAULT target.
+The default layouts also carry their template file (``jac/resources/*.json``, a declarative
+spec the frontend react-pdf renderer consumes); they back the ``JobApplication.layout`` field
+default / SET_DEFAULT target.
 
 Usage:
-    python manage.py seed_default_domains          # create anything that is missing
-    python manage.py seed_default_domains --prune   # also delete default domains not in this list
+    python manage.py seed_system_defaults          # create anything that is missing
+    python manage.py seed_system_defaults --prune   # also delete system rows not in these lists
 
-Re-runnable: existing rows are left untouched; only missing ones are created.
-Domains are kept deliberately *broad* (industries / sectors) — a user adds their
-own narrower tags on top.
+Re-runnable: existing rows are left untouched (question wording/order is re-synced from
+PERSONALITY_QUESTIONS); only missing ones are created. Domains are kept deliberately *broad*
+(industries / sectors) — a user adds their own narrower tags on top.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
+from spa.models import PersonalityQuestion
+from spa.personality_questions import PERSONALITY_QUESTIONS
 
 from jac.models import ApplicationLayout, Domain
 
@@ -118,6 +121,30 @@ class Command(BaseCommand):
                 pruned.append(d.name)
                 d.delete()
 
+        q_created = []
+        for i, q in enumerate(PERSONALITY_QUESTIONS):
+            obj, was_created = PersonalityQuestion.objects.get_or_create(
+                user=system,
+                slug=q["slug"],
+                defaults={"prompt": q["prompt"], "order": i},
+            )
+            if was_created:
+                q_created.append(q["slug"])
+            elif obj.prompt != q["prompt"] or obj.order != i:
+                # let the wording/order be re-tuned in PERSONALITY_QUESTIONS and re-seeded
+                obj.prompt = q["prompt"]
+                obj.order = i
+                obj.save(update_fields=["prompt", "order"])
+
+        q_pruned = []
+        if options["prune"]:
+            wanted_slugs = {q["slug"] for q in PERSONALITY_QUESTIONS}
+            for q in PersonalityQuestion.objects.filter(user=system).exclude(
+                slug__in=wanted_slugs
+            ):
+                q_pruned.append(q.slug)
+                q.delete()
+
         for name, resource in DEFAULT_LAYOUTS:
             layout, layout_created = ApplicationLayout.objects.get_or_create(
                 user=system, name=name
@@ -151,6 +178,17 @@ class Command(BaseCommand):
             self.stdout.write("  created: " + ", ".join(created))
         if pruned:
             self.stdout.write(self.style.WARNING("  pruned: " + ", ".join(pruned)))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Personality questions: "
+                f"{PersonalityQuestion.objects.filter(user=system).count()} total, "
+                f"{len(q_created)} created."
+            )
+        )
+        if q_created:
+            self.stdout.write("  created: " + ", ".join(q_created))
+        if q_pruned:
+            self.stdout.write(self.style.WARNING("  pruned: " + ", ".join(q_pruned)))
         self.stdout.write(
             self.style.SUCCESS(
                 f"Default layout {layout.name!r}: {layout_action} ({layout.template.name})"

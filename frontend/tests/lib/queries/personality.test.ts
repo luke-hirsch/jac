@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   MAX_ANSWER_LEN,
+  MAX_QUESTION_LEN,
   answeredCount,
   answersDirty,
   cleanAnswers,
   dossierState,
   overlongAnswers,
   personalityHint,
+  validateQuestionPrompt,
   type PersonalityRow,
 } from "@/lib/queries/personality";
 
@@ -22,7 +24,14 @@ function row(over: Partial<PersonalityRow> = {}): PersonalityRow {
     id: 1,
     answers: {},
     dossier: "",
-    questions: [{ id: "flow", prompt: "What do you lose track of time doing?" }],
+    questions: [
+      {
+        pk: 1,
+        slug: "flow",
+        prompt: "What do you lose track of time doing?",
+        editable: false,
+      },
+    ],
     answers_updated_at: null,
     dossier_built_at: null,
     updated_at: "2026-07-12T00:00:00Z",
@@ -110,5 +119,21 @@ describe("personalityHint", () => {
   });
   it("silent once any answer exists", () => {
     expect(personalityHint(true, row({ answers: { flow: "code" } }))).toBeNull();
+  });
+});
+
+describe("validateQuestionPrompt", () => {
+  it("rejects an empty or whitespace-only prompt", () => {
+    expect(validateQuestionPrompt("")).toMatch(/prompt/i);
+    expect(validateQuestionPrompt("   ")).toMatch(/prompt/i);
+  });
+  it("rejects a prompt over the cap — exactly at the cap is fine", () => {
+    expect(validateQuestionPrompt("x".repeat(MAX_QUESTION_LEN + 1))).toMatch(
+      new RegExp(String(MAX_QUESTION_LEN)),
+    );
+    expect(validateQuestionPrompt("x".repeat(MAX_QUESTION_LEN))).toBeNull();
+  });
+  it("accepts a normal question", () => {
+    expect(validateQuestionPrompt("What drives you?")).toBeNull();
   });
 });
