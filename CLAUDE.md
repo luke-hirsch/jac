@@ -16,15 +16,15 @@ portfolio is the product; jac feeds it.
 
 # layout
 
-| path                     | what                                                                                   |
-| ------------------------ | -------------------------------------------------------------------------------------- |
-| `backend/`               | Django project, mostly headless via DRF                                                |
-| `backend/lukehirsch/`    | Django config package — `settings.py`, urls, asgi/wsgi, shared middleware/permissions  |
-| `backend/jac/`           | the CV tool — career-DB models, CRUD API, and the CV tailoring pipeline (`cv.py`)      |
-| `backend/llm_connector/` | reusable multi-provider LLM connector with per-user encrypted configs                  |
-| `backend/spa/`           | portfolio / per-visitor profile app                                                    |
-| `frontend/`              | Vite + React + TypeScript SPA                                                           |
-| `config/`                | nginx config                                                                           |
+| path                     | what                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `backend/`               | Django project, mostly headless via DRF                                               |
+| `backend/lukehirsch/`    | Django config package — `settings.py`, urls, asgi/wsgi, shared middleware/permissions |
+| `backend/jac/`           | the CV tool — career-DB models, CRUD API, and the CV tailoring pipeline (`cv.py`)     |
+| `backend/llm_connector/` | reusable multi-provider LLM connector with per-user encrypted configs                 |
+| `backend/spa/`           | portfolio / per-visitor profile app                                                   |
+| `frontend/`              | Vite + React + TypeScript SPA                                                         |
+| `config/`                | nginx config                                                                          |
 
 don't maintain a deep file tree here — it drifts. open the dir.
 
@@ -43,7 +43,8 @@ don't maintain a deep file tree here — it drifts. open the dir.
 
 # current state
 
-shipped (lean inventory — mechanism + *why* live in the code and the linked memories, not here):
+shipped (lean inventory — mechanism + _why_ live in the code and the linked memories, not here):
+
 - **auth / MFA** — full flow, backend + frontend.
 - **jac career DB** — models (`Domain`, `Location`, `Skill`, `Job`, `Project`, `Education`,
   `Certification`, `Language`, `ResumeSnippet`) + full CRUD API/serializers + frontend UI.
@@ -60,7 +61,7 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
 - **jac eval tooling** — `cv_test` / `cv_eval` commands (model×grade matrix, `--all-models`,
   interactive pick, colour-graded `findings.md` artifacts; `--analyze` → `TheJudge` + `TheAnalyst`).
 - **jac cover-letter** (`cover_letter.py`, `llm_prompts.py`) — `SnippetSelector` picks intro/body/
-  closing `ResumeSnippet`s by relevance; `CoverLetterWriter` only *weaves* (posting stripped — the
+  closing `ResumeSnippet`s by relevance; `CoverLetterWriter` only _weaves_ (posting stripped — the
   fabrication vector); bilingual `de`/`en` furniture; `JobPosting`/`JobPostAddress` +
   `AddressExtract`. Two orthogonal metrics: **`ai_share`** (provenance) and **`FaithfulnessCheck`**
   grounding (`count=None` on failure, never 0). `cover_letter` command smoke-tests a corpus.
@@ -71,8 +72,8 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   `PersonalParagraphWriter`) — one researched, company-specific paragraph (web research × personality
   dossier) after the body. Opt-in (`--personal`), **capability-driven not grade-gated**: real only
   when grade≠light + alias can web-search + research ok + personality present, else a loud
-  `PERSONAL_STUB`. Own `ParagraphGroundingCheck`; words fold into `ai_share`. *(Tests green; live LLM
-  verification pending.)* See [[project-purpose-cv-showcase]].
+  `PERSONAL_STUB`. Own `ParagraphGroundingCheck`; words fold into `ai_share`. _(Tests green; live LLM
+  verification pending.)_ See [[project-purpose-cv-showcase]].
 - **jac frontend LLM-config tab** (`frontend/src/lib/queries/llm.ts`,
   `frontend/src/routes/_authenticated/account/llm.tsx`) — account tab doing owner-scoped CRUD over
   `/api/llm/configs/` (the aliases the pipeline resolves through). Picking a commercial provider
@@ -82,7 +83,7 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
   [[frontend-test-layout]].
 - **jac generation loop — real pipeline, end to end, hardened** (`jac/tasks.py`, `jac/views.py`,
   `jac/consumers.py`, frontend `routes/_authenticated/applications/`) — REST `POST
-  /api/jac/generations/` (application pk) enqueues Celery `generate_run`, which runs the **real**
+/api/jac/generations/` (application pk) enqueues Celery `generate_run`, which runs the **real**
   CV + cover-letter pipeline and streams `snapshot`/`progress`/`done`/`failed` over the `gen_<pk>`
   WS (session-auth + ownership); REST `GET` rehydrates; the frontend renders the tailored CV +
   letter (ai_share/grounding badges, personal-paragraph stub styling) and applies runs to the
@@ -119,7 +120,7 @@ shipped (lean inventory — mechanism + *why* live in the code and the linked me
 1. **portfolio generator** — per-visitor portfolio rendering, frontend + backend.
 2. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
    response, so a spurious small-model refusal ("I can't assist…") can become the letter body.
-3. **self-hosted web-search agent** (parked) — let a self-hosted *standard* run produce a real
+3. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
    (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
@@ -154,7 +155,7 @@ conversation runs through these phases:
 
 ## who does what (default-strict)
 
-- **AI**: diagnoses (probes / experiments to decide *what* to build), and writes code-bearing
+- **AI**: diagnoses (probes / experiments to decide _what_ to build), and writes code-bearing
   setup guides + tests. AI also maintains the Claude-meta docs (this file, `.claude/skills/*`,
   memory, plan files).
 - **human (Lukas)**: types the application/repo **non-test** source code, runs it, and does **all**
@@ -164,9 +165,9 @@ conversation runs through these phases:
 - **tests are the AI's to write** — actual files on disk, landed before the human codes and starting
   red (see phase 5). the human still runs and debugs them.
 
-**override**: the human can explicitly open a *volatile / exploration phase* ("just code it",
-"spike this") — then the AI may write source directly. this is opt-in per task, not the default;
-testing still stays with the human.
+**override**: the human can explicitly open a _volatile / exploration phase_ ("just code it",
+"spike this") — then the AI may write source directly. for that ai will switch on its own git branch this is opt-in per task, not the default;
+testing adn merging still stays with the human.
 
 > note: "human types the code" governs **application/repo source**. Claude-meta files (CLAUDE.md,
 > skills, memory, plans) are written by the AI directly.
