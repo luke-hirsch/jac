@@ -2,4 +2,9 @@ from django.apps import AppConfig
 
 
 class JacConfig(AppConfig):
-    name = 'jac'
+    name = "jac"
+
+    def ready(self):
+        from jac import signals
+
+        signals.connect()

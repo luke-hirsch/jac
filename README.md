@@ -11,25 +11,26 @@ Job hunting is repetitive. You copy-paste your CV, tweak bullet points, forget t
 **Career database** — a structured store of every job, project, skill, certification, education, and language you've had. Not a flat document — a queryable DB you own.
 
 **CV pipeline** — given a job posting, JAC:
+
 1. Runs a deterministic keyword filter (fast, no API calls)
 2. Scores every entry with an LLM for relevance
 3. Ranks and tailors the shortlist using a deeper job analysis pass
 
-**Personalized portfolio links** — send `/for/acme-corp` on a business card, `/t/<token>` in a DM. Each link shows a curated view of your work, tuned for the recipient. *(in progress)*
+**Personalized portfolio links** — send `/for/acme-corp` on a business card, `/t/<token>` in a DM. Each link shows a curated view of your work, tuned for the recipient. _(in progress)_
 
-**Application automation** — cover letter drafting, follow-up reminders via Celery. *(planned)*
+**Application automation** — cover letter drafting, follow-up reminders via Celery. _(planned)_
 
 ---
 
 ## Stack
 
-| Layer | Tech |
-|-------|------|
-| Backend | Django 6, Django REST Framework |
-| Frontend | React 19 + Vite + TypeScript |
-| Database | SQLite → PostgreSQL |
-| LLM | Multi-provider connector (Anthropic, OpenAI, Google, Ollama) |
-| Task queue | Celery + Redis/Valkey (async CV/letter generation) |
+| Layer      | Tech                                                         |
+| ---------- | ------------------------------------------------------------ |
+| Backend    | Django 6, Django REST Framework                              |
+| Frontend   | React 19 + Vite + TypeScript                                 |
+| Database   | SQLite → PostgreSQL                                          |
+| LLM        | Multi-provider connector (Anthropic, OpenAI, Google, Ollama) |
+| Task queue | Celery + Redis/Valkey (async CV/letter generation)           |
 
 ---
 
@@ -117,6 +118,10 @@ cd backend && python manage.py runserver
 
 # 4. Generation worker — REQUIRED for CV / cover-letter runs
 cd backend && celery -A lukehirsch worker -l info
+#    With VECTOR_STORE set to a path (embedded Qdrant), the worker must be the
+#    ONLY process touching that path: run it --pool=solo.
+cd backend && celery -A lukehirsch worker -l info --pool=solo
+
 ```
 
 ```bash
@@ -125,6 +130,8 @@ cd frontend
 npm install
 npm run dev
 ```
+
+Vector store (optional): set VECTOR_STORE to enable the RAG read path — a filesystem path (e.g. ~/.jac-qdrant) runs Qdrant embedded (single process: worker only, --pool=solo), an http(s):// URL targets a Qdrant server (docker-compose phase; dashboard at :6333/dashboard). Unset = every run embeds the full corpus per request. Backfill with python manage.py vector_sync (stop the worker first in embedded mode — the dir is locked).
 
 ### Smoke-test the CV pipeline
 

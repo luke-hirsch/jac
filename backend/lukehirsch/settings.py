@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     # local apps
     "llm_connector",
+    "vector_store",
     "jac",
     "spa",
 ]
@@ -210,6 +211,7 @@ LLM_URL_ALLOW_PRIVATE = env_bool("LLM_URL_ALLOW_PRIVATE", False)
 
 LLM_ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", DEV_ENCRYPTION_KEY)
 
+VECTOR_STORE = os.getenv("VECTOR_STORE", "")
 
 SYSTEM_USER_USERNAME = "system"
 

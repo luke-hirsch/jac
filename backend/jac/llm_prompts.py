@@ -48,6 +48,8 @@ class Embed:
     # None = the rung IS the grade (writers/selectors): it always runs the run's alias.
     PREFERRED_GRADE: str | None = "light"
 
+    DOC_KIND = "cv"
+
     _EMBED_INSTRUCT = (
         "Given a job posting, retrieve the CV entries most relevant to it."
     )
@@ -71,7 +73,23 @@ class Embed:
 
     def ranked_vectors(self) -> list[dict]:
         """Like ranked_entries, but keeps each entry's raw vector (`vec`) so callers
-        can measure entry-to-entry similarity (the cover-letter MMR pick)."""
+        can measure entry-to-entry similarity (the cover-letter MMR pick).
+
+        Store-first: when the vector store is enabled, doc vectors come from Qdrant
+        and only the query is embedded (jac/vectors.py); on None — store off, no
+        user, or any store failure — the classic full per-run embed below runs."""
+        from jac.vectors import ranked_via_store
+
+        stored = ranked_via_store(
+            self._query_text(),
+            self.entries,
+            doc=self.DOC_KIND,
+            user=self.user,
+            alias=self.alias,
+        )
+        if stored is not None:
+            return stored
+
         vectors = self._query()
 
         if len(vectors) != len(self.entries) + 1:
@@ -82,13 +100,17 @@ class Embed:
             for e, dv in zip(self.entries, doc_vecs)
         ]
 
-    def _query(self) -> list:
-        """string concatonate the job post text with each entry text"""
+    def _query_text(self) -> str:
+        """The instructed query string — the store path embeds ONLY this."""
+        return f"Instruct: {self._EMBED_INSTRUCT}\nQuery:{self._cap_job_post()}\n"
 
-        inputs = [
-            f"Instruct: {self._EMBED_INSTRUCT}\nQuery:{self._cap_job_post()}\n"
-        ] + self.flatten_entries
-        return embed(inputs=inputs, alias=self.alias, user=self.user)
+    def _query(self) -> list:
+        """Classic path: embed the query + every entry text in one batch."""
+        return embed(
+            inputs=[self._query_text()] + self.flatten_entries,
+            alias=self.alias,
+            user=self.user,
+        )
 
     def _cap_job_post(self) -> str:
         """Cap the job-post text so (entries + post) fits _MAX_TOKENS. Hard char-truncation
@@ -117,6 +139,7 @@ class SnippetEmbed(Embed):
     _EMBED_INSTRUCT = (
         "Given a job posting, retrieve the resume snippets most relevant to it."
     )
+    DOC_KIND = "snippet"
 
 
 class Conversational:

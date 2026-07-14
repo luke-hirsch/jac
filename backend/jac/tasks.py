@@ -270,3 +270,28 @@ def generate_run(run_id: int) -> None:
     except Exception as exc:  # noqa: BLE001 — surface any pipeline failure to the client
         logger.exception("generate_run %s failed", run_id)
         _fail(run, str(exc))
+
+
+@shared_task
+def sync_user_vectors(user_id: int) -> None:
+    """Ingest-on-write for the vector store: refresh one user's corpora (CV
+    entries + snippets). Runs on the FULL sets, so orphan deletion is safe here —
+    the query-time reconcile only ever upserts. No-op when the store is off;
+    reconcile logs its own failures, so a broken store never errors the task."""
+    from vector_store import store
+
+    from jac import vectors
+
+    if not store.is_enabled():
+        return
+    alias = vectors.sync_alias(user_id)
+    vectors.reconcile(
+        user_id, alias, vectors.DOC_CV, vectors.cv_corpus(user_id), delete_orphans=True
+    )
+    vectors.reconcile(
+        user_id,
+        alias,
+        vectors.DOC_SNIPPET,
+        vectors.snippet_corpus(user_id),
+        delete_orphans=True,
+    )

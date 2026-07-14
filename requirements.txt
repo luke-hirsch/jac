@@ -3,13 +3,14 @@ celery
 channels
 daphne
 Django
-"django-allauth[mfa]"
+django-allauth[mfa]
 django-cors-headers
 django-filter
 djangorestframework
 drf-spectacular
 Pillow
 redis
+qdrant-client
 
 # LLM provider SDKs — install only what you use
 anthropic           # provider: anthropic
