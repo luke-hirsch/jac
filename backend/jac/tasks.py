@@ -21,6 +21,7 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from llm_connector.base import LLMTransportError
 from llm_connector.client import retry_reporter
 from llm_connector.conf import get_alias_strength, pick_alias
@@ -54,6 +55,13 @@ _ADDRESS_FIELDS = (
     "email",
     "phone",
 )
+
+
+def _parse_deadline(value: str):
+    """Best-effort `date` from the extractor's `deadline` line — we instruct ISO
+    (YYYY-MM-DD), so `parse_date` handles the happy path and returns None on anything else."""
+    value = (value or "").strip()
+    return parse_date(value) if value else None
 
 
 def publish_event(run_id: int, payload: dict) -> None:
@@ -169,6 +177,10 @@ def generate_run(run_id: int) -> None:
                 job_posting=jp,
                 defaults={f: extracted.get(f, "") for f in _ADDRESS_FIELDS},
             )
+            deadline = _parse_deadline(extracted.get("deadline", ""))
+            if deadline and application.deadline is None:
+                application.deadline = deadline
+                application.save(update_fields=["deadline", "updated_at"])
 
             # 3. Build the cover letter.
             _progress(

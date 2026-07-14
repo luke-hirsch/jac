@@ -131,7 +131,10 @@ export function ApplicationContentCard({
     JSON.stringify(letterMeta) !== serverMeta;
 
   function onSave() {
-    if ((status === "sent" || status === "follow_up") && hasStub(coverLetter)) {
+    if (
+      (app.status === "sent" || app.status === "follow_up") &&
+      hasStub(coverLetter)
+    ) {
       toast.warning(
         "The letter still contains the personal-paragraph stub — it is not sendable.",
       );
@@ -141,7 +144,6 @@ export function ApplicationContentCard({
         id: app.id,
         body: {
           cover_letter: coverLetter,
-          status,
           cv_content: cvDraft,
           letter_meta: letterMeta,
         },

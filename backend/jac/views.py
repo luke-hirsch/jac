@@ -22,15 +22,14 @@ from celery import current_app as celery_current_app
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
+from llm_connector import can_web_search
+from llm_connector.conf import get_alias_strength
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from llm_connector import can_web_search
-from llm_connector.conf import get_alias_strength
 
 from jac.cv import CV
 from jac.llm_prompts import AddressSearch, LetterChat, ParagraphRewrite
@@ -47,6 +46,7 @@ from jac.models import (
     Project,
     ResumeSnippet,
     Skill,
+    TransitionError,
 )
 from jac.serializers import (
     ApplicationLayoutSerializer,
@@ -513,10 +513,49 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         ).search()
         if not result["ok"]:
             return Response(
-                {"detail": "No address found — try another model or fill it in by hand."},
+                {
+                    "detail": "No address found — try another model or fill it in by hand."
+                },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response({"address": result["address"], "sources": result["sources"]})
+
+    @extend_schema(
+        request=inline_serializer(
+            "ApplicationTransition",
+            {
+                "to": serializers.ChoiceField(JobApplication.StatusChoices.values),
+                "delivery_method": serializers.CharField(
+                    required=False, allow_blank=True
+                ),
+                "response_outcome": serializers.CharField(
+                    required=False, allow_blank=True
+                ),
+                "note": serializers.CharField(required=False, allow_blank=True),
+            },
+        ),
+        responses=JobApplicationSerializer,
+    )
+    @action(detail=True, methods=["post"])
+    def transition(self, request, pk=None):
+        """Advance the application through its lifecycle. Legal moves live in
+        `JobApplication.TRANSITIONS`; an unknown or illegal target is a 400. The model stamps
+        the side-effect fields (approved_at / sent_at / responded_at, delivery_method,
+        response_outcome, note) — `status` itself is read-only over plain PATCH."""
+        application = self.get_object()
+        try:
+            application.apply_transition(
+                request.data.get("to"),
+                delivery_method=(request.data.get("delivery_method") or "").strip(),
+                response_outcome=(request.data.get("response_outcome") or "").strip(),
+                note=(request.data.get("note") or "").strip(),
+            )
+        except TransitionError as exc:
+            return Response({"to": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        application.save()
+        return Response(
+            JobApplicationSerializer(application, context={"request": request}).data
+        )
 
 
 class GenerationRunViewSet(

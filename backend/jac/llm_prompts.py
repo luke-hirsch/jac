@@ -455,14 +455,16 @@ class AddressExtract:
         "phone",
         "title",
         "language",
+        "deadline",
     )
     _INSTRUCTION = (
         "Extract the EMPLOYER's contact details from the job posting below. Output one\n"
         "'<field>: <value>' per line, using exactly these field names:\n"
         "  company, contact_name, street, address_line2, zip, city, country, email, phone,\n"
-        "  title, language\n"
+        "  title, language, deadline\n"
         "  - title = the role being advertised.\n"
         "  - language = ISO-639-1 code of the posting language (en, de, …).\n"
+        "  - deadline = the application deadline as an ISO date (YYYY-MM-DD), if stated.\n"
         "Omit a line entirely if the posting does not state that field — never guess.\n"
         "No prose, no markdown, no JSON."
     )
@@ -796,7 +798,9 @@ class LetterCritic:
     memory.
     """
 
-    PREFERRED_GRADE: str | None = "standard"  # review, not composition — mid tier is enough
+    PREFERRED_GRADE: str | None = (
+        "standard"  # review, not composition — mid tier is enough
+    )
 
     _INSTRUCTION = (
         "You are reviewing the BODY of a job-application cover letter that was written "
@@ -921,7 +925,9 @@ class ParagraphGroundingCheck:
     truth is RESEARCH + PERSONALITY (never snippets, never the posting). Same line format and the
     same honesty rule: count=None on any audit failure, never 0."""
 
-    PREFERRED_GRADE: str | None = "standard"  # audit, not composition — mid tier is enough
+    PREFERRED_GRADE: str | None = (
+        "standard"  # audit, not composition — mid tier is enough
+    )
 
     _INSTRUCTION = (
         "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "

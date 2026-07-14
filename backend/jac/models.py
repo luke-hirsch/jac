@@ -61,6 +61,10 @@ def normalize_grade(value: str | None) -> str:
     return str(value) if value in Grade.values else Grade.light
 
 
+class TransitionError(ValueError):
+    """Raised when an illegal `JobApplication` status transition is attempted."""
+
+
 class DomainManager(SystemScopedManager):
     """Domain manager — system-default scoping, see `SystemScopedManager`."""
 
@@ -495,10 +499,21 @@ class JobApplication(models.Model):
 
     class StatusChoices(models.TextChoices):
         draft = "draft", _("Draft")
+        approved = "approved", _("Approved")
         sent = "sent", _("Sent")
-        response = "response", _("Response from Posting")
         follow_up_sent = "follow_up", _("Follow-up sent")
+        response = "response", _("Response from Posting")
         inactive = "inactive", _("Inactive")
+
+    class DeliveryMethod(models.TextChoices):
+        email = "email", _("Email")
+        manual = "manual", _("Manual / download")
+
+    class ResponseOutcome(models.TextChoices):
+        interview = "interview", _("Interview")
+        offer = "offer", _("Offer")
+        rejected = "rejected", _("Rejected")
+        other = "other", _("Other")
 
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, related_name="job_applications"
@@ -518,6 +533,18 @@ class JobApplication(models.Model):
     status = models.CharField(
         max_length=12, choices=StatusChoices.choices, default=StatusChoices.draft
     )
+    deadline = models.DateField(null=True, blank=True)
+    delivery_method = models.CharField(
+        max_length=8, choices=DeliveryMethod.choices, blank=True
+    )
+    response_outcome = models.CharField(
+        max_length=12, choices=ResponseOutcome.choices, blank=True
+    )
+    notes = models.TextField(blank=True)
+    sent_by_system = models.BooleanField(default=False)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -534,6 +561,72 @@ class JobApplication(models.Model):
         ):
             self.status = self.StatusChoices.inactive
         return super().clean()
+
+    TRANSITIONS: dict[str, set[str]] = {
+        StatusChoices.draft: {StatusChoices.approved, StatusChoices.inactive},
+        StatusChoices.approved: {
+            StatusChoices.draft,
+            StatusChoices.sent,
+            StatusChoices.inactive,
+        },
+        StatusChoices.sent: {
+            StatusChoices.follow_up_sent,
+            StatusChoices.response,
+            StatusChoices.inactive,
+        },
+        StatusChoices.follow_up_sent: {
+            StatusChoices.response,
+            StatusChoices.inactive,
+        },
+        StatusChoices.response: {StatusChoices.inactive},
+        StatusChoices.inactive: {StatusChoices.draft},
+    }
+
+    def can_transition(self, to: str) -> bool:
+        return to in self.TRANSITIONS.get(self.status, set())
+
+    def apply_transition(
+        self,
+        to: str,
+        *,
+        delivery_method: str = "",
+        response_outcome: str = "",
+        note: str = "",
+    ) -> None:
+        """Validate + perform a status move, stamping the relevant side-effect fields.
+
+        Raises `TransitionError` for an unknown target, an illegal move, or an unknown
+        delivery-method / outcome value. Does **not** save — the caller persists, so a rejected
+        move leaves both the instance and the DB row untouched.
+        """
+        if to not in self.StatusChoices.values:
+            raise TransitionError(f"Unknown status {to!r}.")
+        if not self.can_transition(to):
+            raise TransitionError(
+                f"Cannot move an application from {self.status!r} to {to!r}."
+            )
+        now = timezone.now()
+        if to == self.StatusChoices.approved:
+            self.approved_at = now
+        elif to == self.StatusChoices.sent:
+            if delivery_method:
+                if delivery_method not in self.DeliveryMethod.values:
+                    raise TransitionError(
+                        f"Unknown delivery method {delivery_method!r}."
+                    )
+                self.delivery_method = delivery_method
+            self.sent_at = now
+        elif to == self.StatusChoices.response:
+            if response_outcome:
+                if response_outcome not in self.ResponseOutcome.values:
+                    raise TransitionError(
+                        f"Unknown response outcome {response_outcome!r}."
+                    )
+                self.response_outcome = response_outcome
+            if note:
+                self.notes = note
+            self.responded_at = now
+        self.status = to
 
 
 class GenerationRun(models.Model):

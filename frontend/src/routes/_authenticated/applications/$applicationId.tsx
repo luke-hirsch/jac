@@ -8,6 +8,7 @@ import { useFreshHighlight } from "@/components/applications/use-fresh-highlight
 import { useRunLifecycle } from "@/components/applications/use-run-lifecycle";
 import { editableBody } from "@/lib/letter-doc";
 import { useApplication } from "@/lib/queries/applications";
+import { LifecycleCard } from "@/components/applications/lifecycle-card";
 
 export const Route = createFileRoute(
   "/_authenticated/applications/$applicationId",
@@ -55,6 +56,7 @@ function ApplicationDetailPage() {
       <div className="grid items-start gap-6 lg:grid-cols-[2fr_3fr]">
         <div className="space-y-6">
           <PostingCard app={app.data} />
+          <LifecycleCard app={app.data} />
           <GeneratePanel
             app={app.data}
             activeRunId={runId}

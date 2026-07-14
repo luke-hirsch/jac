@@ -3,12 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
   STATUS_LABELS,
@@ -108,6 +103,11 @@ function ApplicationsPage() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2 text-sm">
+                    {a.deadline && (
+                      <span className="text-xs text-muted-foreground">
+                        due {new Date(a.deadline).toLocaleDateString()}
+                      </span>
+                    )}
                     <Badge variant="outline">{STATUS_LABELS[a.status]}</Badge>
                     <span className="text-xs text-muted-foreground">
                       {a.runs.length} run{a.runs.length === 1 ? "" : "s"} ·{" "}

@@ -600,12 +600,33 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "letter_meta",
             "layout",
             "status",
+            "deadline",
+            "delivery_method",
+            "response_outcome",
+            "notes",
+            "sent_by_system",
+            "approved_at",
+            "sent_at",
+            "responded_at",
             "runs",
             "created_at",
             "updated_at",
             "user",
         ]
-        read_only_fields = ["id", "posting_detail", "runs", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "posting_detail",
+            "runs",
+            "created_at",
+            "updated_at",
+            "status",
+            "delivery_method",
+            "response_outcome",
+            "sent_by_system",
+            "approved_at",
+            "sent_at",
+            "responded_at",
+        ]
         extra_kwargs = {"posting": {"required": False}}
 
     def __init__(self, *args, **kwargs):
