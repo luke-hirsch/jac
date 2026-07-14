@@ -41,6 +41,13 @@ def _language_name(code: str) -> str:
 
 
 class Embed:
+    # Every prompt class declares the model tier it ideally runs on. The orchestrators
+    # resolve it through `llm_connector.conf.pick_alias`: when the user pinned a
+    # favourite model for that tier the rung runs there, otherwise on the run's main
+    # alias — so a strong run keeps its support rungs off the expensive model.
+    # None = the rung IS the grade (writers/selectors): it always runs the run's alias.
+    PREFERRED_GRADE: str | None = "light"
+
     _EMBED_INSTRUCT = (
         "Given a job posting, retrieve the CV entries most relevant to it."
     )
@@ -123,6 +130,8 @@ class Conversational:
     (see the `no-json-llm-io` memory). Any failure returns [] -> CVFilter degrades to the
     standard rung.
     """
+
+    PREFERRED_GRADE: str | None = None  # the strong selector IS the grade
 
     _INSTRUCTION = (
         "You are a senior CV editor tailoring a ONE-PAGE CV to a specific job posting.\n"
@@ -217,6 +226,8 @@ class Instruct:
     works for Ollama / OpenAI / Anthropic configs. Any failure returns [] -> CVFilter degrades
     to light.
     """
+
+    PREFERRED_GRADE: str | None = None  # the standard scorer IS the grade
 
     _INSTRUCTION = (
         "You are screening CV entries for relevance to a job posting.\n"
@@ -428,6 +439,10 @@ class AddressExtract:
     reply -> {} so the caller proceeds with blanks (the renderer just omits missing lines).
     """
 
+    # Structured extraction — a mid-tier model reads a posting fine; no need to spend
+    # a strong run's tokens on it.
+    PREFERRED_GRADE: str | None = "standard"
+
     _FIELDS = (
         "company",
         "contact_name",
@@ -570,6 +585,11 @@ class CoverLetterWriter:
     apply. Any failure -> '' so the caller falls back to the raw stitched snippets.
     """
 
+    # One-page body window, shared by the standard/strong clauses: standard drifted
+    # short ("combined snippet length" shrinks with thin snippets), strong drifted
+    # long (no bound at all) — an explicit word window evens the grades out.
+    _TARGET_WORDS = (200, 280)
+
     _GRADE_CLAUSE = {
         "light": (
             "Join the snippets into one letter body. Keep their wording where you can; add only "
@@ -577,10 +597,11 @@ class CoverLetterWriter:
         ),
         "standard": (
             "Rework the snippets into a polished, cohesive letter body. This is a full "
-            "letter, not a summary: keep every concrete claim, keep roughly the combined "
-            "length of the snippets, and write one paragraph per theme with real "
-            "transitions. Reorder for flow and tighten wording where it repeats — but "
-            "never compress the substance away. Close with a brief final paragraph: a "
+            "letter, not a summary: aim for roughly {lo}-{hi} words, keep every concrete "
+            "claim, and write one paragraph per theme with real transitions — write the "
+            "themes out; never compress the substance away. If the snippets hold less "
+            "material than that, use everything they state and stop — never pad or "
+            "invent to reach the length. Close with a brief final paragraph: a "
             "call to action and genuine thanks for the consideration. Do not invent "
             "facts the snippets do not state."
         ),
@@ -591,7 +612,9 @@ class CoverLetterWriter:
             "titles, numbers, dates, achievements, and any other checkable fact — must come "
             "from the snippets; invent nothing. State each experience, project, and "
             "achievement at most once — never "
-            "retell the same fact in different words. Close with a brief final paragraph: "
+            "retell the same fact in different words. Aim for roughly {lo}-{hi} words — "
+            "the finished letter must fit one page; prefer dropping the weakest material "
+            "over compressing everything. Close with a brief final paragraph: "
             "a call to action and genuine thanks for the consideration."
         ),
     }
@@ -642,6 +665,8 @@ class CoverLetterWriter:
 
     def _prompt(self) -> str:
         clause = self._GRADE_CLAUSE.get(self.grade, self._GRADE_CLAUSE["standard"])
+        lo, hi = self._TARGET_WORDS
+        clause = clause.format(lo=lo, hi=hi)
         common = self._COMMON.format(language=_language_name(self.language))
         blocks = "\n\n".join(
             f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
@@ -696,6 +721,12 @@ class FaithfulnessCheck:
     failure it returns count=None ('not checked'), NEVER 0 — a failed audit must not be mistaken for
     a clean letter (the false-assurance trap this check exists to close).
     """
+
+    # Audits prefer a mid-tier model: fact-checking against given sources is cheaper
+    # work than composing, and it keeps a strong run's checks off the expensive model.
+    # (A 1B writer still can't fact-check itself — the pin, or verifier_alias, must
+    # point at something at least standard.)
+    PREFERRED_GRADE: str | None = "standard"
 
     _INSTRUCTION = (
         "You are fact-checking a COVER LETTER BODY against the candidate's authored SNIPPETS.\n"
@@ -764,6 +795,8 @@ class LetterCritic:
     honesty rule (listed lines win, unreadable -> None) — see the `no-json-llm-io`
     memory.
     """
+
+    PREFERRED_GRADE: str | None = "standard"  # review, not composition — mid tier is enough
 
     _INSTRUCTION = (
         "You are reviewing the BODY of a job-application cover letter that was written "
@@ -887,6 +920,8 @@ class ParagraphGroundingCheck:
     """Faithfulness audit for the personal paragraph. Mirrors FaithfulnessCheck, but the source of
     truth is RESEARCH + PERSONALITY (never snippets, never the posting). Same line format and the
     same honesty rule: count=None on any audit failure, never 0."""
+
+    PREFERRED_GRADE: str | None = "standard"  # audit, not composition — mid tier is enough
 
     _INSTRUCTION = (
         "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "

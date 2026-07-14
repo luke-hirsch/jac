@@ -23,7 +23,7 @@ from channels.layers import get_channel_layer
 from django.utils import timezone
 from llm_connector.base import LLMTransportError
 from llm_connector.client import retry_reporter
-from llm_connector.conf import get_alias_strength
+from llm_connector.conf import get_alias_strength, pick_alias
 
 from jac.cover_letter import CoverLetter, editable_body
 from jac.cv import CV
@@ -149,9 +149,18 @@ def generate_run(run_id: int) -> None:
             cv.apply_selection(cv.filter_cv(jp.posting_text, grade=grade, alias=alias))
 
             # 2. Extract the recipient address; refresh the persisted JobPosting.
+            # Support rung: runs on the user's pin for its preferred tier when present
+            # (a strong run shouldn't spend its expensive model on field extraction);
+            # a light run never routes onto a paid pin.
             _progress(run, "reading posting")
+            extract_alias = pick_alias(
+                AddressExtract.PREFERRED_GRADE,
+                fallback=alias,
+                user=user,
+                free_only=grade == "light",
+            )
             extracted = AddressExtract(
-                jp.posting_text, alias=alias, user=user
+                jp.posting_text, alias=extract_alias, user=user
             ).extract()
             jp.title = extracted.get("title", "") or jp.title
             jp.language = extracted.get("language", "en") or "en"

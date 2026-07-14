@@ -1,4 +1,4 @@
-from llm_connector.conf import get_embed_floors
+from llm_connector.conf import get_embed_floors, pick_alias
 
 from jac.llm_prompts import Conversational, Embed, Instruct
 from jac.models import Grade
@@ -44,6 +44,15 @@ class CVFilter:
         self.grade = grade
         self.user = user
         self.alias = alias
+        # The embed rung (light, and the fallback every rung degrades to) runs on the
+        # user's light pin when present — the main alias of a standard/strong run is
+        # usually no embedder at all. Light runs never route onto a paid pin.
+        self.embed_alias = pick_alias(
+            Embed.PREFERRED_GRADE,
+            fallback=alias,
+            user=user,
+            free_only=grade == Grade.light,
+        )
 
     def output(self) -> dict:
         """Return {section: [entry dicts + score], ...}, each section ranked desc.
@@ -67,7 +76,7 @@ class CVFilter:
 
     def _light_scores(self) -> dict:
         ranked = Embed(
-            self.job_post_text, self.entries, user=self.user, alias=self.alias
+            self.job_post_text, self.entries, user=self.user, alias=self.embed_alias
         ).ranked_entries()
         return {r["id"]: r["score"] for r in ranked} if ranked else {}
 
@@ -119,7 +128,8 @@ class CVFilter:
         unspecified sections keep the calibrated default.
         """
         defaults = {s: p["drop_below"] for s, p in self._SECTION_POLICY.items()}
-        return {**defaults, **get_embed_floors(self.alias, user=self.user)}
+        # Floors are an embedder property, so they follow the resolved embed alias.
+        return {**defaults, **get_embed_floors(self.embed_alias, user=self.user)}
 
     def _select(self, base: dict) -> dict:
         """Apply propagation + per-section drop. Empty base -> keep everything unscored."""

@@ -5,12 +5,15 @@ import {
   aliasesForGrade,
   buildStructuredExtra,
   checkResultLabel,
+  isFreeProvider,
   parseExtraJson,
+  pinnedAliasFor,
   toPayload,
   rowToState,
   switchProvider,
   type AliasInfo,
   type ConfigFormState,
+  type GradePins,
   type LLMConfigRow,
   type Provider,
 } from "@/lib/queries/llm";
@@ -235,6 +238,20 @@ describe("aliasesForGrade (grade ↔ model coupling)", () => {
     ]);
   });
 
+  it("light drops paid providers even when they can embed", () => {
+    const paidEmbedder: AliasInfo = {
+      alias: "paid-embed",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      strength: "light",
+      supports_embed: true,
+      supports_web_search: false,
+    };
+    expect(
+      aliasesForGrade([...infos, paidEmbedder], "light").map((a) => a.alias),
+    ).toEqual(["default"]);
+  });
+
   it("standard drops light-only aliases (the server default)", () => {
     expect(aliasesForGrade(infos, "standard").map((a) => a.alias)).toEqual([
       "opus",
@@ -250,6 +267,45 @@ describe("aliasesForGrade (grade ↔ model coupling)", () => {
 
   it("auto (blank grade) offers everything", () => {
     expect(aliasesForGrade(infos, "")).toEqual(infos);
+  });
+});
+
+describe("isFreeProvider", () => {
+  it("counts ollama and custom as free, the commercial trio as paid", () => {
+    expect(isFreeProvider("ollama")).toBe(true);
+    expect(isFreeProvider("custom")).toBe(true);
+    expect(isFreeProvider("anthropic")).toBe(false);
+    expect(isFreeProvider("openai")).toBe(false);
+    expect(isFreeProvider("google")).toBe(false);
+    expect(isFreeProvider("")).toBe(false);
+  });
+});
+
+describe("pinnedAliasFor (grade → pinned model default)", () => {
+  const allowed: AliasInfo[] = [
+    {
+      alias: "opus",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      strength: "strong",
+      supports_embed: false,
+      supports_web_search: true,
+    },
+  ];
+  const pins: GradePins = { light: null, standard: "mid", strong: "opus" };
+
+  it("returns the pin when it is offerable for the grade", () => {
+    expect(pinnedAliasFor("strong", pins, allowed)).toBe("opus");
+  });
+
+  it("ignores a pin the grade cannot offer (not in allowed)", () => {
+    expect(pinnedAliasFor("standard", pins, allowed)).toBeNull();
+  });
+
+  it("returns null for auto grade, unset pin, or pins not loaded", () => {
+    expect(pinnedAliasFor("", pins, allowed)).toBeNull();
+    expect(pinnedAliasFor("light", pins, allowed)).toBeNull();
+    expect(pinnedAliasFor("strong", undefined, allowed)).toBeNull();
   });
 });
 

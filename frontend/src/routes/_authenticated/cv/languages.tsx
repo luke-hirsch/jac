@@ -47,6 +47,8 @@ import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
 import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
+import { useLineSave } from "@/components/cv/use-line-save";
 const FLUENCY_LEVELS: { value: LanguageRow["fluency"]; label: string }[] = [
   { value: "native", label: "Native" },
   { value: "fluent", label: "Fluent" },
@@ -336,6 +338,9 @@ function LanguageEditor({
         favourite: false,
       };
 
+  // Edit mode saves line by line (create still submits the whole form).
+  const line = useLineSave<LanguageRow>("languages", row?.id ?? null, initial);
+
   const form = useForm({
     defaultValues: initial,
     validators: { onChange: zodValidator(schema) },
@@ -369,8 +374,10 @@ function LanguageEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -381,9 +388,10 @@ function LanguageEditor({
             <Label>Fluency</Label>
             <Select
               value={f.state.value}
-              onValueChange={(v) =>
-                f.handleChange(v as LanguageInput["fluency"])
-              }
+              onValueChange={(v) => {
+                f.handleChange(v as LanguageInput["fluency"]);
+                line.save(f.name, v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -396,6 +404,7 @@ function LanguageEditor({
                 ))}
               </SelectContent>
             </Select>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -410,23 +419,33 @@ function LanguageEditor({
                 rows={10}
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
                 className="font-mono text-sm"
               />
               <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
 
       <form.Field name="favourite">
         {(f) => (
-          <FavouriteField
-            checked={f.state.value}
-            onChange={f.handleChange}
-            hint="Pinned entries get a small ranking boost (max 3 languages)."
-          />
+          <div className="space-y-1">
+            <FavouriteField
+              checked={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+              hint="Pinned entries get a small ranking boost (max 3 languages)."
+            />
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
         )}
       </form.Field>
 
@@ -434,9 +453,15 @@ function LanguageEditor({
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={create.isPending || update.isPending}>
-          {row ? "Save" : "Create"}
-        </Button>
+        {row ? (
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        )}
       </div>
     </form>
   );

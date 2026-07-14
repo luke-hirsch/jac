@@ -5,6 +5,8 @@ import {
   ArrowUp,
   Eye,
   EyeOff,
+  Pin,
+  PinOff,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
@@ -37,6 +39,7 @@ import {
   moveEntry,
   removeEntry,
   toggleDeselect,
+  togglePin,
   type CvContent,
   type SectionKey,
 } from "@/lib/cv-doc";
@@ -317,6 +320,11 @@ function CvEditorSection({
                   <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
                 </span>
               )}
+              {e.pinned && (
+                <span title="Pinned — survives applying a new generation run.">
+                  <Pin className="h-3.5 w-3.5 shrink-0 text-sky-600" />
+                </span>
+              )}
               <span className={`flex-1 ${e.deselected ? "line-through" : ""}`}>
                 {row ? labelFor(section, row) : e.label}
                 {gone && (
@@ -345,6 +353,23 @@ function CvEditorSection({
                 onClick={() => onEdit((c) => moveEntry(c, section, i, 1))}
               >
                 <ArrowDown className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={e.pinned ? "Unpin" : "Pin"}
+                title={
+                  e.pinned
+                    ? "Unpin — a new run may replace this entry again."
+                    : "Pin — keep this entry when a new run is applied."
+                }
+                onClick={() => onEdit((c) => togglePin(c, section, i))}
+              >
+                {e.pinned ? (
+                  <PinOff className="h-4 w-4" />
+                ) : (
+                  <Pin className="h-4 w-4" />
+                )}
               </Button>
               <Button
                 variant="ghost"

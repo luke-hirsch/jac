@@ -63,6 +63,8 @@ import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
 import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
+import { useLineSave } from "@/components/cv/use-line-save";
 const PROFICIENCY: { value: SkillRow["proficiency"]; label: string }[] = [
   { value: "beginner", label: "Beginner" },
   { value: "intermediate", label: "Intermediate" },
@@ -510,6 +512,9 @@ function SkillEditor({
         favourite: false,
       };
 
+  // Edit mode saves line by line (create still submits the whole form).
+  const line = useLineSave<SkillRow>("skills", row?.id ?? null, initial);
+
   const form = useForm({
     defaultValues: initial,
     validators: { onChange: zodValidator(schema) },
@@ -544,8 +549,10 @@ function SkillEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -556,9 +563,10 @@ function SkillEditor({
             <Label>Proficiency</Label>
             <Select
               value={f.state.value}
-              onValueChange={(v) =>
-                f.handleChange(v as SkillInput["proficiency"])
-              }
+              onValueChange={(v) => {
+                f.handleChange(v as SkillInput["proficiency"]);
+                line.save(f.name, v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -571,6 +579,7 @@ function SkillEditor({
                 ))}
               </SelectContent>
             </Select>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -580,7 +589,10 @@ function SkillEditor({
             <Label>Category</Label>
             <Select
               value={f.state.value}
-              onValueChange={(v) => f.handleChange(v as SkillInput["category"])}
+              onValueChange={(v) => {
+                f.handleChange(v as SkillInput["category"]);
+                line.save(f.name, v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -593,6 +605,7 @@ function SkillEditor({
                 ))}
               </SelectContent>
             </Select>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -607,8 +620,12 @@ function SkillEditor({
                 type="date"
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value || null, f.state.meta.errors)
+                }
               />
               <FieldError errors={f.state.meta.errors} />
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -627,6 +644,9 @@ function SkillEditor({
                     e.target.value === "" ? null : Number(e.target.value),
                   )
                 }
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
               />
               <p className="text-xs text-muted-foreground">
                 Leave blank to auto-compute from first use / job history
@@ -635,6 +655,7 @@ function SkillEditor({
                 .
               </p>
               <FieldError errors={f.state.meta.errors} />
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -646,9 +667,13 @@ function SkillEditor({
             <Label>Certification</Label>
             <CertificationPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -657,7 +682,14 @@ function SkillEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Domains</Label>
-            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+            <DomainPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -668,12 +700,16 @@ function SkillEditor({
             <Label>Related skills</Label>
             <SkillPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
               excludeId={row?.id}
             />
             <p className="text-xs text-muted-foreground">
               Sibling skills (symmetric) — adjacent tools you'd group together.
             </p>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -684,13 +720,17 @@ function SkillEditor({
             <Label>Builds on</Label>
             <SkillPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
               excludeId={row?.id}
             />
             <p className="text-xs text-muted-foreground">
               Prerequisite skills this one rests on (directed, e.g. DRF builds on
               Django + Python).
             </p>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -705,23 +745,33 @@ function SkillEditor({
                 rows={10}
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
                 className="font-mono text-sm"
               />
               <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
 
       <form.Field name="favourite">
         {(f) => (
-          <FavouriteField
-            checked={f.state.value}
-            onChange={f.handleChange}
-            hint="Pinned entries get a small ranking boost (max 10 skills)."
-          />
+          <div className="space-y-1">
+            <FavouriteField
+              checked={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+              hint="Pinned entries get a small ranking boost (max 10 skills)."
+            />
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
         )}
       </form.Field>
 
@@ -729,9 +779,15 @@ function SkillEditor({
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={create.isPending || update.isPending}>
-          {row ? "Save" : "Create"}
-        </Button>
+        {row ? (
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        )}
       </div>
     </form>
   );

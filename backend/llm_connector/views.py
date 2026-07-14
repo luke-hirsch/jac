@@ -21,7 +21,7 @@ from rest_framework.views import APIView
 from llm_connector.base import LLMAdapter
 from llm_connector.client import LLMClient
 from llm_connector.conf import FALLBACK_ALIAS, get_alias_config, get_alias_strength
-from llm_connector.models import LLMConfig, LLMRequestLog
+from llm_connector.models import LLMConfig, LLMGradePin, LLMRequestLog
 from llm_connector.registry import get_adapter_class
 from llm_connector.serializers import LLMConfigSerializer, LLMRequestLogSerializer
 
@@ -79,6 +79,60 @@ def _adapter_capabilities(provider: str) -> tuple[bool, bool]:
         cls.embed is not LLMAdapter.embed,
         bool(getattr(cls, "supports_web_search", False)),
     )
+
+
+class LLMPinView(APIView):
+    """The user's per-strength favourite models ("pins"), as one dict.
+
+    GET  -> {"light": alias | null, "standard": …, "strong": …}
+    PUT  {"strength": "<tier>", "alias": "<alias>" | ""} — upserts the tier's pin;
+         a blank alias clears it. The alias must be one of the user's configured
+         aliases or the "default" fallback. Response: the full pins dict.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def _pins(self, user) -> dict:
+        stored = dict(
+            LLMGradePin.objects.filter(user=user).values_list("strength", "alias")
+        )
+        return {s: stored.get(s) for s in LLMGradePin.Strength.values}
+
+    @extend_schema(
+        responses=OpenApiResponse(description='{"light": alias|null, "standard": …, "strong": …}')
+    )
+    def get(self, request):
+        return Response(self._pins(request.user))
+
+    @extend_schema(
+        request=None,
+        responses=OpenApiResponse(description="the full pins dict after the change"),
+    )
+    def put(self, request):
+        strength = request.data.get("strength")
+        alias = (request.data.get("alias") or "").strip()
+        if strength not in LLMGradePin.Strength.values:
+            return Response(
+                {"strength": [f"Must be one of {LLMGradePin.Strength.values}."]},
+                status=400,
+            )
+        if alias:
+            known = set(
+                LLMConfig.objects.filter(user=request.user).values_list(
+                    "alias", flat=True
+                )
+            )
+            known.add(FALLBACK_ALIAS)
+            if alias not in known:
+                return Response(
+                    {"alias": ["Not one of your configured aliases."]}, status=400
+                )
+            LLMGradePin.objects.update_or_create(
+                user=request.user, strength=strength, defaults={"alias": alias}
+            )
+        else:
+            LLMGradePin.objects.filter(user=request.user, strength=strength).delete()
+        return Response(self._pins(request.user))
 
 
 class LLMAliasListView(APIView):

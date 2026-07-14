@@ -7,6 +7,7 @@ import {
   letterMetaFromResult,
   type LetterMeta,
 } from "@/lib/letter-doc";
+import { mergePinned, type CvContent } from "@/lib/cv-doc";
 import type { ChatPayload } from "@/lib/letter-chat";
 
 export type ApplicationStatus =
@@ -67,12 +68,15 @@ export function toApplicationPayload(postingText: string): {
   return { posting_text: postingText.trim() };
 }
 
-/** The PATCH that "applies" a finished run's result onto the application. */
+/** The PATCH that "applies" a finished run's result onto the application.
+ *  `currentCv` (the application's stored cv_content) donates its pinned
+ *  entries — pins survive re-generation. */
 export function runToApplicationPatch(
   result: TailoredResult,
+  currentCv?: CvContent,
 ): ApplicationPatch {
   return {
-    cv_content: result.cv,
+    cv_content: currentCv ? mergePinned(currentCv, result.cv) : result.cv,
     cover_letter: editableBody(result.cover_letter),
     letter_meta: letterMetaFromResult(result.cover_letter),
   };

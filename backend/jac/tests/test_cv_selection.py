@@ -324,6 +324,61 @@ class CVFilterRoutingTests(TestCase):
         self.assertEqual(out["job"][0]["score"], 0.9)  # cosine -> light path
 
 
+class CVFilterEmbedPinTests(TestCase):
+    """The embed rung resolves through the user's light pin: a standard/strong run's
+    fallback embedding (and a light run's primary one) runs on the pinned embedder,
+    not the main alias — a light run refuses a paid pin."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth.models import User
+        from llm_connector.models import LLMConfig, LLMGradePin
+
+        cls.user = User.objects.create_user("filter_pins")
+        LLMConfig.objects.create(
+            user=cls.user,
+            alias="embedder",
+            provider="ollama",
+            model="qwen3-embedding:0.6b",
+            url="http://localhost:11434",
+        )
+        LLMConfig.objects.create(
+            user=cls.user, alias="claude", provider="anthropic", model="claude-opus-4-8"
+        )
+        cls.pin = LLMGradePin.objects.create
+
+    def test_no_user_or_no_pin_keeps_the_main_alias(self):
+        f = CVFilter(job_post_text="x", entries=[], grade="light", alias="main")
+        self.assertEqual(f.embed_alias, "main")
+        f = CVFilter(
+            job_post_text="x", entries=[], grade="light", user=self.user, alias="main"
+        )
+        self.assertEqual(f.embed_alias, "main")
+
+    def test_light_pin_routes_the_embed_rung(self):
+        self.pin(user=self.user, strength="light", alias="embedder")
+        f = CVFilter(
+            job_post_text="x",
+            entries=[],
+            grade="standard",
+            user=self.user,
+            alias="claude",
+        )
+        self.assertEqual(f.embed_alias, "embedder")
+
+    def test_light_run_refuses_a_paid_light_pin(self):
+        self.pin(user=self.user, strength="light", alias="claude")
+        f = CVFilter(
+            job_post_text="x", entries=[], grade="light", user=self.user, alias="main"
+        )
+        self.assertEqual(f.embed_alias, "main")
+        # a standard run has no cost guard — the pin routes.
+        f = CVFilter(
+            job_post_text="x", entries=[], grade="standard", user=self.user, alias="main"
+        )
+        self.assertEqual(f.embed_alias, "claude")
+
+
 class CVGradeCohesionTests(TestCase):
     """`[backend]-grade-cohesion`: CV.FILTER_GRADE derives from the canonical Grade, and an
     unknown filter_grade normalises to light in one place."""

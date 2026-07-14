@@ -8,11 +8,13 @@ import {
   fromCareerDb,
   joinEntry,
   labelFor,
+  mergePinned,
   missingEntries,
   moveEntry,
   parseEntryId,
   removeEntry,
   toggleDeselect,
+  togglePin,
   type CvContent,
 } from "@/lib/cv-doc";
 import type { CvEntriesResponse, EducationRow, JobRow } from "@/lib/queries/jac";
@@ -165,6 +167,61 @@ describe("toggleDeselect", () => {
 
     const twice = toggleDeselect(once, "jobs", 1);
     expect(twice.jobs[1].deselected).toBe(false);
+  });
+});
+
+describe("togglePin", () => {
+  it("round-trips the flag without touching neighbours", () => {
+    const once = togglePin(content(), "jobs", 0);
+    expect(once.jobs[0].pinned).toBe(true);
+    expect(once.jobs[1].pinned).toBeUndefined();
+
+    const twice = togglePin(once, "jobs", 0);
+    expect(twice.jobs[0].pinned).toBe(false);
+  });
+
+  it("ignores out-of-range indices", () => {
+    const c = content();
+    expect(togglePin(c, "jobs", 5)).toBe(c);
+  });
+});
+
+describe("mergePinned", () => {
+  it("re-flags pinned entries the new run also selected (run's rank/score wins)", () => {
+    const current = togglePin(content(), "jobs", 0); // pin job:12
+    const next: CvContent = {
+      jobs: [{ id: "job:12", label: "fresh label", relevance_score: 0.7 }],
+    };
+    const merged = mergePinned(current, next);
+    expect(merged.jobs).toEqual([
+      { id: "job:12", label: "fresh label", relevance_score: 0.7, pinned: true },
+    ]);
+  });
+
+  it("re-appends pinned entries the new run dropped, at the section tail", () => {
+    const current = togglePin(content(), "jobs", 1); // pin job:99
+    const next: CvContent = {
+      jobs: [{ id: "job:12", label: "kept", relevance_score: 0.9 }],
+    };
+    const merged = mergePinned(current, next);
+    expect(merged.jobs.map((e) => e.id)).toEqual(["job:12", "job:99"]);
+    expect(merged.jobs[1].pinned).toBe(true);
+    // unpinned entries from the old content do NOT come along
+    expect(merged.skills ?? []).toEqual([]);
+  });
+
+  it("keeps pins from sections the run returned nothing for", () => {
+    const current = togglePin(content(), "skills", 0);
+    const merged = mergePinned(current, { jobs: [] });
+    expect(merged.skills.map((e) => e.id)).toEqual(["skill:1"]);
+    expect(merged.skills[0].pinned).toBe(true);
+  });
+
+  it("passes the run result through untouched when nothing is pinned", () => {
+    const next: CvContent = {
+      jobs: [{ id: "job:1", label: "x", relevance_score: null }],
+    };
+    expect(mergePinned(content(), next)).toEqual(next);
   });
 });
 

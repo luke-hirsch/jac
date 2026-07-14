@@ -1,8 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import {
+  drfFieldError,
+  shouldSend,
+  type FieldSaveState,
+} from "@/lib/field-save";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { zodValidator, z } from "@/lib/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,14 +82,14 @@ function ProfilePage() {
     queryFn: () => api<Profile>("/api/spa/profile/"),
   });
 
+  // No global toasts: single-field saves report through their own inline hint,
+  // the whole-form submit toasts for itself.
   const patch = useMutation({
     mutationFn: (body: Partial<Profile>) =>
       api<Profile>("/api/spa/profile/", {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => toast.success("Saved"),
-    onError: () => toast.error("Save failed"),
   });
 
   if (profileQ.isLoading) return <p>loading…</p>;
@@ -113,7 +120,13 @@ function ProfilePage() {
         email_reminders: p.email_reminders,
         show_socials: p.show_socials,
       }}
-      onSubmit={(v) => patch.mutateAsync(v)}
+      onSubmit={(v) =>
+        patch
+          .mutateAsync(v)
+          .then(() => toast.success("Saved"))
+          .catch(() => toast.error("Save failed"))
+      }
+      onPatch={(body) => patch.mutateAsync(body)}
       busy={patch.isPending}
     />
   );
@@ -123,11 +136,13 @@ function ProfileForm({
   username,
   initial,
   onSubmit,
+  onPatch,
   busy,
 }: {
   username: string;
   initial: ProfileSchema;
   onSubmit: (v: ProfileSchema) => Promise<unknown>;
+  onPatch: (body: Partial<ProfileSchema>) => Promise<unknown>;
   busy: boolean;
 }) {
   const form = useForm({
@@ -135,6 +150,32 @@ function ProfileForm({
     validators: { onChange: zodValidator(schema) },
     onSubmit: ({ value }) => onSubmit(value),
   });
+
+  // Line-by-line saving: each field PATCHes as you leave it, with its own
+  // saved/error hint; the Save button remains as a save-everything fallback.
+  const [fieldStates, setFieldStates] = useState<
+    Record<string, FieldSaveState>
+  >({});
+  const lastSent = useRef<Record<string, unknown>>({ ...initial });
+  const save = (
+    name: keyof ProfileSchema,
+    value: unknown,
+    clientErrors: Array<unknown> = [],
+  ) => {
+    if (!shouldSend(value, lastSent.current[name], clientErrors)) return;
+    setFieldStates((s) => ({ ...s, [name]: { state: "saving" } }));
+    onPatch({ [name]: value })
+      .then(() => {
+        lastSent.current[name] = value;
+        setFieldStates((s) => ({ ...s, [name]: { state: "saved" } }));
+      })
+      .catch((e) =>
+        setFieldStates((s) => ({
+          ...s,
+          [name]: { state: "error", message: drfFieldError(e, name) },
+        })),
+      );
+  };
 
   const text = (name: StringKey, label: string, type = "text") => (
     <form.Field name={name}>
@@ -146,7 +187,11 @@ function ProfileForm({
             type={type}
             value={field.state.value}
             onChange={(e) => field.handleChange(e.target.value)}
+            onBlur={() =>
+              save(name, field.state.value, field.state.meta.errors)
+            }
           />
+          <LineSaveHint s={fieldStates[name]} />
         </div>
       )}
     </form.Field>
@@ -162,7 +207,11 @@ function ProfileForm({
             rows={4}
             value={field.state.value}
             onChange={(e) => field.handleChange(e.target.value)}
+            onBlur={() =>
+              save(name, field.state.value, field.state.meta.errors)
+            }
           />
+          <LineSaveHint s={fieldStates[name]} />
         </div>
       )}
     </form.Field>
@@ -212,7 +261,10 @@ function ProfileForm({
             <Label>Theme</Label>
             <Select
               value={field.state.value}
-              onValueChange={(v) => field.handleChange(v as never)}
+              onValueChange={(v) => {
+                field.handleChange(v as never);
+                save("theme", v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -223,6 +275,7 @@ function ProfileForm({
                 <SelectItem value="dark">Dark</SelectItem>
               </SelectContent>
             </Select>
+            <LineSaveHint s={fieldStates.theme} />
           </div>
         )}
       </form.Field>
@@ -232,7 +285,10 @@ function ProfileForm({
             <Label>Contrast</Label>
             <Select
               value={field.state.value}
-              onValueChange={(v) => field.handleChange(v as never)}
+              onValueChange={(v) => {
+                field.handleChange(v as never);
+                save("contrast", v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -242,31 +298,44 @@ function ProfileForm({
                 <SelectItem value="high">High contrast</SelectItem>
               </SelectContent>
             </Select>
+            <LineSaveHint s={fieldStates.contrast} />
           </div>
         )}
       </form.Field>
       <form.Field name="email_reminders">
         {(field) => (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={field.state.value}
-              onChange={(e) => field.handleChange(e.target.checked)}
-            />
-            Email me follow-up reminders
-          </label>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={field.state.value}
+                onChange={(e) => {
+                  field.handleChange(e.target.checked);
+                  save("email_reminders", e.target.checked);
+                }}
+              />
+              Email me follow-up reminders
+            </label>
+            <LineSaveHint s={fieldStates.email_reminders} />
+          </div>
         )}
       </form.Field>
       <form.Field name="show_socials">
         {(field) => (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={field.state.value}
-              onChange={(e) => field.handleChange(e.target.checked)}
-            />
-            Show my contact details & socials on the exported CV
-          </label>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={field.state.value}
+                onChange={(e) => {
+                  field.handleChange(e.target.checked);
+                  save("show_socials", e.target.checked);
+                }}
+              />
+              Show my contact details & socials on the exported CV
+            </label>
+            <LineSaveHint s={fieldStates.show_socials} />
+          </div>
         )}
       </form.Field>
       <Button type="submit" disabled={busy}>

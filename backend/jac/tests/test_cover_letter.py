@@ -7,6 +7,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
 
+from llm_connector.models import LLMConfig, LLMGradePin
+
 from jac.cover_letter import PERSONAL_STUB, CoverLetter, SnippetSelector, editable_body
 from jac.models import Domain, Job, JobPostAddress, ResumeSnippet
 from jac.research import CompanyResearcher
@@ -813,6 +815,139 @@ class CoverLetterCritiqueTests(_CoverLetterCVMixin, TestCase):
         self.assertFalse(r["grounding"]["repaired"])
         self.assertNotIn("repaired", r["critique"])
         self.assertEqual(m.call_count, 3)
+
+    # An overlong body (> _MAX_BODY_WORDS) trips the deterministic one-page ceiling
+    # even when the critic model saw nothing wrong — same channel as the shrinkage
+    # backstop, so it rides the single repair pass.
+    _OVERLONG = "word " * (CoverLetter._MAX_BODY_WORDS + 1)
+
+    def test_overlong_standard_body_repairs_even_with_clean_critic(self):
+        r, m = self._build([self._OVERLONG, "ISSUES 0", "A trimmed five word body."])
+        self.assertEqual(r["body"], "A trimmed five word body.")
+        self.assertEqual(r["critique"]["count"], 1)
+        self.assertTrue(r["critique"]["repaired"])
+        self.assertIn("fits one page", " ".join(r["critique"]["claims"]))
+        # The repair prompt carries the word ceiling back to the writer.
+        repair_prompt = m.call_args_list[2].kwargs["prompt"]
+        self.assertIn(str(CoverLetter._MAX_BODY_WORDS), repair_prompt)
+
+    def test_overlong_strong_body_repairs_and_reaudits(self):
+        r, m = self._build(
+            [
+                self._OVERLONG,
+                "UNSUPPORTED 0",
+                "ISSUES 0",
+                "A trimmed five word body.",
+                "UNSUPPORTED 0",
+            ],
+            grade="strong",
+        )
+        self.assertEqual(r["body"], "A trimmed five word body.")
+        self.assertTrue(r["critique"]["repaired"])
+        self.assertTrue(r["grounding"]["repaired"])
+        self.assertEqual(m.call_count, 5)
+
+    def test_one_page_body_passes_the_ceiling(self):
+        body = "word " * CoverLetter._MAX_BODY_WORDS  # exactly at the ceiling
+        r, m = self._build([body, "ISSUES 0"])
+        self.assertEqual(r["body"], body.strip())
+        self.assertEqual(r["critique"], {"count": 0, "claims": []})
+        self.assertEqual(m.call_count, 2)  # no repair
+
+
+class CoverLetterPinRoutingTests(_CoverLetterCVMixin, TestCase):
+    """Per-grade model pins route the support rungs: with a standard pin, the
+    grounding audit and the critic run on the pinned alias instead of the run's
+    main model (the token optimisation); an explicit verifier_alias still wins;
+    a light run refuses a paid pin (free_only)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("cl_pins", first_name="Ada")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Dev", company="X", started=date(2020, 1, 1)
+        )
+        K = ResumeSnippet.Kind
+        ResumeSnippet.objects.create(
+            user=cls.user, title="Achv", content="Shipped Y.", kind=K.achievement,
+            job=cls.job,
+        )
+        LLMConfig.objects.create(
+            user=cls.user,
+            alias="mid",
+            provider="ollama",
+            model="qwen3:8b",
+            url="http://localhost:11434",
+        )
+        LLMConfig.objects.create(
+            user=cls.user, alias="claude", provider="anthropic", model="claude-opus-4-8"
+        )
+
+    def _pin(self, strength, alias):
+        LLMGradePin.objects.create(user=self.user, strength=strength, alias=alias)
+
+    def _aliases(self, complete_returns, *, grade, verify):
+        with patch("jac.llm_prompts.complete", side_effect=complete_returns) as m:
+            CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+                grade=grade,
+                verify_grounding=verify,
+            ).build()
+        return [c.kwargs["alias"] for c in m.call_args_list]
+
+    def test_standard_pin_routes_the_audit_and_critic(self):
+        self._pin("standard", "mid")
+        aliases = self._aliases(
+            ["A body long enough here.", "UNSUPPORTED 0", "ISSUES 0"],
+            grade="standard",
+            verify=True,
+        )
+        # writer stays on the run's alias; verifier + critic ride the pin.
+        self.assertEqual(aliases, ["default", "mid", "mid"])
+
+    def test_no_pin_keeps_everything_on_the_run_alias(self):
+        aliases = self._aliases(
+            ["A body long enough here.", "UNSUPPORTED 0", "ISSUES 0"],
+            grade="standard",
+            verify=True,
+        )
+        self.assertEqual(aliases, ["default", "default", "default"])
+
+    def test_explicit_verifier_alias_beats_the_pin(self):
+        self._pin("standard", "mid")
+        with patch(
+            "jac.llm_prompts.complete",
+            side_effect=["A body long enough here.", "UNSUPPORTED 0", "ISSUES 0"],
+        ) as m:
+            CoverLetter(
+                self.user,
+                self._jp(),
+                self._cv(),
+                address=JobPostAddress(company="Acme"),
+                grade="standard",
+                verify_grounding=True,
+                verifier_alias="claude",
+            ).build()
+        aliases = [c.kwargs["alias"] for c in m.call_args_list]
+        self.assertEqual(aliases, ["default", "claude", "claude"])
+
+    def test_light_run_refuses_a_paid_pin(self):
+        self._pin("standard", "claude")
+        aliases = self._aliases(["Body."], grade="light", verify=False)
+        self.assertEqual(aliases, ["default"])  # writer only, on the run alias
+        # …and even with auditing on, the audit stays off the paid pin.
+        aliases = self._aliases(["Body.", "UNSUPPORTED 0"], grade="light", verify=True)
+        self.assertEqual(aliases, ["default", "default"])
+
+    def test_light_pin_becomes_the_snippet_embed_alias(self):
+        self._pin("light", "mid")
+        letter = CoverLetter(
+            self.user, self._jp(), self._cv(), grade="standard"
+        )
+        self.assertEqual(letter.embed_alias, "mid")
 
 
 # ===========================================================================

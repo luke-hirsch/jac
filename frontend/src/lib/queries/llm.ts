@@ -243,9 +243,19 @@ export type AliasInfo = {
   supports_web_search: boolean;
 };
 
+/** Providers that cost nothing to call — mirrors backend
+ *  llm_connector.conf.FREE_PROVIDERS. The light grade is the zero-cost showcase
+ *  rung, so its picker refuses paid providers outright. */
+export const FREE_PROVIDERS: ReadonlySet<string> = new Set(["ollama", "custom"]);
+
+export function isFreeProvider(provider: Provider | ""): boolean {
+  return FREE_PROVIDERS.has(provider);
+}
+
 /**
  * Aliases that can actually run a given grade — what the model picker offers:
- *  - light rides on embeddings, so only embed-capable aliases qualify;
+ *  - light rides on embeddings AND stays free: only embed-capable, non-paid
+ *    (ollama/custom) aliases qualify — the showcase rung never spends money;
  *  - standard/strong need at least that generative strength (a 1B chat model
  *    can't do the strong rung; the strong picker drops the light server default).
  * Blank grade = auto-detect from the alias, so anything goes.
@@ -256,7 +266,9 @@ export function aliasesForGrade(
 ): AliasInfo[] {
   switch (grade) {
     case "light":
-      return aliases.filter((a) => a.supports_embed);
+      return aliases.filter(
+        (a) => a.supports_embed && isFreeProvider(a.provider),
+      );
     case "standard":
       return aliases.filter((a) => a.strength !== "light");
     case "strong":
@@ -264,6 +276,23 @@ export function aliasesForGrade(
     default:
       return aliases;
   }
+}
+
+/* ---------- per-grade model pins ---------- */
+
+/** GET/PUT /api/llm/pins/ — the user's favourite alias per grade (null = unset). */
+export type GradePins = Record<AliasStrength, string | null>;
+
+/** The pinned alias for a grade, when it is actually offerable for that grade. */
+export function pinnedAliasFor(
+  grade: AliasStrength | "",
+  pins: GradePins | undefined,
+  allowed: AliasInfo[],
+): string | null {
+  if (!grade || !pins) return null;
+  const pinned = pins[grade];
+  if (!pinned) return null;
+  return allowed.some((a) => a.alias === pinned) ? pinned : null;
 }
 
 /** Brand names for the "Search with …" recipient-address buttons. Providers
@@ -324,6 +353,28 @@ export function useLLMAliases() {
   return useQuery({
     queryKey: ["llm", "aliases"],
     queryFn: () => api<AliasInfo[]>("/api/llm/aliases/"),
+  });
+}
+
+const PINS_KEY = ["llm", "pins"] as const;
+
+export function useGradePins() {
+  return useQuery({
+    queryKey: PINS_KEY,
+    queryFn: () => api<GradePins>("/api/llm/pins/"),
+  });
+}
+
+/** Upsert one grade's pin; alias "" clears it. The server replies with the full pins dict. */
+export function useSetGradePin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { strength: AliasStrength; alias: string }) =>
+      api<GradePins>("/api/llm/pins/", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (pins) => qc.setQueryData(PINS_KEY, pins),
   });
 }
 

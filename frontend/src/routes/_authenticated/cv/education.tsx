@@ -44,6 +44,8 @@ import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
 import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
+import { useLineSave } from "@/components/cv/use-line-save";
 
 const schema = z.object({
   institution: z.string().min(1).max(200),
@@ -326,6 +328,9 @@ function EducationEditor({
         favourite: false,
       };
 
+  // Edit mode saves line by line (create still submits the whole form).
+  const line = useLineSave<EducationRow>("education", row?.id ?? null, initial);
+
   const form = useForm({
     defaultValues: initial,
     validators: { onChange: zodValidator(schema) },
@@ -360,8 +365,10 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -374,8 +381,10 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -388,8 +397,10 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -402,8 +413,10 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -418,8 +431,12 @@ function EducationEditor({
                 type="date"
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
               />
               <FieldError errors={f.state.meta.errors} />
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -430,8 +447,16 @@ function EducationEditor({
               label="Ended"
               noneLabel="Ongoing"
               value={f.state.value}
-              onChange={f.handleChange}
-              error={<FieldError errors={f.state.meta.errors} />}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v || null, f.state.meta.errors);
+              }}
+              error={
+                <>
+                  <FieldError errors={f.state.meta.errors} />
+                  <LineSaveHint s={line.fields[f.name]} />
+                </>
+              }
             />
           )}
         </form.Field>
@@ -441,7 +466,14 @@ function EducationEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Location</Label>
-            <LocationPicker value={f.state.value} onChange={f.handleChange} />
+            <LocationPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -450,7 +482,14 @@ function EducationEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Domains</Label>
-            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+            <DomainPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -461,9 +500,13 @@ function EducationEditor({
             <Label>Skills</Label>
             <SkillPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
               autoAddPrerequisites
             />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -478,23 +521,33 @@ function EducationEditor({
                 rows={10}
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
                 className="font-mono text-sm"
               />
               <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
 
       <form.Field name="favourite">
         {(f) => (
-          <FavouriteField
-            checked={f.state.value}
-            onChange={f.handleChange}
-            hint="Pinned entries get a small ranking boost (max 2 educations)."
-          />
+          <div className="space-y-1">
+            <FavouriteField
+              checked={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+              hint="Pinned entries get a small ranking boost (max 2 educations)."
+            />
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
         )}
       </form.Field>
 
@@ -502,9 +555,15 @@ function EducationEditor({
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={create.isPending || update.isPending}>
-          {row ? "Save" : "Create"}
-        </Button>
+        {row ? (
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        )}
       </div>
     </form>
   );

@@ -13,7 +13,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { aliasesForGrade, useLLMAliases } from "@/lib/queries/llm";
+import {
+  aliasesForGrade,
+  pinnedAliasFor,
+  useGradePins,
+  useLLMAliases,
+} from "@/lib/queries/llm";
 import {
   runToApplicationPatch,
   useUpdateApplication,
@@ -66,6 +71,7 @@ export function GeneratePanel({
   onApplied: () => void;
 }) {
   const aliases = useLLMAliases();
+  const pins = useGradePins();
   const create = useCreateGeneration();
   const update = useUpdateApplication();
   const [grade, setGrade] = useState<Grade | "">("");
@@ -73,13 +79,19 @@ export function GeneratePanel({
   const [verifyGrounding, setVerifyGrounding] = useState(false);
   const [personalParagraph, setPersonalParagraph] = useState(false);
 
-  // Only aliases that can actually run the chosen grade are offered; a pick that
-  // a grade change invalidated is snapped to the first fitting one (adjust-state-
-  // during-render, same pattern as the content card's server re-seed).
+  // Only aliases that can actually run the chosen grade are offered (adjust-state-
+  // during-render, same pattern as the content card's server re-seed): picking a
+  // grade snaps the model to the user's pin for it when one fits; a pick that a
+  // grade change invalidated is snapped to the first fitting one.
   const allowed = aliasesForGrade(aliases.data ?? [], grade);
   const aliasFits = allowed.some((a) => a.alias === alias);
-  if (aliases.data && !aliasFits && allowed.length > 0) {
-    setAlias(allowed[0].alias);
+  const pinned = pinnedAliasFor(grade, pins.data, allowed);
+  const [prevGrade, setPrevGrade] = useState(grade);
+  if (grade !== prevGrade) {
+    setPrevGrade(grade);
+    if (pinned && pinned !== alias) setAlias(pinned);
+  } else if (aliases.data && !aliasFits && allowed.length > 0) {
+    setAlias(pinned ?? allowed[0].alias);
   }
   const selected = aliases.data?.find((a) => a.alias === alias);
 
@@ -114,7 +126,7 @@ export function GeneratePanel({
     if (!runState.result) return;
     onApplied(); // arm the fresh-highlight before the refetched content lands
     update.mutate(
-      { id: app.id, body: runToApplicationPatch(runState.result) },
+      { id: app.id, body: runToApplicationPatch(runState.result, app.cv_content) },
       {
         onSuccess: () => toast.success("Run applied to the application"),
         onError: () => toast.error("Could not apply the run"),

@@ -63,6 +63,15 @@ describe("dropOrder", () => {
     const order = dropOrder(content(), (id) => id === "skill:6");
     expect(order).toEqual(["job:3", "skill:5", "skill:4", "job:2", "skill:6"]);
   });
+
+  it("pinned entries drop last of all — even after favourites", () => {
+    const c = content();
+    c.skills[5] = { ...c.skills[5], pinned: true };
+    // job:3 is a favourite, skill:6 is pinned: everything plain first, then the
+    // favourite, then the pin.
+    const order = dropOrder(c, (id) => id === "job:3");
+    expect(order).toEqual(["skill:5", "skill:4", "job:2", "job:3", "skill:6"]);
+  });
 });
 
 describe("applyDrop", () => {

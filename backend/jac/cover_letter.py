@@ -17,6 +17,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.utils import timezone
+from llm_connector.conf import pick_alias
 
 from jac.llm_prompts import (
     CoverLetterWriter,
@@ -255,6 +256,15 @@ class CoverLetter:
         "the body summarizes the snippets instead of writing them out — rewrite at "
         "full length, one paragraph per theme, keeping every concrete claim"
     )
+    # One-page ceiling (deterministic, like the shrinkage backstop): a body past this
+    # word count will not fit an A4 page once the address blocks, subject, and a
+    # personal paragraph sit around it. Sits above the writer's ~280-word target
+    # (CoverLetterWriter._TARGET_WORDS) so only real overshoot triggers a repair.
+    _MAX_BODY_WORDS = 320
+    _OVERLENGTH_NOTE = (
+        "the body is {words} words — cut it to at most {max} words so the letter fits "
+        "one page: drop the weakest material, keep full sentences"
+    )
 
     def __init__(
         self,
@@ -286,10 +296,34 @@ class CoverLetter:
         self.alias = alias
         self.max_body_snippets = max_body_snippets
         self.verify_grounding = verify_grounding
-        self.verifier_alias = verifier_alias
+        # Per-rung routing: an explicit alias always wins; otherwise the user's pin
+        # for the rung's PREFERRED_GRADE; otherwise the run's main alias (the `or
+        # None` keeps the downstream `x or self.alias` fallbacks working). A light
+        # run never routes onto a paid pin (free_only — the showcase rung stays
+        # zero-cost).
+        free_only = grade == "light"
+        self.verifier_alias = (
+            verifier_alias
+            or pick_alias(
+                FaithfulnessCheck.PREFERRED_GRADE,
+                fallback="",
+                user=self.user,
+                free_only=free_only,
+            )
+            or None
+        )
         self.personal_paragraph = personal_paragraph
         self.research_alias = research_alias
-        self.embed_alias = embed_alias
+        self.embed_alias = (
+            embed_alias
+            or pick_alias(
+                SnippetEmbed.PREFERRED_GRADE,
+                fallback="",
+                user=self.user,
+                free_only=free_only,
+            )
+            or None
+        )
 
     def build(self) -> dict:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
@@ -536,16 +570,26 @@ class CoverLetter:
         """Advisory prose-quality review: {'count': int | None, 'claims': [str]}.
 
         Runs only on _CRITIC_GRADES with a real woven body (the raw-fallback body IS
-        the snippets — nothing to review). The standard grade adds a deterministic
-        shrinkage backstop: a polish that lost >40% of the snippet words is
-        summarising, and that finding must not depend on the critic model being up."""
+        the snippets — nothing to review). Two deterministic length backstops ride the
+        same channel, so they must not depend on the critic model being up: standard's
+        shrinkage check (a polish that lost >40% of the snippet words is summarising)
+        and the one-page ceiling on both grades."""
         if self.grade not in self._CRITIC_GRADES or weave_failed or not snippets:
             return {"count": None, "claims": []}
         critique = LetterCritic(
             body, snippets, alias=self.verifier_alias or self.alias, user=self.user
         ).critique()
+        backstops = []
         if self.grade == "standard" and self._shrunk(body, snippets):
-            claims = critique["claims"] + [self._SHRINKAGE_NOTE]
+            backstops.append(self._SHRINKAGE_NOTE)
+        if self._overlong(body):
+            backstops.append(
+                self._OVERLENGTH_NOTE.format(
+                    words=len(body.split()), max=self._MAX_BODY_WORDS
+                )
+            )
+        if backstops:
+            claims = critique["claims"] + backstops
             critique = {"count": len(claims), "claims": claims}
         return critique
 
@@ -554,6 +598,9 @@ class CoverLetter:
         return snippet_words > 0 and len(body.split()) < (
             self._MIN_BODY_RATIO * snippet_words
         )
+
+    def _overlong(self, body) -> bool:
+        return len(body.split()) > self._MAX_BODY_WORDS
 
     def _repair(
         self, body, snippets, grounding, critique, language, title, verify, opening

@@ -122,6 +122,78 @@ def get_alias_strength(alias: str = "default", user=None) -> str:
     return _autodetect_strength(config.get("provider", ""), config.get("model", ""))
 
 
+# Providers that cost nothing to call — self-hosted or user-hosted endpoints. The
+# paid trio (anthropic/openai/google) bills per token; pick_alias(free_only=True)
+# refuses to route a rung onto them (e.g. a "light" showcase run must stay free).
+FREE_PROVIDERS = {"ollama", "custom"}
+
+
+def is_free_alias(alias: str, user=None) -> bool:
+    """True when the alias resolves to a zero-cost provider (see FREE_PROVIDERS).
+    Unresolvable aliases count as NOT free — never route cost-guarded work at an
+    unknown target."""
+    try:
+        config = get_alias_config(alias, user=user)
+    except Exception:  # noqa: BLE001 — missing/broken config
+        return False
+    return config.get("provider", "") in FREE_PROVIDERS
+
+
+def get_pinned_alias(strength: str, user=None) -> str | None:
+    """The user's pinned favourite alias for a strength tier, or None.
+
+    A stale pin — its alias is neither one of the user's LLMConfig rows nor the
+    "default" fallback (the row was deleted or renamed) — is ignored, so the
+    caller falls back exactly as if nothing were pinned. (`get_alias_config`
+    can't make that call: with a user it silently resolves any unknown alias to
+    the default config.)
+    """
+    if user is None or strength not in _STRENGTHS:
+        return None
+    from .models import LLMConfig, LLMGradePin
+
+    pin = LLMGradePin.objects.filter(user=user, strength=strength).first()
+    if pin is None:
+        return None
+    if (
+        pin.alias != FALLBACK_ALIAS
+        and not LLMConfig.objects.filter(user=user, alias=pin.alias).exists()
+    ):
+        logger.warning(
+            "Pinned alias %r for user=%s no longer resolves — ignoring the pin.",
+            pin.alias,
+            getattr(user, "pk", user),
+        )
+        return None
+    return pin.alias
+
+
+def pick_alias(
+    preferred_strength: str | None,
+    *,
+    fallback: str,
+    user=None,
+    free_only: bool = False,
+) -> str:
+    """Resolve the alias a pipeline rung should run on.
+
+    A rung declares the strength tier it wants (its PREFERRED_GRADE); when the
+    user pinned a favourite model for that tier, the rung runs there instead of
+    on the run's main alias — that is how a strong run keeps its audits off the
+    expensive model. `free_only=True` (a light run's cost guard) refuses a pin
+    that resolves to a paid provider. No preference, no pin, or a refused pin
+    -> `fallback` (normally the run's main alias).
+    """
+    if not preferred_strength:
+        return fallback
+    pinned = get_pinned_alias(preferred_strength, user=user)
+    if pinned is None:
+        return fallback
+    if free_only and not is_free_alias(pinned, user=user):
+        return fallback
+    return pinned
+
+
 def get_embed_floors(alias: str = "default", user=None) -> dict:
     """Per-section cosine drop floors for the light rung, from the resolved config's
     `embed_floors` key. {} when unset or on any resolution error — the caller merges

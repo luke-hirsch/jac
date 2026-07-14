@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import {
   PROVIDER_SPECS,
+  aliasesForGrade,
   checkResultLabel,
   rowToState,
   switchProvider,
@@ -11,8 +12,12 @@ import {
   useCheckConfig,
   useCreateConfig,
   useDeleteConfig,
+  useGradePins,
+  useLLMAliases,
   useLLMConfigs,
+  useSetGradePin,
   useUpdateConfig,
+  type AliasStrength,
   type CheckResult,
   type ConfigFormState,
   type LLMConfigRow,
@@ -155,12 +160,93 @@ function LLMConfigPage() {
         ))}
       </ul>
 
+      <GradePinsCard />
+
       {editing && (
         <ConfigDialog
           row={editing === "new" ? undefined : editing}
           onClose={() => setEditing(null)}
         />
       )}
+    </div>
+  );
+}
+
+const PIN_GRADES: { grade: AliasStrength; label: string; help: string }[] = [
+  {
+    grade: "light",
+    label: "Light",
+    help: "Embedding rungs (CV ranking, snippet pick). Free models only.",
+  },
+  {
+    grade: "standard",
+    label: "Standard",
+    help: "Support rungs: address extraction, grounding audit, prose critic.",
+  },
+  {
+    grade: "strong",
+    label: "Strong",
+    help: "Default model when you pick the strong grade.",
+  },
+];
+
+// Radix Select items must have a non-empty value; this stands in for "no pin".
+const NO_PIN = "__none__";
+
+function GradePinsCard() {
+  const aliases = useLLMAliases();
+  const pins = useGradePins();
+  const setPin = useSetGradePin();
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-base font-medium">Pinned models</h3>
+        <p className="text-sm text-muted-foreground">
+          Your favourite model per grade. The pipeline runs each step on the pin
+          of the tier that step prefers — e.g. a strong run keeps its checks on
+          your standard pin — and falls back to the run&apos;s model when a tier
+          has no pin. Light runs never route onto paid providers.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {PIN_GRADES.map(({ grade, label, help }) => {
+          const options = aliasesForGrade(aliases.data ?? [], grade);
+          const current = pins.data?.[grade] ?? null;
+          return (
+            <div key={grade} className="space-y-1">
+              <Label>{label}</Label>
+              <Select
+                value={current ?? NO_PIN}
+                disabled={!aliases.data || !pins.data}
+                onValueChange={(v) =>
+                  setPin.mutate(
+                    { strength: grade, alias: v === NO_PIN ? "" : v },
+                    { onError: () => toast.error("Could not save the pin") },
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="No pin" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PIN}>No pin</SelectItem>
+                  {options.map((a) => (
+                    <SelectItem key={a.alias} value={a.alias}>
+                      {a.alias} — {a.model} ({a.strength})
+                    </SelectItem>
+                  ))}
+                  {/* a stale pin (config deleted) still needs to render as selected */}
+                  {current && !options.some((a) => a.alias === current) && (
+                    <SelectItem value={current}>{current} (stale)</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{help}</p>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

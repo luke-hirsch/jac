@@ -56,4 +56,39 @@ describe("runToApplicationPatch", () => {
       },
     });
   });
+
+  it("carries pinned entries from the current cv_content into the new result", () => {
+    const result = {
+      meta: { grade: "light", alias: "default" },
+      cv: { jobs: [{ id: "job:1", label: "kept", relevance_score: 0.8 }] },
+      cover_letter: {
+        language: "en",
+        subject: "s",
+        salutation: "Dear,",
+        body: "b",
+        sender: {},
+        recipient: {},
+        date: "2026-07-13",
+        closing: "Regards,",
+        personal_paragraph: "",
+        text: "…",
+        ai_share: 0,
+      },
+    } as unknown as TailoredResult;
+    const current = {
+      jobs: [
+        { id: "job:1", label: "old", relevance_score: 0.5, pinned: true },
+        { id: "job:2", label: "unpinned, dropped", relevance_score: 0.4 },
+      ],
+      skills: [{ id: "skill:9", label: "Rust", relevance_score: null, pinned: true }],
+    };
+
+    const patch = runToApplicationPatch(result, current);
+    expect(patch.cv_content).toEqual({
+      jobs: [{ id: "job:1", label: "kept", relevance_score: 0.8, pinned: true }],
+      skills: [
+        { id: "skill:9", label: "Rust", relevance_score: null, pinned: true },
+      ],
+    });
+  });
 });

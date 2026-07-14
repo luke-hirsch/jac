@@ -60,7 +60,7 @@ describe("openGenerationSocket", () => {
     vi.unstubAllGlobals();
   });
 
-  function open(onEvent = () => {}) {
+  function open(onEvent: (d: unknown) => void = () => {}) {
     const statuses: SocketStatus[] = [];
     const close = openGenerationSocket(7, onEvent, (s) => statuses.push(s));
     return { statuses, close };

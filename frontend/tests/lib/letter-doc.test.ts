@@ -33,7 +33,7 @@ const letter = {
   closing: "Mit freundlichen Grüßen,",
   personal_paragraph: "",
   personal_paragraph_is_stub: false,
-} as CoverLetterResult;
+} as unknown as CoverLetterResult;
 
 describe("letterMetaFromResult", () => {
   it("takes exactly the furniture slice", () => {

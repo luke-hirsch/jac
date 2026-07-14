@@ -85,6 +85,36 @@ class LLMConfig(models.Model):
             )  # raises ValidationError on an internal host
 
 
+class LLMGradePin(models.Model):
+    """The user's favourite alias per strength tier ("pin"): pipelines that want a
+    rung run at a given strength resolve through `conf.pick_alias`, which prefers
+    the pinned alias over the run's main alias. One pin per (user, strength); the
+    same alias may be pinned for several strengths. `alias` is a loose reference —
+    a deleted/renamed LLMConfig simply stops resolving and the pin is ignored.
+    """
+
+    class Strength(models.TextChoices):
+        light = "light", "Light"
+        standard = "standard", "Standard"
+        strong = "strong", "Strong"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_grade_pins",
+    )
+    strength = models.CharField(max_length=10, choices=Strength.choices)
+    alias = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("user", "strength")]
+        ordering = ["user_id", "strength"]
+
+    def __str__(self):
+        return f"{self.user} / {self.strength} -> {self.alias}"
+
+
 class LLMRequestLog(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

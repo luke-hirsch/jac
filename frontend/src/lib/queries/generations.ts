@@ -47,6 +47,8 @@ export type CvEntry = {
   label: string;
   relevance_score: number | null;
   deselected?: boolean;
+  /** User-pinned: survives applying a new generation run (merged back in). */
+  pinned?: boolean;
 };
 
 export type TailoredResult = {

@@ -6,8 +6,9 @@ from django.test import TestCase, override_settings
 
 from llm_connector import complete
 from llm_connector.client import LLMClient
+from llm_connector.conf import get_pinned_alias, is_free_alias, pick_alias
 from llm_connector.crypto import _fernet, decrypt, encrypt
-from llm_connector.models import LLMConfig, LLMRequestLog
+from llm_connector.models import LLMConfig, LLMGradePin, LLMRequestLog
 
 from ._helpers import _muted, FakeAdapter, FAKE_LLM
 
@@ -194,6 +195,86 @@ class UserScopedResolutionTests(TestCase):
             extra={"_response": "personal"},
         )
         self.assertEqual(complete("hi", alias="reasoning", user=self.user), "personal")
+
+
+@override_settings(LLM=FAKE_LLM, LLM_LOGGING=False)
+class GradePinResolutionTests(TestCase):
+    """`pick_alias`: per-strength favourite-model routing. A rung's PREFERRED_GRADE
+    resolves to the user's pin for that tier; no pin / a stale pin / a paid pin under
+    free_only all fall back to the run's main alias."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="alice")
+        LLMConfig.objects.create(
+            user=cls.user,
+            alias="local",
+            provider="ollama",
+            model="qwen3:8b",
+            url="http://localhost:11434",
+        )
+        LLMConfig.objects.create(
+            user=cls.user,
+            alias="claude",
+            provider="anthropic",
+            model="claude-opus-4-8",
+        )
+
+    def _pin(self, strength, alias):
+        LLMGradePin.objects.create(user=self.user, strength=strength, alias=alias)
+
+    def test_no_pin_falls_back_to_the_main_alias(self):
+        self.assertEqual(
+            pick_alias("standard", fallback="main", user=self.user), "main"
+        )
+
+    def test_pin_wins_over_the_main_alias(self):
+        self._pin("standard", "local")
+        self.assertEqual(
+            pick_alias("standard", fallback="main", user=self.user), "local"
+        )
+
+    def test_no_preference_or_no_user_is_a_no_op(self):
+        self._pin("standard", "local")
+        self.assertEqual(pick_alias(None, fallback="main", user=self.user), "main")
+        self.assertEqual(pick_alias("standard", fallback="main", user=None), "main")
+
+    def test_stale_pin_is_ignored(self):
+        self._pin("standard", "deleted-row")
+        with _muted():
+            self.assertEqual(
+                pick_alias("standard", fallback="main", user=self.user), "main"
+            )
+
+    def test_default_is_always_pinnable(self):
+        self._pin("light", "default")
+        self.assertEqual(get_pinned_alias("light", user=self.user), "default")
+
+    def test_free_only_refuses_a_paid_pin(self):
+        self._pin("standard", "claude")
+        self.assertEqual(
+            pick_alias("standard", fallback="main", user=self.user, free_only=True),
+            "main",
+        )
+        # …but without the cost guard the pin routes normally.
+        self.assertEqual(
+            pick_alias("standard", fallback="main", user=self.user), "claude"
+        )
+
+    def test_free_only_accepts_a_free_pin(self):
+        self._pin("standard", "local")
+        self.assertEqual(
+            pick_alias("standard", fallback="main", user=self.user, free_only=True),
+            "local",
+        )
+
+    def test_is_free_alias(self):
+        self.assertTrue(is_free_alias("local", user=self.user))
+        self.assertFalse(is_free_alias("claude", user=self.user))
+        # the settings "default" (provider "fake" here) is not in FREE_PROVIDERS;
+        # muted: resolving it without a user row logs the expected fallback warning.
+        with _muted():
+            self.assertFalse(is_free_alias("default", user=self.user))
 
 
 @override_settings(LLM=FAKE_LLM, LLM_LOGGING=True)

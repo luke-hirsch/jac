@@ -15,7 +15,8 @@ const minKeep = (section: string) => MIN_KEEP[section] ?? 1;
 
 /**
  * Ids in drop-first order. Ties: bigger section first, then section name. Favourites
- * (via `isFavourite`, built from the career DB) drop only after every non-favourite.
+ * (via `isFavourite`, built from the career DB) drop only after every non-favourite;
+ * pinned entries (explicit per-application intent) drop last of all.
  * The first `minKeep(section)` entries of each section are never dropped.
  */
 export function dropOrder(
@@ -28,6 +29,7 @@ export function dropOrder(
     size: number;
     section: string;
     fav: boolean;
+    pin: boolean;
   };
   const cands: Cand[] = [];
   for (const [section, list] of Object.entries(content)) {
@@ -40,11 +42,13 @@ export function dropOrder(
         size: list.length,
         section,
         fav: isFavourite(e.id),
+        pin: !!e.pinned,
       });
     });
   }
   cands.sort(
     (a, b) =>
+      Number(a.pin) - Number(b.pin) ||
       Number(a.fav) - Number(b.fav) ||
       b.frac - a.frac ||
       b.size - a.size ||

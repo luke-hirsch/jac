@@ -59,6 +59,8 @@ import { JobPicker } from "@/components/cv/job-picker";
 import { ProjectPicker } from "@/components/cv/project-picker";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
+import { useLineSave } from "@/components/cv/use-line-save";
 
 const kindLabel = (v: string) =>
   SNIPPET_KINDS.find((k) => k.value === v)?.label ?? v;
@@ -350,6 +352,13 @@ function SnippetEditor({
   const create = useCreate<ResumeSnippetRow>("snippets");
   const update = useUpdate<ResumeSnippetRow>("snippets");
 
+  // Edit mode saves line by line (create still submits the whole form).
+  const line = useLineSave<ResumeSnippetRow>(
+    "snippets",
+    row?.id ?? null,
+    snippetToInput(row),
+  );
+
   const form = useForm({
     defaultValues: snippetToInput(row),
     validators: { onChange: zodValidator(snippetSchema) },
@@ -383,8 +392,12 @@ function SnippetEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() =>
+                line.save(f.name, f.state.value.trim(), f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -396,7 +409,10 @@ function SnippetEditor({
               <Label>Kind</Label>
               <Select
                 value={f.state.value}
-                onValueChange={(v) => f.handleChange(v as SnippetInput["kind"])}
+                onValueChange={(v) => {
+                  f.handleChange(v as SnippetInput["kind"]);
+                  line.save(f.name, v);
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -409,6 +425,7 @@ function SnippetEditor({
                   ))}
                 </SelectContent>
               </Select>
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -421,8 +438,17 @@ function SnippetEditor({
                 placeholder="en"
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  // mirror toSnippetPayload's normalisation
+                  line.save(
+                    f.name,
+                    (f.state.value.trim() || "en").toLowerCase(),
+                    f.state.meta.errors,
+                  )
+                }
               />
               <FieldError errors={f.state.meta.errors} />
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -438,6 +464,9 @@ function SnippetEditor({
                 rows={10}
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
                 className="font-mono text-sm"
               />
               <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
@@ -445,6 +474,7 @@ function SnippetEditor({
               </div>
             </div>
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -454,7 +484,14 @@ function SnippetEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Job</Label>
-            <JobPicker value={f.state.value} onChange={f.handleChange} />
+            <JobPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -463,7 +500,14 @@ function SnippetEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Project</Label>
-            <ProjectPicker value={f.state.value} onChange={f.handleChange} />
+            <ProjectPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -474,9 +518,13 @@ function SnippetEditor({
             <Label>Skills</Label>
             <SkillPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
               autoAddPrerequisites
             />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -485,20 +533,33 @@ function SnippetEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Domains</Label>
-            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+            <DomainPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
 
       <form.Field name="is_active">
         {(f) => (
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={f.state.value}
-              onCheckedChange={(v) => f.handleChange(!!v)}
-            />
-            Active (available to the cover-letter selector)
-          </label>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={f.state.value}
+                onCheckedChange={(v) => {
+                  f.handleChange(!!v);
+                  line.save(f.name, !!v);
+                }}
+              />
+              Active (available to the cover-letter selector)
+            </label>
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
         )}
       </form.Field>
 
@@ -506,9 +567,15 @@ function SnippetEditor({
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={create.isPending || update.isPending}>
-          {row ? "Save" : "Create"}
-        </Button>
+        {row ? (
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        )}
       </div>
     </form>
   );

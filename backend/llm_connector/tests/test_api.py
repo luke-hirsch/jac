@@ -262,3 +262,68 @@ class LLMAliasListViewTests(APITestCase):
         self.client.logout()
         r = self.client.get("/api/llm/aliases/")
         self.assertIn(r.status_code, (401, 403))
+
+
+class LLMPinViewTests(APITestCase):
+    """/api/llm/pins/ — the per-strength favourite-model pins. GET returns all three
+    tiers (null when unset); PUT upserts one tier, a blank alias clears it; only the
+    user's own aliases (plus "default") are pinnable; nothing leaks across users."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice_pin", password="pass")
+        cls.bob = User.objects.create_user(username="bob_pin", password="pass")
+        LLMConfig.objects.create(
+            user=cls.alice,
+            alias="local",
+            provider=LLMConfig.Provider.ollama,
+            model="qwen3:8b",
+            url="http://localhost:11434",
+        )
+
+    def _put(self, body):
+        return self.client.put("/api/llm/pins/", body, format="json")
+
+    def test_get_returns_all_tiers_with_nulls(self):
+        self.client.force_login(self.alice)
+        r = self.client.get("/api/llm/pins/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data, {"light": None, "standard": None, "strong": None})
+
+    def test_put_upserts_and_clears_a_tier(self):
+        self.client.force_login(self.alice)
+        r = self._put({"strength": "standard", "alias": "local"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["standard"], "local")
+
+        r = self._put({"strength": "standard", "alias": "default"})  # overwrite
+        self.assertEqual(r.data["standard"], "default")
+
+        r = self._put({"strength": "standard", "alias": ""})  # clear
+        self.assertEqual(r.data["standard"], None)
+
+    def test_unknown_alias_is_rejected(self):
+        self.client.force_login(self.alice)
+        r = self._put({"strength": "strong", "alias": "not-mine"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_another_users_alias_is_rejected(self):
+        self.client.force_login(self.bob)
+        r = self._put({"strength": "standard", "alias": "local"})  # alice's row
+        self.assertEqual(r.status_code, 400)
+
+    def test_bad_strength_is_rejected(self):
+        self.client.force_login(self.alice)
+        r = self._put({"strength": "mega", "alias": "local"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_pins_do_not_leak_across_users(self):
+        self.client.force_login(self.alice)
+        self._put({"strength": "light", "alias": "local"})
+        self.client.force_login(self.bob)
+        r = self.client.get("/api/llm/pins/")
+        self.assertEqual(r.data, {"light": None, "standard": None, "strong": None})
+
+    def test_unauthenticated_request_is_forbidden(self):
+        r = self.client.get("/api/llm/pins/")
+        self.assertIn(r.status_code, (401, 403))

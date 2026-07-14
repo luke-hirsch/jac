@@ -181,6 +181,43 @@ export function toggleDeselect(
   return { ...content, [section]: next };
 }
 
+export function togglePin(
+  content: CvContent,
+  section: string,
+  index: number,
+): CvContent {
+  const list = content[section] ?? [];
+  if (index < 0 || index >= list.length) return content;
+  const next = list.map((e, i) =>
+    i === index ? { ...e, pinned: !e.pinned } : e,
+  );
+  return { ...content, [section]: next };
+}
+
+/**
+ * Carry the user's pins from the current content into a fresh generation result.
+ * Entries the new run also selected keep the run's rank/score and gain `pinned`;
+ * pinned entries the run dropped are re-appended at the section tail (the run's
+ * order is the new rank — an unselected pin has no rank claim). Sections the run
+ * returned nothing for keep their pinned entries too.
+ */
+export function mergePinned(current: CvContent, next: CvContent): CvContent {
+  const out: CvContent = {};
+  for (const [section, list] of Object.entries(next)) out[section] = [...list];
+  for (const [section, list] of Object.entries(current)) {
+    const pinned = list.filter((e) => e.pinned);
+    if (pinned.length === 0) continue;
+    const target = out[section] ? [...out[section]] : [];
+    for (const pin of pinned) {
+      const i = target.findIndex((e) => e.id === pin.id);
+      if (i >= 0) target[i] = { ...target[i], pinned: true };
+      else target.push({ ...pin });
+    }
+    out[section] = target;
+  }
+  return out;
+}
+
 /** Deselected entries stripped — the shape the render/export pipeline (guide 4) consumes. */
 export function activeContent(content: CvContent): CvContent {
   const out: CvContent = {};

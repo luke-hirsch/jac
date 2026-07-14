@@ -53,6 +53,8 @@ import { MarkdownPreview } from "@/components/markdown-preview";
 import { BulkBar } from "@/components/cv/bulk-bar";
 import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
+import { LineSaveHint } from "@/components/cv/line-save-hint";
+import { useLineSave } from "@/components/cv/use-line-save";
 const JOB_TYPES: { value: JobRow["job_type"]; label: string }[] = [
   { value: "ft", label: "Full-time" },
   { value: "pt", label: "Part-time" },
@@ -381,6 +383,10 @@ function JobEditor({
         favourite: false,
       };
 
+  // Edit mode saves line by line — each field PATCHes as you leave it, with
+  // its own saved/error hint. Create still submits the whole form below.
+  const line = useLineSave<JobRow>("jobs", row?.id ?? null, initial);
+
   const form = useForm({
     defaultValues: initial,
     validators: { onChange: zodValidator(schema) },
@@ -415,8 +421,10 @@ function JobEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -429,8 +437,10 @@ function JobEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -441,7 +451,10 @@ function JobEditor({
             <Label>Type</Label>
             <Select
               value={f.state.value}
-              onValueChange={(v) => f.handleChange(v as JobInput["job_type"])}
+              onValueChange={(v) => {
+                f.handleChange(v as JobInput["job_type"]);
+                line.save(f.name, v);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -454,6 +467,7 @@ function JobEditor({
                 ))}
               </SelectContent>
             </Select>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -468,8 +482,12 @@ function JobEditor({
                 type="date"
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
               />
               <FieldError errors={f.state.meta.errors} />
+              <LineSaveHint s={line.fields[f.name]} />
             </div>
           )}
         </form.Field>
@@ -480,8 +498,17 @@ function JobEditor({
               label="Ended"
               noneLabel="Current role"
               value={f.state.value}
-              onChange={f.handleChange}
-              error={<FieldError errors={f.state.meta.errors} />}
+              onChange={(v) => {
+                f.handleChange(v);
+                // "" = current role; DRF wants null for the empty date.
+                line.save(f.name, v || null, f.state.meta.errors);
+              }}
+              error={
+                <>
+                  <FieldError errors={f.state.meta.errors} />
+                  <LineSaveHint s={line.fields[f.name]} />
+                </>
+              }
             />
           )}
         </form.Field>
@@ -496,8 +523,10 @@ function JobEditor({
               type="url"
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
+              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -506,7 +535,14 @@ function JobEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Location</Label>
-            <LocationPicker value={f.state.value} onChange={f.handleChange} />
+            <LocationPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -515,7 +551,14 @@ function JobEditor({
         {(f) => (
           <div className="space-y-1">
             <Label>Domains</Label>
-            <DomainPicker value={f.state.value} onChange={f.handleChange} />
+            <DomainPicker
+              value={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+            />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -526,9 +569,13 @@ function JobEditor({
             <Label>Skills</Label>
             <SkillPicker
               value={f.state.value}
-              onChange={f.handleChange}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
               autoAddPrerequisites
             />
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
@@ -543,23 +590,33 @@ function JobEditor({
                 rows={10}
                 value={f.state.value}
                 onChange={(e) => f.handleChange(e.target.value)}
+                onBlur={() =>
+                  line.save(f.name, f.state.value, f.state.meta.errors)
+                }
                 className="font-mono text-sm"
               />
               <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>
+            <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
       </form.Field>
 
       <form.Field name="favourite">
         {(f) => (
-          <FavouriteField
-            checked={f.state.value}
-            onChange={f.handleChange}
-            hint="Pinned entries get a small ranking boost (max 4 jobs)."
-          />
+          <div className="space-y-1">
+            <FavouriteField
+              checked={f.state.value}
+              onChange={(v) => {
+                f.handleChange(v);
+                line.save(f.name, v);
+              }}
+              hint="Pinned entries get a small ranking boost (max 4 jobs)."
+            />
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
         )}
       </form.Field>
 
@@ -567,9 +624,15 @@ function JobEditor({
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={create.isPending || update.isPending}>
-          {row ? "Save" : "Create"}
-        </Button>
+        {row ? (
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        )}
       </div>
     </form>
   );

@@ -4,6 +4,7 @@ import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api, allauthErrorsByField } from "@/lib/api";
+import { SESSION_KEY } from "@/lib/auth";
 import { zodValidator, z } from "@/lib/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,8 @@ function EmailPage() {
       }),
     onSuccess: (_, a) => {
       qc.invalidateQueries({ queryKey: EMAIL_KEY });
+      // primary change also changes user.email in the session payload
+      qc.invalidateQueries({ queryKey: SESSION_KEY });
       toast.success(a.success);
     },
     onError: (e) => {
@@ -105,8 +108,9 @@ function EmailPage() {
                     variant="outline"
                     size="sm"
                     onClick={() =>
+                      // allauth headless: PUT = resend verification
                       mutate.mutate({
-                        method: "PATCH",
+                        method: "PUT",
                         body: { email: row.email },
                         success: "Verification resent",
                       })
@@ -120,8 +124,9 @@ function EmailPage() {
                     variant="outline"
                     size="sm"
                     onClick={() =>
+                      // allauth headless: PATCH = mark as primary
                       mutate.mutate({
-                        method: "PUT",
+                        method: "PATCH",
                         body: { email: row.email, primary: true },
                         success: "Primary updated",
                       })
