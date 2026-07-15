@@ -59,8 +59,10 @@ Modified (you type):
 | `requirements.txt` | `qdrant-client` |
 | `README.md` | `VECTOR_STORE` env + solo-worker note |
 
-Already on disk (AI-written): `backend/vector_store/__init__.py` (docstring marker so the test
-package is discoverable) and the test files listed under **Tests**.
+AI-written tests are listed under **Tests**. *(Note: this round ran inverted — Lukas typed and
+committed the implementation, `61c0c0a rag foundation`, before the tests landed, and scaffolded
+the app via `startapp` — so `vector_store/` carries the default `admin.py`/`models.py`/`views.py`
+stubs and the store tests live in `vector_store/tests.py`, not a `tests/` package.)*
 
 ## The code
 
@@ -734,28 +736,27 @@ Plus a short paragraph (e.g. after the run block):
 > `:6333/dashboard`). Unset = every run embeds the full corpus per request. Backfill with
 > `python manage.py vector_sync` (stop the worker first in embedded mode — the dir is locked).
 
-## Tests (already on disk, start red)
+## Tests (on disk; the acceptance suite)
 
-Run:
+Run **with `VECTOR_STORE` unset in the shell** (an exported dev value would leak into every
+test that assumes the store is off — the store tests opt in via `override_settings`):
 
 ```bash
 cd backend
 python manage.py test vector_store jac.tests.test_vectors jac.tests.test_llm_rungs jac.tests.test_commands
-python manage.py test   # full suite once green
+python manage.py test   # full suite
 ```
 
 | file | covers |
 | --- | --- |
-| `backend/vector_store/tests/test_store.py` | store primitives on the in-memory Qdrant: off/enabled client factory + singleton/reset, collection-name slug, deterministic point ids, upsert/overwrite, `stored_hashes`, search scoped to exactly the requested ids and never across user/doc, normalised vectors on request, scoped + whole-scope delete |
-| `backend/jac/tests/test_vectors.py` | `reconcile()` embeds only missing/stale (hash-driven), orphan deletion only on demand and never for subsets; `ranked_via_store()` shape/order, **warm store embeds only the query**, per-user isolation, None on disabled/no-user/store-failure; ingest signals queue `sync_user_vectors` on save/delete (and stay silent when off / never break a save); the task ingests both corpora and drops orphans |
-| `backend/jac/tests/test_llm_rungs.py` (appended `EmbedStorePathTests`) | `DOC_KIND` declarations; `Embed.ranked_vectors` skips the classic batch when the store serves; falls back to the classic path on a store miss; classic batch unchanged when the store is off (regression guard — this one is green pre-implementation, flagged) |
-| `backend/jac/tests/test_commands.py` (appended `VectorSyncCommandTests`) | `vector_sync` refuses without `VECTOR_STORE`; backfills a user's corpus; `--drop` rebuilds |
-| `backend/jac/tests/_helpers.py` (appended) | `FakeEmbed` (deterministic keyword-count embedder recording its calls) + `FAKE_EMBED_CFG` |
+| `backend/vector_store/tests.py` | store primitives on the in-memory Qdrant: off/enabled client factory + singleton/reset, collection-name slug, deterministic point ids, upsert/overwrite, `stored_hashes`, search scoped to exactly the requested ids and never across user/doc, normalised vectors on request, scoped + whole-scope delete |
+| `backend/jac/tests/test_vectors.py` | `reconcile()` embeds only missing/stale (hash-driven), orphan deletion only on demand and never for subsets, doc corpora independent; `ranked_via_store()` shape/order, **warm store embeds only the query**, per-user isolation, None on disabled/no-user/store-failure; ingest signals queue `sync_user_vectors` on save/delete (silent when off, never break a save); the task ingests both corpora, drops orphans, skips inactive snippets |
+| `backend/jac/tests/test_llm_rungs.py` (appended `EmbedStorePathTests`) | `DOC_KIND` declarations; `Embed.ranked_vectors` serves from the store without ever calling the classic batch (and embeds only the query when warm); falls back to the classic path on a store miss; classic batch unchanged when the store is off |
+| `backend/jac/tests/test_commands.py` (appended `VectorSyncCommandTests`) | `vector_sync` refuses without `VECTOR_STORE`; backfills a user (stdout + stored hashes); second run is fully hash-skipped while `--drop` re-embeds everything; unknown user errors |
+| `backend/jac/tests/_helpers.py` (appended) | `FakeEmbed` (deterministic keyword-count embedder recording its calls) + `FAKE_EMBED_CFG` (patched over `jac.vectors.get_alias_config` so no test touches settings.LLM/LLMConfig or logs the fallback warning) |
 
-Red before implementation: everything importing `vector_store.store` / `jac.vectors` errors
-(module missing), `DOC_KIND` asserts fail, the command tests fail on the unknown command.
-One deliberate exception: `test_store_disabled_keeps_the_classic_batch` is a pre-existing-
-behaviour regression guard and passes already.
+Since the implementation landed first this round, the suite should be green immediately — any
+failure is a finding for `## Results`, not an expected red.
 
 ## Verification (after red → green)
 
