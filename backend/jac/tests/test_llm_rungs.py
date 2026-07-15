@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from jac.llm_prompts import (
     AddressExtract,
@@ -15,12 +15,13 @@ from jac.llm_prompts import (
     ParagraphGroundingCheck,
     ParagraphRewrite,
     PersonalParagraphWriter,
+    SnippetEmbed,
     TheAnalyst,
     TheJudge,
     _parse_unsupported,
 )
 
-from ._helpers import _muted, _entry, _StubSnippet
+from ._helpers import FAKE_EMBED_CFG, FakeEmbed, _muted, _entry, _StubSnippet
 
 
 class InstructScorerParseTests(TestCase):
@@ -757,3 +758,64 @@ class ParagraphRewriteTests(TestCase):
         with patch("jac.llm_prompts.complete", side_effect=RuntimeError("down")):
             with _muted():
                 self.assertEqual(self._rw().rewrite(), "")
+
+
+class EmbedStorePathTests(TestCase):
+    """Embed.ranked_vectors goes store-first (jac/vectors.py) and degrades to
+    the classic full per-run embed when the store is off or misses."""
+
+    def _entries(self):
+        return [
+            _entry("skill:1", "skill", text="python django"),
+            _entry("skill:2", "skill", text="kitchen"),
+        ]
+
+    def test_rungs_declare_their_corpus(self):
+        self.assertEqual(Embed.DOC_KIND, "cv")
+        self.assertEqual(SnippetEmbed.DOC_KIND, "snippet")
+
+    def test_store_disabled_keeps_the_classic_batch(self):
+        # Store off: one batched embed call, query + every entry — the old shape.
+        with (
+            override_settings(VECTOR_STORE=""),
+            patch("jac.llm_prompts.embed", return_value=[[1.0], [0.5], [0.2]]) as m,
+        ):
+            ranked = Embed("posting", self._entries(), user=7).ranked_vectors()
+        self.assertEqual([r["id"] for r in ranked], ["skill:1", "skill:2"])
+        _, kwargs = m.call_args
+        self.assertEqual(len(kwargs["inputs"]), 3)
+
+    def test_store_serves_and_the_classic_batch_never_runs(self):
+        from vector_store import store
+
+        with override_settings(VECTOR_STORE=":memory:"):
+            store.reset_client()
+            self.addCleanup(store.reset_client)
+            fake = FakeEmbed()
+            with (
+                patch("jac.vectors.embed", new=fake),
+                patch("jac.vectors.get_alias_config", return_value=FAKE_EMBED_CFG),
+                patch("jac.llm_prompts.embed") as classic,
+            ):
+                first = Embed(
+                    "python posting", self._entries(), user=7
+                ).ranked_vectors()
+                second = Embed(
+                    "python posting", self._entries(), user=7
+                ).ranked_vectors()
+        classic.assert_not_called()
+        self.assertEqual([r["id"] for r in first], ["skill:1", "skill:2"])
+        self.assertGreater(first[0]["score"], first[1]["score"])
+        self.assertEqual(len(second), 2)
+        # warm store: the second run embedded ONE input — the instructed query.
+        self.assertEqual(len(fake.calls[-1]), 1)
+        self.assertTrue(fake.calls[-1][0].startswith("Instruct:"))
+
+    def test_store_miss_falls_back_to_the_classic_batch(self):
+        with (
+            patch("jac.vectors.ranked_via_store", return_value=None),
+            patch("jac.llm_prompts.embed", return_value=[[1.0], [0.5], [0.2]]) as m,
+        ):
+            ranked = Embed("posting", self._entries(), user=7).ranked_vectors()
+        self.assertEqual(len(ranked), 2)
+        m.assert_called_once()

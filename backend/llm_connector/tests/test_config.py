@@ -1,7 +1,7 @@
 """Crypto + LLMConfig model + per-user config resolution + admin form."""
 
 from django.contrib.auth.models import User
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import TestCase, override_settings
 
 from llm_connector import complete
@@ -121,6 +121,38 @@ class LLMConfigModelTests(TestCase):
         )
         d = cfg.to_config_dict()
         self.assertEqual(set(d.keys()), {"provider", "model", "url"})
+
+    # -- Tower inference server deployment contract ------------------------------
+    # An ollama row pointing at the tower's WireGuard IP (a private address) must
+    # pass model validation ONLY when the operator has allowlisted the tunnel
+    # subnet. This exercises the clean() -> validate_safe_llm_url wiring
+    # (models.py), which the direct validator tests in test_validators.py don't
+    # cover. NOTE: these are GREEN on arrival — the wiring already exists; they are
+    # a regression guard for the tower-inference-server deployment, not a red-first
+    # acceptance test. See .claude/plans/to-do/[infra]-tower-inference-server.md.
+
+    @override_settings(LLM_URL_ALLOWLIST=["10.10.0.0/24"], LLM_URL_ALLOW_PRIVATE=False)
+    def test_ollama_row_at_allowlisted_vpn_ip_validates(self):
+        cfg = LLMConfig(
+            user=self.user,
+            alias="tower",
+            provider="ollama",
+            model="qwen2.5:7b-instruct",
+            url="http://10.10.0.2:11434/v1",  # tower over wg0, inside the allowlisted /24
+        )
+        cfg.full_clean()  # must not raise
+
+    @override_settings(LLM_URL_ALLOWLIST=[], LLM_URL_ALLOW_PRIVATE=False)
+    def test_ollama_row_at_private_ip_rejected_without_allowlist(self):
+        cfg = LLMConfig(
+            user=self.user,
+            alias="tower",
+            provider="ollama",
+            model="qwen2.5:7b-instruct",
+            url="http://10.10.0.2:11434/v1",
+        )
+        with self.assertRaisesRegex(ValidationError, "non-public"):
+            cfg.full_clean()
 
 
 @override_settings(LLM=FAKE_LLM, LLM_LOGGING=False)

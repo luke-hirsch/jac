@@ -18,7 +18,7 @@ from jac.models import ApplicationLayout, Domain, Job, Skill
 from spa.models import PersonalityQuestion
 from spa.personality_questions import PERSONALITY_QUESTIONS
 
-from ._helpers import _muted, _keep_all
+from ._helpers import FAKE_EMBED_CFG, FakeEmbed, _muted, _keep_all
 
 
 class ResolveRunsTests(TestCase):
@@ -193,3 +193,65 @@ class SeedSystemDefaultsTests(TestCase):
                     spec = json.load(fh)
                 self.assertNotIn("stale", spec)
                 self.assertIn("cv", spec)
+
+
+@override_settings(VECTOR_STORE=":memory:")
+class VectorSyncCommandTests(TestCase):
+    """vector_sync: batch backfill of the vector store from the career DB."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create(username="syncuser")
+        cls.skill = Skill.objects.create(user=cls.user, name="Python")
+
+    def setUp(self):
+        from vector_store import store
+
+        store.reset_client()
+        self.addCleanup(store.reset_client)
+
+    def _sync(self, *args):
+        """Run vector_sync for syncuser with the fake embedder; -> (stdout, fake)."""
+        out = io.StringIO()
+        fake = FakeEmbed()
+        with (
+            patch("jac.vectors.embed", new=fake),
+            patch("jac.vectors.get_alias_config", return_value=FAKE_EMBED_CFG),
+        ):
+            call_command("vector_sync", "--user", "syncuser", *args, stdout=out)
+        return out.getvalue(), fake
+
+    def test_refuses_without_a_configured_store(self):
+        from django.core.management.base import CommandError
+
+        with override_settings(VECTOR_STORE=""):
+            with self.assertRaisesMessage(CommandError, "VECTOR_STORE"):
+                call_command("vector_sync", stdout=io.StringIO())
+
+    def test_backfills_a_user(self):
+        from jac import vectors
+        from vector_store import store
+
+        out, _ = self._sync()
+        with patch("jac.vectors.get_alias_config", return_value=FAKE_EMBED_CFG):
+            name = vectors.collection_for("default", self.user)
+        hashes = store.stored_hashes(
+            store.get_client(), name, self.user.pk, vectors.DOC_CV
+        )
+        self.assertIn(f"skill:{self.skill.pk}", hashes)
+        self.assertIn("syncuser [cv]: 1 entries", out)
+        self.assertIn("syncuser [snippet]: 0 entries", out)
+
+    def test_second_sync_is_hash_skipped_but_drop_rebuilds(self):
+        _, first = self._sync()
+        self.assertEqual(len(first.embedded_texts), 1)
+        _, second = self._sync()
+        self.assertEqual(second.embedded_texts, [])  # hashes skip everything
+        _, dropped = self._sync("--drop")
+        self.assertEqual(dropped.embedded_texts, first.embedded_texts)  # full rebuild
+
+    def test_unknown_user_errors(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaisesMessage(CommandError, "nobody"):
+            call_command("vector_sync", "--user", "nobody", stdout=io.StringIO())

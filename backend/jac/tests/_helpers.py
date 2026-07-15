@@ -113,3 +113,34 @@ def _keep_all(self, job_post_text, grade=None):
     for e in self._flatten_entries():
         out.setdefault(e["type"], []).append({**e, "score": 1.0})
     return out
+
+
+# --- vector-store fixtures (guide: [backend]-vector-store-rag) ----------------
+
+# Keyword axes for FakeEmbed vectors; texts sharing a word score high cosine.
+_EMBED_WORDS = ("python", "django", "kitchen")
+
+# What `jac.vectors.get_alias_config` gets patched to resolve: enough config for
+# `collection_for` (an embed model) without touching settings.LLM or LLMConfig
+# rows — whose absence would log the falling-back warning into the run output.
+FAKE_EMBED_CFG = {"provider": "ollama", "embed_model": "fake-embed"}
+
+
+class FakeEmbed:
+    """Deterministic stand-in for llm_connector.embed: one dimension per keyword
+    plus a constant bias (no zero vectors), so ranking is predictable without a
+    live embedder. Records every call's inputs — tests assert the store path
+    embeds ONLY the query once the corpus is warm."""
+
+    def __init__(self):
+        self.calls: list[list[str]] = []
+
+    def __call__(self, inputs, *, alias="default", user=None):
+        self.calls.append(list(inputs))
+        return [
+            [float(t.lower().count(w)) for w in _EMBED_WORDS] + [0.1] for t in inputs
+        ]
+
+    @property
+    def embedded_texts(self) -> list[str]:
+        return [t for call in self.calls for t in call]

@@ -9,6 +9,8 @@ from rest_framework.test import APITestCase
 
 from llm_connector.models import LLMConfig, LLMRequestLog
 
+from ._helpers import _muted
+
 
 class LLMConfigViewSetScopingTests(APITestCase):
     """LLMConfigViewSet never leaks user A's configs to user B."""
@@ -229,8 +231,12 @@ class LLMAliasListViewTests(APITestCase):
         )
 
     def _rows(self, user):
+        # Listing aliases resolves the always-present "default" fallback; for a
+        # user without a personal LLMConfig that logs an expected "falling back
+        # to settings" warning — mute it so the run stays a clean wall of dots.
         self.client.force_login(user)
-        r = self.client.get("/api/llm/aliases/")
+        with _muted():
+            r = self.client.get("/api/llm/aliases/")
         self.assertEqual(r.status_code, 200)
         return {row["alias"]: row for row in r.data}
 
