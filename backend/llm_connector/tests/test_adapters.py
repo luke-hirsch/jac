@@ -1,16 +1,13 @@
-"""Provider adapters — Ollama behaviour + web-search capability (base flag, Anthropic, OpenAI, Google)."""
+"""Provider adapters — Ollama behaviour + web-search capability (base flag, Anthropic, OpenAI)."""
 
 import json
-import warnings
 from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase
 
-from llm_connector import can_web_search
 from llm_connector.base import LLMAdapter
 from llm_connector.providers.anthropic import AnthropicAdapter
-from llm_connector.providers.google import GoogleAdapter
 from llm_connector.providers.openai import OpenAIAdapter
 from llm_connector.registry import get_adapter_class
 
@@ -131,15 +128,12 @@ class WebSearchCapabilityTests(TestCase):
     def test_openai_flag_true(self):
         self.assertTrue(OpenAIAdapter.supports_web_search)
 
-    def test_google_flag_true(self):
-        self.assertTrue(GoogleAdapter.supports_web_search)
+    def test_ollama_flag_false(self):
+        # HirschAI never web-searches — the personal paragraph's capability gate
+        # (Executor.supports_web_search, tested in test_config) rests on this.
+        from llm_connector.providers.ollama import OllamaAdapter
 
-    def test_can_web_search_reflects_client(self):
-        with patch("llm_connector.get_client") as gc:
-            gc.return_value.supports_web_search = True
-            self.assertTrue(can_web_search("strong"))
-            gc.return_value.supports_web_search = False
-            self.assertFalse(can_web_search("default"))
+        self.assertFalse(getattr(OllamaAdapter, "supports_web_search", False))
 
 
 class AnthropicWebSearchTests(TestCase):
@@ -255,69 +249,6 @@ class OpenAIWebSearchTests(TestCase):
         adapter._client.responses.create.return_value = self._response(
             "t", ["https://a", "https://a"]
         )
-        out = adapter.web_search([{"role": "user", "content": "q"}])
-        self.assertEqual(out["sources"], ["https://a"])
-
-
-class GoogleWebSearchTests(TestCase):
-    """Google web search = Gemini's Google Search grounding tool (legacy google-generativeai SDK):
-    prose from response.text, sources from candidates[].grounding_metadata.grounding_chunks[].web.uri."""
-
-    def _adapter(self, **cfg):
-        # The legacy google-generativeai package emits a FutureWarning on import; the adapter
-        # targets it deliberately (see google.py), so silence that one warning, not real ones.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            adapter = GoogleAdapter({"api_key": "test", "model": "gemini-2.5-pro", **cfg})
-        adapter._genai = MagicMock()
-        return adapter
-
-    @staticmethod
-    def _response(text, urls):
-        chunks = [_Block(web=_Block(uri=u, title="t")) for u in urls]
-        return _Block(
-            text=text,
-            candidates=[_Block(grounding_metadata=_Block(grounding_chunks=chunks))],
-        )
-
-    @staticmethod
-    def _wire(adapter, response):
-        send = adapter._genai.GenerativeModel.return_value.start_chat.return_value.send_message
-        send.return_value = response
-
-    def test_collects_text_and_grounding_sources(self):
-        adapter = self._adapter()
-        self._wire(
-            adapter,
-            self._response(
-                "Acme builds rockets.",
-                ["https://acme.com/about", "https://news.example/acme"],
-            ),
-        )
-
-        out = adapter.web_search([{"role": "user", "content": "research Acme"}])
-
-        self.assertEqual(out["text"], "Acme builds rockets.")
-        self.assertIn("https://acme.com/about", out["sources"])
-        self.assertIn("https://news.example/acme", out["sources"])
-
-    def test_attaches_google_search_tool(self):
-        adapter = self._adapter()
-        self._wire(adapter, self._response("x", []))
-        adapter.web_search([{"role": "user", "content": "q"}])
-        kwargs = adapter._genai.GenerativeModel.call_args.kwargs
-        self.assertEqual(kwargs.get("tools"), "google_search")
-
-    def test_search_tool_overridable(self):
-        adapter = self._adapter(search_tool="google_search_retrieval")
-        self._wire(adapter, self._response("x", []))
-        adapter.web_search([{"role": "user", "content": "q"}])
-        kwargs = adapter._genai.GenerativeModel.call_args.kwargs
-        self.assertEqual(kwargs.get("tools"), "google_search_retrieval")
-
-    def test_dedupes_sources_preserving_order(self):
-        adapter = self._adapter()
-        self._wire(adapter, self._response("t", ["https://a", "https://a"]))
         out = adapter.web_search([{"role": "user", "content": "q"}])
         self.assertEqual(out["sources"], ["https://a"])
 

@@ -1,0 +1,66 @@
+i was working on guide 2 of the new ai flow, when i figured, that gthis is still to complicated. 
+like i said earlier, anthropic and openai as providers are fine enough. 
+all the llm config model acutally needs to hold is the user, provider and api key and if this the default.
+
+the rest is conifugrable. 
+for model a list in the frontend works fine. 
+this list is maintained by me, so the user dont have to confiuge a new llm everytime the providers come up with an update. 
+
+the model on my tower is not part of the settings anymore, but will be asigned to the system user. 
+we will use the same mixin class like we do for other system stuff like the temlates or domains. 
+
+so what happens when the user picks a comercial provider like openai or anthropic? it will skip the embedding.
+nothing will be ever hit my tower pc. this way no data will be sent to my tower, this way the user doesn't have to trust 
+the tower pc security
+
+i also removed all the test managemnet commands like cv_eval etc. this simplified the llm_prompts. i deprecated the internet search for the address,
+it hasn't been working well anyways. 
+
+new naming convention:
+ollama on tower ="HirschAi"
+intstruct mode = "standard"
+conversational mode = "high"
+
+to capture the flow again:
+
+1.) user without personal ai config and tower offline (no ai rung)
+
+user creates application by adding a job post --> user creates a manual cv by selecting entries from the db. --> coverletter completly manual or with the help of the snippets
+
+
+2.) user without personal ai config and tower online (renamed it "HirschAi")
+user creates application by adding a job post --> auto embedding on tower, then instruct on tower for cv and coverletter 
+-- > no personal paragraph --> auto proofread and fact check on tower
+--> user now can manually edit cv and coverletter OR chat about the cv OR rewrite paragraphs for the letter OR just send 
+
+3.) user personal ai config, tower online BUT commercial providers are not default.
+user creates application by adding a job post --> auto embedding on tower, then instruct on tower for cv and coverletter 
+-- > including personal paragraph that is g if a personality dossier for the user exists --> auto proofread and fact check on tower
+-->  user now can manually edit cv and coverletter OR chat about the cv OR rewrite paragraphs for the letter OR just send 
+
+OR 
+
+switch to commercial provider --> select "standard" or "high" --> repeat process until happy (manual edits/entriy pins are excempt)
+
+
+4. ) user personal ai config, tower online BUT one commercial providers IS default.
+user creates application by adding a job post --> everything is send to commercial provider with 'instruct' for cv and coverletter 
+-- > including personal paragraph if a personality dossier for the user exists --> auto proofread and fact check on tower
+--> user now can manually edit cv and coverletter OR chat about the cv OR rewrite paragraphs for the letter OR just send 
+OR switch to "high" and repeat (except manual edits and pins)
+OR switch to "HirschAi"  --> run like (2) or switch to other commercial provider --> select "standard" or "high" --> repeat process until happy
+
+
+Manual edits/pins are always added to the shortlist surrive every kind of ai generation run, if conversational filter finds unfitting, add expressive warning, but leave in
+
+Main goal is to simplify. 
+we can break everything. nothing needs to be migrated carfully. db and migrations are delted, we start fresh
+
+also i removed the tests for now, to start fresh as possible. i left empty files, to be clear about the structure of future test. 
+i want model test, views be tested. and the prompts. prompt testing should be done by running the whole pipeline on tower server once, or skipt the tests with warning (hirsch ai offline).
+the prompt test should test for output quality and output structure. since we work with statictical models, its encouraged they run multiple times. test is passed if 
+x percentage passed
+
+
+this rework will affect the whole app and is volatile. we concentrate on getting the backend nailed first and disregard the complete frontend. 
+first lets focus on aligning the goal,s o that there is little need for assuptions and guessing on your end as possible.

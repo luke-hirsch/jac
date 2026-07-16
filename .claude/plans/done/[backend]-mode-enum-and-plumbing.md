@@ -2,15 +2,17 @@
 
 > **Guide 1** in the *LLM-mode redesign* (see the roadmap note "LLM modes — offline
 > tolerance"). Staged sequence:
-> 1. **mode-enum-and-plumbing** ← *this guide* (vocabulary + DB, minimal behavior change)
-> 2. selection-ladder-remap (pipeline speaks modes natively; deletes the compat shim **and jac's
->    `Grade` vocabulary**)
+> 1. **mode-enum-and-plumbing** ← *this guide* (vocabulary + DB, minimal behavior change) —
+>    **landed** (`ed1c406`)
+> 2. selection-ladder-remap (pipeline speaks modes natively; **deletes every grade/strength
+>    artifact in one branch** — this guide's bridge, jac's `Grade`, the connector's
+>    autodetect/strength machinery, the strength pins, the chat gate; the SPA breaks until 5)
 > 3. staggered-instruct-pipeline (shared embed prefilter → LLM rerank)
 > 4. llm-reachability-and-executors-endpoint
-> 5. model-first-generate-panel (SPA flips to the model-first panel, auto-runs on create; removes
->    the compat `grade` bridge)
+> 5. model-first-generate-panel (SPA flips to the model-first panel, auto-runs on create —
+>    and un-breaks the SPA)
 > 6. manual-no-run-mode
-> 7. chat-assistant-rework (spun out — mostly independent; owns the final autodetect deletion)
+> 7. chat-assistant-rework (spun out — independent; the strength gate already died in guide 2)
 >
 > Rides along after 3: `[fullstack]-application-pinned-entries` (per-application pins that survive
 > re-generation). After 4: `[fullstack]-llm-model-catalog-and-knobs` (run-time model pick +
@@ -39,28 +41,23 @@ embed→instruct ladder) **is** `instruct` on the free default alias — one str
 **This guide is plumbing with one deliberate behavior change.** It introduces `Mode` as the
 user-facing + DB vocabulary and *translates to the existing internal `grade`* at the task boundary.
 The selection/writer code (`filter.py`, `cover_letter.py`, `llm_prompts.py`, `cv.py`) is **not
-touched** — it keeps speaking `grade`; guide 2 migrates it and deletes the `mode_to_grade` shim.
-`Grade`, `normalize_grade`, and `get_alias_strength` all **stay** for now — but each has a named
-deletion point (see the compat ledger below), none of it outlives the redesign.
+touched** — it keeps speaking `grade`; guide 2 migrates it.
 
-### Compat ledger — every bridge artifact's scheduled death
+### Direction change (Lukas, 2026-07-16) — everything dies in guide 2
 
-The redesign is staged, so guide 1 necessarily plants translation helpers. This table is the
-contract that none of them is permanent — each has exactly one owner, no "cleanup later":
-
-| Artifact | Born | Dies | Killed by |
-| --- | --- | --- | --- |
-| `MODE_TO_GRADE` + `mode_to_grade()` | guide 1 | **guide 2** | pipeline (`filter.py`/`cv.py`/`cover_letter.py`/`llm_prompts.py`/`tasks.py`) goes mode-native |
-| jac's `Grade` + `normalize_grade` | pre-existing | **guide 2** | same branch rekeys their last consumers (`filter.py`, `cv.py`, the eval commands) — verified by grep 2026-07-16: nothing else uses the class |
-| serializer-local mode→grade literal map (compat `grade` read after the shim dies) | guide 2 | **guide 5** | SPA reads `mode` |
-| `GRADE_TO_MODE`, `KNOWN_MODE_INPUTS`, the legacy-grade branch in `normalize_mode` | guide 1 | **guide 5** | SPA sends `mode`; lenient `grade` write dies |
-| compat `grade` fields on both read serializers | guide 1 | **guide 5** | same |
-| connector strength machinery (`get_alias_strength`, `_autodetect_strength`, `_STRENGTHS`, `strength` config key, `LLM_STRENGTH`) | pre-existing | **guide 5** (per-alias `strength` report) + **guide 7** (everything else, incl. `llm_check`) | chat gate is the last caller |
+This guide originally carried a staged "compat ledger" spreading each bridge artifact's deletion
+across guides 2/5/7 — written on the assumption the grade→mode change had to be gentle. Overruled:
+the app runs exclusively on one dev machine; breakage is cheap, and nothing gets kept around just
+to delete it later. Every bridge artifact this guide shipped (`GRADE_TO_MODE`, `MODE_TO_GRADE` +
+`mode_to_grade`, `KNOWN_MODE_INPUTS`, the legacy-grade branch in `normalize_mode`, the compat
+`grade` read fields, the lenient `grade` write) **and** the pre-existing grade/strength vocabulary
+(jac's `Grade` + `normalize_grade`; the connector's `get_alias_strength` / `_autodetect_strength` /
+`_STRENGTHS` / the `strength` config key / `LLM_STRENGTH`; the strength-keyed pins; the chat
+strength gate) dies in **guide 2** — one branch, no survivors, closing grep included there. The
+SPA breaks between guides 2 and 5; accepted.
 
 Permanent survivors: `Mode` itself, and `normalize_mode`'s blank/unknown→`instruct` coercion
-(that's the API's input tolerance, not a bridge). After guide 5 the only grade vocabulary left in
-the codebase is the connector's strength machinery, and guide 7 ends that — the closing check is
-guide 7's `grep -rn "strength\|Grade" backend/` hitting only migrations and comments.
+(that's the API's input tolerance, not a bridge).
 
 The deliberate change: **the embed-only tier stops being user-facing.** Legacy `light` maps to
 `instruct` (interim internal grade `standard`), so a legacy-SPA "light" create now attempts the
@@ -70,13 +67,10 @@ prefilter + degrade stage (guide 3), not as a tier a user picks. The cost guard 
 `free_only` now derives from **the alias** (`is_free_alias`), not from the grade — a free-alias run
 must never route support rungs onto paid pins, whatever its mode.
 
-Because the SPA still sends/reads `grade` (values `light`/`standard`/`strong`) until guide 5, this
-guide ships a **compatibility bridge** so it can merge on its own without breaking the frontend:
-- **lenient write** — the create serializer accepts a legacy `grade` key and maps it to a mode;
-- **additive read** — the run serializers expose the new `mode` *and* keep a compat `grade`
-  (derived `mode → grade`).
-
-Guide 5 removes the bridge once the SPA speaks modes.
+As designed pre-direction-change, this guide shipped a **compatibility bridge** so it could merge
+without breaking the frontend (lenient `grade` write + additive compat `grade` read). It landed
+that way in `ed1c406`; per the note above, **guide 2 deletes the bridge wholesale** and the SPA
+runs broken until guide 5.
 
 **`manual` is enforced server-side, not just in the SPA.** "No AI" is a promise, and guide 6's
 no-run flow lives entirely in the frontend; per the internet-facing posture a client-side guard
@@ -416,4 +410,10 @@ cd backend && python manage.py test jac.tests.test_models jac.tests.test_generat
 
 ## Results
 
-<!-- Human fills this after implementing + testing: raw test output, observed issues, what works. -->
+Landed in `ed1c406` ("mode enum and plumbing, db reset, migrations reset") — typed by Lukas,
+2026-07-16. No logged test run: the same day, the **single-executor redesign** superseded the
+rest of this staged sequence, and the jac test suite was reset to empty files for the rework.
+The `Mode` enum this guide introduced survives, but its member names were changed by the rework
+(`instruct` → `standard`, `conversational` → `high`) and the compat bridge (`GRADE_TO_MODE`,
+`mode_to_grade`, `KNOWN_MODE_INPUTS`) was deleted rather than staged out. Follow-ups:
+`[backend]-executor-connector`, `[backend]-pipeline-single-executor`, `[backend]-entry-pins`.

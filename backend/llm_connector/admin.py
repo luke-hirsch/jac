@@ -19,8 +19,13 @@ class LLMConfigAdminForm(forms.ModelForm):
     class Meta:
         model = LLMConfig
         fields = (
-            "user", "alias", "provider", "model", "url",
-            "max_tokens", "extra", "api_key",
+            "user",
+            "default",
+            "provider",
+            "url",
+            "max_tokens",
+            "extra",
+            "api_key",
         )
 
     def __init__(self, *args, **kwargs):
@@ -44,9 +49,9 @@ class LLMConfigAdminForm(forms.ModelForm):
 @admin.register(LLMConfig)
 class LLMConfigAdmin(admin.ModelAdmin):
     form = LLMConfigAdminForm
-    list_display = ("user", "alias", "provider", "model", "api_key_set", "updated_at")
-    list_filter = ("provider", "alias")
-    search_fields = ("user__username", "user__email", "alias", "model")
+    list_display = ("user", "default", "provider", "model", "api_key_set", "updated_at")
+    list_filter = ("provider", "default")
+    search_fields = ("user__username", "user__email", "model")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("user",)
 
@@ -57,10 +62,32 @@ class LLMConfigAdmin(admin.ModelAdmin):
 
 @admin.register(LLMRequestLog)
 class LLMRequestLogAdmin(admin.ModelAdmin):
-    list_display = ("user", "alias", "provider", "model", "prompt_tokens", "completion_tokens", "latency_ms", "created_at", "has_error")
+    list_display = (
+        "user",
+        "def",
+        "provider",
+        "model",
+        "prompt_tokens",
+        "completion_tokens",
+        "latency_ms",
+        "created_at",
+        "has_error",
+    )
     list_filter = ("alias", "provider")
     search_fields = ("user__username", "alias", "provider", "model", "error")
-    readonly_fields = ("user", "alias", "provider", "model", "prompt_tokens", "completion_tokens", "latency_ms", "created_at", "request_messages", "response_text", "error")
+    readonly_fields = (
+        "user",
+        "alias",
+        "provider",
+        "model",
+        "prompt_tokens",
+        "completion_tokens",
+        "latency_ms",
+        "created_at",
+        "request_messages",
+        "response_text",
+        "error",
+    )
 
     @admin.display(boolean=True, description="Error?")
     def has_error(self, obj):

@@ -1,5 +1,10 @@
 # [frontend] manual-no-run-mode
 
+> **⚠️ STALE (2026-07-16 executor rework).** The manual flow itself survives, but this
+> guide references the dead alias vocabulary and the old guide stack; auto-run on create
+> is now backend-side (`[backend]-pipeline-single-executor`) and `manual` simply means
+> "no executor available / chosen". Rewrite against the executor backend at activation.
+
 > **Guide 6** — *LLM-mode redesign*. Depends on **guide 1** (`Mode.manual`); pairs with guide 5
 > (the panel routes `manual` here). This is the **guaranteed-offline path**: no LLM, no generation
 > run — the user hand-curates the application from their career DB.

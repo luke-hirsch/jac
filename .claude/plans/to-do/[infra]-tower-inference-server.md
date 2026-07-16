@@ -1,5 +1,10 @@
 # [infra] Tower inference server — GPU ollama over WireGuard, VPS stays the edge
 
+> **Naming/config note (2026-07-16 executor rework):** ollama-on-tower is now the
+> **HirschAI** executor — configured via the system-owned `LLMConfig` row seeded from
+> `settings.HIRSCHAI` (`HIRSCHAI_URL`/`HIRSCHAI_MODEL`/`HIRSCHAI_EMBED_MODEL`), not
+> `settings.LLM` or per-user rows. The ops content below is otherwise unaffected.
+
 ## Context / goal
 
 The production VPS turned out to have **2 GB RAM, not 4**. That is enough to run the JAC web
@@ -58,8 +63,9 @@ repo-touching change is environment configuration on the VPS, plus one test file
 | *(VPS)* JAC deploy env (`.env` / systemd `Environment=`) | edit | repoint the default alias at the tower + allowlist the tunnel subnet |
 | `backend/llm_connector/tests/test_config.py` | edit | model-level contract guard: an ollama row at the tower's wg IP validates iff the operator allowlists the tunnel subnet (**green on arrival** — see Tests) |
 
-**No Python/JS source is edited.** `LLM_URL`, `LLM_MODEL`, `LLM_STRENGTH`, `LLM_URL_ALLOWLIST` are
-all already read from the environment in `settings.py:185-210`.
+**No Python/JS source is edited.** `LLM_URL`, `LLM_MODEL`, `LLM_URL_ALLOWLIST` are all already
+read from the environment in `settings.py:185-210`. (`LLM_STRENGTH` used to be on this list — the
+mode redesign's guide 2 deletes strength/autodetect outright, so there is no rung knob to set.)
 
 ---
 
@@ -222,35 +228,23 @@ Set these in the JAC deploy environment (the `.env` or systemd `Environment=` li
 LLM_URL=http://10.10.0.2:11434/v1     # tower over wg0 — mirror the existing "/v1" path shape,
                                        # only the host changes (see settings.py:188)
 LLM_MODEL=qwen2.5:7b-instruct          # the bigger default (was llama3.2:1b)
-LLM_STRENGTH=standard                  # ← REQUIRED to actually use the bigger model (see gotcha)
 LLM_URL_ALLOWLIST=10.10.0.0/24         # so a per-user ollama row at the tower also validates
 # LLM_EMBED_MODEL — leave as qwen3-embedding:0.6b
 ```
 
-> **Gotcha — the model bump alone does nothing to the rung.** `settings.py:193` sets
-> `"strength": os.getenv("LLM_STRENGTH", "light")`, and in `get_alias_strength()` an *explicit*
-> strength **wins over autodetect** (`conf.py:119-122`). So without `LLM_STRENGTH=standard` the
-> default alias stays pinned to the **light** (embedding-only) rung no matter how big the model is.
-> Set it to `standard` to unlock the instruct rung; `strong` is available too but a 7–8B model
-> isn't honestly a "strong" model — `standard` is the right rung for it.
-
-> **Ordering note — the LLM-mode redesign retires this knob.** Guides 1–5 of the mode redesign
-> replace autodetected *strength* with a per-run **mode** the user picks; once
-> `selection-ladder-remap` + the executors endpoint land, `LLM_STRENGTH` matters only to the two eval
-> commands. If the tower lands **before** the redesign, set `LLM_STRENGTH=standard` as above; if
-> **after**, skip the knob — the tower is simply where `instruct` on the default free alias (the
-> staggered embed→instruct pipeline) runs, reached via `LLM_URL` alone, and the "product call"
-> below dissolves: the executors endpoint offers the free executor (public name "Dr. Jacll" —
-> guide 5; deliberately *not* named after the tower) whenever it answers. Either ordering
-> works; just don't chase a stale env var afterwards (guide 7 deletes it outright).
-
-> **Product call, make it on purpose.** Moving the *default* off `light` changes what the default
-> **showcases**. Per [[project-purpose-cv-showcase]] the `light` rung is a deliberate demonstration
-> that *small self-hosted models are viable*. A 7–8B default on your own GPU is arguably a stronger
-> version of the same thesis (consumer hardware vs. a $20k cloud bill), but it *is* a different
-> claim. Decide whether the public default should be `light` (the showcase) or `standard` (better
-> letters). You can also leave the site default at `light` and pin your **own** account to a
-> `standard` tower alias via the LLM-config tab — best of both.
+> **No rung/strength knob anymore.** The mode redesign's guide 2 deleted `LLM_STRENGTH`,
+> `get_alias_strength`, and autodetect: what a run does is the per-run **mode** the user picks
+> (`instruct`/`conversational`), and the tower is simply where the free default alias executes —
+> reached via `LLM_URL` alone. The executors endpoint (guide 4) offers the free executor (public
+> name "Dr. Jacll" — guide 5; deliberately *not* named after the tower) whenever the tower
+> answers. In the unlikely case the tower lands **before** guide 2 merges, set
+> `LLM_STRENGTH=standard` temporarily so the 7B isn't wasted on the embed-only rung, and delete
+> the var when guide 2 lands.
+>
+> The old "light vs standard default" product call dissolved with the redesign: the embed-only
+> tier is no longer user-facing (it's `instruct`'s prefilter, guide 3), and the showcase thesis
+> ([[project-purpose-cv-showcase]] — small self-hosted models are viable) now rides on `instruct`
+> running a 7B on your own GPU instead of a $20k cloud bill.
 
 The SSRF validator does **not** gate the operator-set `LLM_URL` default (it's trusted; only
 user-saved `custom`/`ollama` rows are validated — `models.py:80-85`). `LLM_URL_ALLOWLIST` is here so
@@ -385,9 +379,9 @@ the bigger model.
    proof).
 5. **Contract test green (repo):** the `test_config` command above passes (regression guard).
 6. **JAC end-to-end (VPS):** trigger a real generation for an application (the async loop from
-   [[generation-async-loop]]). Expect: it completes, the CV/letter reflect the **7B** model's
-   quality (not the old 1B), and — with `LLM_STRENGTH=standard` — the run reports the **standard**
-   rung, not light. Confirm the VPS RAM stays healthy (`free -h`) throughout, since no model runs
+   [[generation-async-loop]]) in `instruct` mode. Expect: it completes, the CV/letter reflect the
+   **7B** model's quality (not the old 1B), and the run's meta reports `mode: instruct` on the
+   free alias. Confirm the VPS RAM stays healthy (`free -h`) throughout, since no model runs
    there now.
 7. **Personal ollama alias (optional):** in the account → LLM tab, add an `ollama` config with
    `url=http://10.10.0.2:11434/v1`. It should **save** (validator accepts it because of

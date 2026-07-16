@@ -17,12 +17,10 @@ from jac.filter import CVFilter
 from jac.models import (
     Certification,
     Education,
-    Grade,
     Job,
     Language,
     Project,
     Skill,
-    normalize_grade,
 )
 
 logger = logging.getLogger(__name__)

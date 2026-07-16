@@ -1,5 +1,11 @@
 # [backend] staggered-instruct-pipeline (shared embed prefilter)
 
+> **⚠️ PARKED / PARTLY SUPERSEDED (2026-07-16 executor rework).** The single-executor
+> invariant forbids this guide's commercial half — a commercial run must never touch the
+> tower embedder, so "send the embed-ranked shortlist to the paid model" is dead. Only a
+> HirschAI-internal retrieve-then-rerank could survive, as a tower-run optimisation.
+> Rewrite against `[backend]-pipeline-single-executor` before any activation.
+
 > **Guide 3** — *LLM-mode redesign*. Depends on **guide 2 (selection-ladder-remap)**. Adds a
 > **shared, reachability-gated embed prefilter** — a two-stage **retrieve-then-rerank** — that is
 > the default shape of **`instruct` mode** and that `conversational` uses **whenever the free

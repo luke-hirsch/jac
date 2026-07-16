@@ -1,5 +1,4 @@
 import logging
-import re
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -71,57 +70,6 @@ def get_alias_config(alias: str = "default", user=None) -> dict:
     return cfg.to_config_dict()
 
 
-_STRENGTHS = {"light", "standard", "strong"}
-# Parameter-size token in a model id, e.g. "0.8b" in "qwen3.5:0.8b" or "70b".
-_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b")
-# Cloud model names without a size token that still signal a small/fast tier.
-_SMALL_NAME_HINTS = ("haiku", "mini", "nano", "lite", "flash")
-# Embedding-model name hints. These map to 'light' regardless of size token — an
-# embedder only ever does the light rung, and large embedders (e5-mistral-7b) must
-# not autodetect to 'standard'. Tune as new embedders show up.
-_EMBED_NAME_HINTS = ("embed", "bge", "gte", "e5", "minilm", "nomic")
-
-
-def _autodetect_strength(provider: str, model: str) -> str:
-    """Best-effort capability guess from a model id, for aliases with no explicit
-    `strength`. Conservative: anything we can't positively identify as small ->
-    'strong' (the full ladder), so paid configs and existing tests keep their
-    behaviour. Only models we recognise as small get opted down.
-    """
-    name = (model or "").lower()
-    if any(hint in name for hint in _EMBED_NAME_HINTS):
-        return "light"
-    sizes = [float(m) for m in _SIZE_RE.findall(name)]
-    if sizes:
-        size = max(sizes)
-        if size <= 3:
-            return "light"
-        if size <= 14:
-            return "standard"
-        return "strong"
-    if any(hint in name for hint in _SMALL_NAME_HINTS):
-        return "standard"
-    return "strong"
-
-
-def get_alias_strength(alias: str = "default", user=None) -> str:
-    """Pipeline capability hint for an alias: 'light' | 'standard' | 'strong'.
-
-    An explicit, valid `strength` in the resolved config (LLMConfig.extra for
-    per-user rows, the settings.LLM dict for the default) always wins. Otherwise
-    auto-detect from the model id. Unknown -> 'strong' (full ladder), preserving
-    prior behaviour for anything we don't recognise.
-    """
-    try:
-        config = get_alias_config(alias, user=user)
-    except Exception:  # noqa: BLE001 — missing/broken config -> safe default
-        return "strong"
-    strength = config.get("strength")
-    if strength in _STRENGTHS:
-        return strength
-    return _autodetect_strength(config.get("provider", ""), config.get("model", ""))
-
-
 # Providers that cost nothing to call — self-hosted or user-hosted endpoints. The
 # paid trio (anthropic/openai/google) bills per token; pick_alias(free_only=True)
 # refuses to route a rung onto them (e.g. a "light" showcase run must stay free).
@@ -139,8 +87,8 @@ def is_free_alias(alias: str, user=None) -> bool:
     return config.get("provider", "") in FREE_PROVIDERS
 
 
-def get_pinned_alias(strength: str, user=None) -> str | None:
-    """The user's pinned favourite alias for a strength tier, or None.
+def get_pinned_alias(role: str, user=None) -> str | None:
+    """The user's pinned favourite alias for a support role, or None.
 
     A stale pin — its alias is neither one of the user's LLMConfig rows nor the
     "default" fallback (the row was deleted or renamed) — is ignored, so the
@@ -148,11 +96,11 @@ def get_pinned_alias(strength: str, user=None) -> str | None:
     can't make that call: with a user it silently resolves any unknown alias to
     the default config.)
     """
-    if user is None or strength not in _STRENGTHS:
-        return None
-    from .models import LLMConfig, LLMGradePin
+    from .models import LLMConfig, LLMPin
 
-    pin = LLMGradePin.objects.filter(user=user, strength=strength).first()
+    if user is None or role not in LLMPin.Role.values:
+        return None
+    pin = LLMPin.objects.filter(user=user, role=role).first()
     if pin is None:
         return None
     if (
@@ -169,7 +117,7 @@ def get_pinned_alias(strength: str, user=None) -> str | None:
 
 
 def pick_alias(
-    preferred_strength: str | None,
+    preferred_pin: str | None,
     *,
     fallback: str,
     user=None,
@@ -177,16 +125,16 @@ def pick_alias(
 ) -> str:
     """Resolve the alias a pipeline rung should run on.
 
-    A rung declares the strength tier it wants (its PREFERRED_GRADE); when the
-    user pinned a favourite model for that tier, the rung runs there instead of
-    on the run's main alias — that is how a strong run keeps its audits off the
-    expensive model. `free_only=True` (a light run's cost guard) refuses a pin
-    that resolves to a paid provider. No preference, no pin, or a refused pin
-    -> `fallback` (normally the run's main alias).
+    A rung declares the support role it wants (its PREFERRED_PIN); when the user pinned
+    a favourite model for that role, the rung runs there instead of on the run's main
+    alias — that is how a conversational run keeps its audits off the expensive model.
+    `free_only=True` (the free-alias cost guard) refuses a pin that resolves to a paid
+    provider. No preference, no pin, or a refused pin -> `fallback` (normally the run's
+    main alias).
     """
-    if not preferred_strength:
+    if not preferred_pin:
         return fallback
-    pinned = get_pinned_alias(preferred_strength, user=user)
+    pinned = get_pinned_alias(preferred_pin, user=user)
     if pinned is None:
         return fallback
     if free_only and not is_free_alias(pinned, user=user):

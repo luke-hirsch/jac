@@ -1,5 +1,10 @@
 # [fullstack] llm-model-catalog-and-knobs
 
+> **⚠️ PARTLY LANDED (2026-07-16).** The catalog + per-run model pick shipped with
+> `[backend]-executor-connector` (`llm_connector/catalog.py`, run `provider`/`model`).
+> Remaining scope = the effort/temperature knobs (and the pricing metadata for the
+> calculator). Rewrite to that reduced scope before activation.
+
 > Spun out of the *LLM-mode redesign* follow-up (Lukas, 2026-07-15). Rides after **guide 4** (it
 > enriches `GET /api/jac/executors/` with `models`/`knobs`); guide 5's panel renders whatever this
 > advertises. Independent of guides 2/3/6. This is the **llm_connector rework** Lukas named —

@@ -40,8 +40,6 @@ def _load_builtin(provider: str):
     builtin = {
         "anthropic": "llm_connector.providers.anthropic",
         "openai": "llm_connector.providers.openai",
-        "google": "llm_connector.providers.google",
-        "custom": "llm_connector.providers.custom",
         "ollama": "llm_connector.providers.ollama",
     }
     if provider in builtin:

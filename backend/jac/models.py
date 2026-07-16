@@ -45,31 +45,15 @@ class SkillManager(models.Manager):
         )
 
 
-class Grade(models.TextChoices):
-    """The CV-tailoring / cover-letter quality rung. 1:1 with an LLM alias's 'strength'
-    (llm_connector.conf.get_alias_strength) — same three strings, but this is jac's own copy so
-    the connector stays app-agnostic. This is THE definition; nothing else should hardcode the list.
-    """
-
-    light = "light", _("Light")
-    standard = "standard", _("Standard")
-    strong = "strong", _("Strong")
-
-
-def normalize_grade(value: str | None) -> str:
-    """Coerce any input to a valid Grade value, defaulting to `light`."""
-    return str(value) if value in Grade.values else Grade.light
-
-
 class Mode(models.TextChoices):
     """How a generation selects — the user-facing axis that replaced model *strength*.
 
-    Three modes: the mode names the selection STRATEGY, the run's alias names the executor,
-    and "automatic" is a trigger property (the SPA auto-runs `instruct` on the free default
-    alias when the tower answers), not a mode. `manual` never enters the pipeline (the user
-    hand-curates); the other two map to an internal `Grade` at the task boundary until the
-    pipeline speaks modes natively (see the selection-ladder-remap guide). THIS is the
-    canonical list — nothing else hardcodes it.
+    Three modes: the mode names the selection STRATEGY, the run's alias names the
+    executor, and "automatic" is a trigger property (the SPA auto-runs `instruct` on the
+    free default alias when the tower answers), not a mode. `manual` never enters the
+    pipeline (the user hand-curates; CVFilter's own manual branch keeps even a buggy
+    caller at zero LLM/embed calls). THIS is the canonical list — nothing else hardcodes
+    it.
     """
 
     manual = "manual", _("No AI")
@@ -77,45 +61,11 @@ class Mode(models.TextChoices):
     conversational = "conversational", _("Conversational")
 
 
-# Legacy grade -> mode. Accepts a legacy `grade` from the SPA until it speaks modes
-# (model-first-generate-panel guide). `light` and `standard` both collapse into
-# `instruct` — the embed-only tier is no longer user-facing (it becomes instruct's prefilter).
-GRADE_TO_MODE = {
-    Grade.light: Mode.instruct,
-    Grade.standard: Mode.instruct,
-    Grade.strong: Mode.conversational,
-}
-
-# Mode -> internal pipeline grade. Temporary translation: the selection/writer code still branches
-# on Grade; the selection-ladder-remap guide replaces these call sites with mode-native logic and
-# deletes this map. `manual` maps to the safe floor (`light`) ONLY for generic mapping code — the
-# serializer rejects manual creates and the task fail-fasts manual rows, so it never executes.
-MODE_TO_GRADE = {
-    Mode.manual: Grade.light,
-    Mode.instruct: Grade.standard,
-    Mode.conversational: Grade.strong,
-}
-
-# Everything the create serializer will accept as an incoming mode: real modes + legacy grades.
-KNOWN_MODE_INPUTS = frozenset(Mode.values) | frozenset(GRADE_TO_MODE)
-
-
 def normalize_mode(value: str | None) -> str:
-    """Coerce any input to a valid `Mode` value. Accepts a mode, or a legacy grade
-    (`light`/`standard` → `instruct`, `strong` → `conversational`). Anything else — blank,
-    None, a typo — defaults to `instruct` (the AI default; the SPA offers `manual` itself
-    when nothing is reachable)."""
-    if value in Mode.values:
-        return str(value)
-    if value in GRADE_TO_MODE:
-        return str(GRADE_TO_MODE[value])
-    return Mode.instruct
-
-
-def mode_to_grade(mode: str | None) -> str:
-    """Translate a `Mode` to the internal `Grade` the pipeline still branches on. Deleted by the
-    selection-ladder-remap guide once the pipeline speaks modes."""
-    return MODE_TO_GRADE.get(mode, Grade.standard)
+    """Coerce any input to a valid `Mode` value. Anything unknown — blank, None, a typo,
+    a stale legacy grade — defaults to `instruct` (the AI default; the SPA offers
+    `manual` itself when nothing is reachable). Input tolerance, not a compat bridge."""
+    return str(value) if value in Mode.values else Mode.instruct
 
 
 class TransitionError(ValueError):

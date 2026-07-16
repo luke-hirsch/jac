@@ -5,6 +5,12 @@ from .crypto import decrypt, encrypt
 from .validators import validate_safe_llm_url
 
 
+class Provider(models.TextChoices):
+    anthropic = "anthropic", "Anthropic"
+    openai = "openai", "OpenAI"
+    ollama = "ollama", "HirschAI"
+
+
 class LLMConfig(models.Model):
     """Per-user LLM alias configuration. Maps `(user, alias)` to a provider +
     model + credentials. API keys are Fernet-encrypted at rest; the cleartext
@@ -15,21 +21,16 @@ class LLMConfig(models.Model):
       2. else fall back to settings.LLM["default"] (the zero-cost Ollama config).
     """
 
-    class Provider(models.TextChoices):
-        anthropic = "anthropic", "Anthropic"
-        openai = "openai", "OpenAI"
-        google = "google", "Google"
-        custom = "custom", "Custom (OpenAI-compatible HTTP)"
-        ollama = "ollama", "Ollama (native /api/chat)"
-
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="llm_configs",
     )
-    alias = models.CharField(max_length=64)
+
+    default = models.BooleanField(
+        default=False, help_text="True if this is the user's default alias."
+    )
     provider = models.CharField(max_length=32, choices=Provider.choices)
-    model = models.CharField(max_length=200)
     url = models.URLField(blank=True)
     max_tokens = models.PositiveIntegerField(null=True, blank=True)
     api_key_encrypted = models.TextField(blank=True)
@@ -43,11 +44,11 @@ class LLMConfig(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("user", "alias")]
-        ordering = ["user_id", "alias"]
+        unique_together = [("user", "provider")]
+        ordering = ["user_id", "provider"]
 
     def __str__(self):
-        return f"{self.user} / {self.alias} ({self.provider})"
+        return f"{self.user} / {self.provider} {'(default)' if self.default else ''}"
 
     @property
     def api_key(self) -> str:
@@ -65,7 +66,7 @@ class LLMConfig(models.Model):
         """Shape that matches a single entry in settings.LLM — what the adapter
         constructors expect.
         """
-        config: dict = {"provider": self.provider, "model": self.model}
+        config: dict = {"provider": self.provider}
         if self.url:
             config["url"] = self.url
         if self.max_tokens:
@@ -79,40 +80,10 @@ class LLMConfig(models.Model):
 
     def clean(self):
         super().clean()
-        if self.provider in ("custom", "ollama") and self.url:
+        if self.provider == Provider.ollama and self.url:
             validate_safe_llm_url(
                 self.url
             )  # raises ValidationError on an internal host
-
-
-class LLMGradePin(models.Model):
-    """The user's favourite alias per strength tier ("pin"): pipelines that want a
-    rung run at a given strength resolve through `conf.pick_alias`, which prefers
-    the pinned alias over the run's main alias. One pin per (user, strength); the
-    same alias may be pinned for several strengths. `alias` is a loose reference —
-    a deleted/renamed LLMConfig simply stops resolving and the pin is ignored.
-    """
-
-    class Strength(models.TextChoices):
-        light = "light", "Light"
-        standard = "standard", "Standard"
-        strong = "strong", "Strong"
-
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="llm_grade_pins",
-    )
-    strength = models.CharField(max_length=10, choices=Strength.choices)
-    alias = models.CharField(max_length=64)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = [("user", "strength")]
-        ordering = ["user_id", "strength"]
-
-    def __str__(self):
-        return f"{self.user} / {self.strength} -> {self.alias}"
 
 
 class LLMRequestLog(models.Model):

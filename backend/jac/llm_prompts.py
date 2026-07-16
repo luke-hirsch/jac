@@ -2,7 +2,7 @@ import logging
 import math
 import re
 
-from llm_connector import can_web_search, complete, embed, web_search
+from llm_connector import complete, embed
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +41,13 @@ def _language_name(code: str) -> str:
 
 
 class Embed:
-    # Every prompt class declares the model tier it ideally runs on. The orchestrators
-    # resolve it through `llm_connector.conf.pick_alias`: when the user pinned a
-    # favourite model for that tier the rung runs there, otherwise on the run's main
-    # alias — so a strong run keeps its support rungs off the expensive model.
-    # None = the rung IS the grade (writers/selectors): it always runs the run's alias.
-    PREFERRED_GRADE: str | None = "light"
+    # Every prompt class declares the support-pin ROLE it resolves through
+    # (llm_connector.conf.pick_alias): "embed" = the user's pinned embedder,
+    # "instruct" = the pinned cheap support model. When a pin exists for that role the
+    # rung runs there, otherwise on the run's main alias — so a conversational run
+    # keeps its support rungs off the expensive model. None = the rung IS the mode
+    # (writers/selectors): it always runs the run's alias.
+    PREFERRED_PIN: str | None = "embed"
 
     DOC_KIND = "cv"
 
@@ -154,7 +155,7 @@ class Conversational:
     standard rung.
     """
 
-    PREFERRED_GRADE: str | None = None  # the strong selector IS the grade
+    PREFERRED_PIN: str | None = None  # the strong selector IS the grade
 
     _INSTRUCTION = (
         "You are a senior CV editor tailoring a ONE-PAGE CV to a specific job posting.\n"
@@ -250,7 +251,7 @@ class Instruct:
     to light.
     """
 
-    PREFERRED_GRADE: str | None = None  # the standard scorer IS the grade
+    PREFERRED_PIN: str | None = None  # the standard scorer IS the grade
 
     _INSTRUCTION = (
         "You are screening CV entries for relevance to a job posting.\n"
@@ -316,144 +317,6 @@ class Instruct:
         return out
 
 
-class TheJudge:
-    """Selection-quality grader for one eval run: a fixed strong LLM reads the job posting plus
-    what the pipeline KEPT vs DROPPED and critiques the choice — a letter grade for the run, then
-    id-anchored notes on questionable keeps/drops. Used by `cv_eval --analyze` to turn raw
-    counts/scores into a judgment and to feed the cross-run `Analyst` summary.
-
-    Provider-agnostic. Line-format I/O (never JSON — see the `no-json-llm-io` memory): the reply's
-    `GRADE <A-F>` line is parsed for the table; `<id> — <note>` lines are collected as critique,
-    ids validated against this run's entry set, unreadable lines skipped. Any failure yields a null
-    grade + empty notes so the analysis degrades instead of crashing.
-    """
-
-    _INSTRUCTION = (
-        "You are auditing how well an automated system tailored a ONE-PAGE CV to a job posting.\n"
-        "Below are the job posting, the entries the system KEPT (best first), and the entries it "
-        "DROPPED. Judge the SELECTION quality for THIS posting:\n"
-        "  - did it keep what the posting actually calls for, and drop the off-topic?\n"
-        "  - flag any KEPT entry that is weak or irrelevant, and any DROPPED entry that should "
-        "have stayed (e.g. a required skill).\n"
-        "Reply in this EXACT line format, nothing else:\n"
-        "  - first line: the word GRADE, a space, and ONE letter A-F — overall selection "
-        "quality (A best);\n"
-        "  - then ONE line per problem, '<id> — <short note>' (<=15 words), worst first;\n"
-        "  - if the selection is sound, emit no problem lines.\n"
-        "Use the exact ids given below. No prose, no markdown, no JSON."
-    )
-    _MAX_POST_CHARS = 12000
-
-    _GRADE_RE = re.compile(r"\bGRADE\s+([A-Fa-f])\b")
-    # entry ids are  type:pk  (e.g. job:2); anchor on a leading id, the rest of the line is the note.
-    _NOTE_RE = re.compile(r"([a-z]+:\d+)\s*[-—:.)\]]*\s*(.*)")
-
-    def __init__(
-        self,
-        job_post_text: str,
-        kept: list[dict],
-        dropped: list[dict],
-        user=None,
-        alias: str = "default",
-    ):
-        self.job_post_text = job_post_text
-        self.kept = kept  # [{id, text}], ranked best-first
-        self.dropped = dropped  # [{id, text}]
-        self.user = user
-        self.alias = alias
-
-    def critique(self) -> dict:
-        """Return {'grade': 'A'..'F' | None, 'notes': [{id, note}]}. Safe defaults on any failure."""
-        try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
-        except Exception:
-            logger.exception("Judge: LLM call failed")
-            return {"grade": None, "notes": []}
-        return self._parse(raw)
-
-    def _prompt(self) -> str:
-        post = self.job_post_text[: self._MAX_POST_CHARS]
-        kept = (
-            "\n".join(f"{e['id']} — {e.get('text') or ''}" for e in self.kept)
-            or "(none)"
-        )
-        dropped = (
-            "\n".join(f"{e['id']} — {e.get('text') or ''}" for e in self.dropped)
-            or "(none)"
-        )
-        return (
-            f"{self._INSTRUCTION}\n\n"
-            f"JOB POSTING:\n{post}\n\n"
-            f"KEPT (best first):\n{kept}\n\n"
-            f"DROPPED:\n{dropped}\n\n"
-            f"VERDICT:"
-        )
-
-    def _parse(self, raw: str) -> dict:
-        text = raw or ""
-        gm = self._GRADE_RE.search(text)
-        grade = gm.group(1).upper() if gm else None
-        valid = {e["id"] for e in (self.kept + self.dropped)}
-        notes: list[dict] = []
-        seen: set[str] = set()
-        for line in text.splitlines():
-            if self._GRADE_RE.search(line):  # don't read the grade line as a note
-                continue
-            m = self._NOTE_RE.search(line)
-            if not m:
-                continue
-            eid = m.group(1)
-            if eid in valid and eid not in seen:
-                seen.add(eid)
-                notes.append({"id": eid, "note": m.group(2).strip()[:200]})
-        return {"grade": grade, "notes": notes}
-
-
-class TheAnalyst:
-    """Cross-run summariser for `cv_eval --analyze`: a strong LLM reads the whole evaluation —
-    every posting×model run's counts-vs-target, score range, elapsed time, and the per-run `Judge`
-    grade + notes — and writes a human-readable analysis (which models/grades pick well, where they
-    over/under-shoot, speed/quality trade-offs, recurring mistakes, next steps).
-
-    Unlike the other rungs this output is read by a human (written to `analysis.md`), not parsed, so
-    it returns free-form prose. Any failure returns '' so the caller can note the analysis was
-    skipped.
-    """
-
-    _INSTRUCTION = (
-        "You are analysing an evaluation of an automated CV-tailoring pipeline run over several job "
-        "postings with several models/grades. Each run below shows how many entries it KEPT per "
-        "section (vs a one-page target), the relevance-score range, elapsed time, and an auditor's "
-        "letter grade plus notes on questionable keeps/drops.\n"
-        "Write a concise COMPARATIVE summary for the engineer tuning the pipeline. Lead with how "
-        "the models relate to each other:\n"
-        "  - group the models that behave similarly, and call out any model that is off track;\n"
-        "  - name postings (or sections) where ALL models do badly, and where they disagree most;\n"
-        "  - note the speed/quality trade-off and which model/grade selects best overall;\n"
-        "  - recurring selection mistakes across postings (cite ids);\n"
-        "  - one or two concrete next steps.\n"
-        "Open with a 2-3 sentence verdict: which models behave alike, which (if any) is off "
-        "track, and where the models struggle most — claim only what the data shows; if no "
-        "model is off track, or they all struggle nowhere, say exactly that. Then back it "
-        "up. Be specific; cite postings, models, and ids."
-    )
-
-    def __init__(self, report: str, user=None, alias: str = "default"):
-        self.report = report
-        self.user = user
-        self.alias = alias
-
-    def analyse(self) -> str:
-        try:
-            return complete(prompt=self._prompt(), alias=self.alias, user=self.user)
-        except Exception:
-            logger.exception("Analyst: summary call failed")
-            return ""
-
-    def _prompt(self) -> str:
-        return f"{self._INSTRUCTION}\n\nEVALUATION DATA:\n{self.report}\n\nANALYSIS:"
-
-
 class AddressExtract:
     """Pull the employer's contact block out of a job posting with the chat/instruct model.
 
@@ -464,7 +327,7 @@ class AddressExtract:
 
     # Structured extraction — a mid-tier model reads a posting fine; no need to spend
     # a strong run's tokens on it.
-    PREFERRED_GRADE: str | None = "standard"
+    PREFERRED_PIN: str | None = "instruct"
 
     _FIELDS = (
         "company",
@@ -493,7 +356,7 @@ class AddressExtract:
     )
     _MAX_POST_CHARS = 12000
     _PLACEHOLDERS = {"none", "n/a", "na", "-", "—", "unknown", "null"}
-    # `<field>: <value>` or `<field> - <value>`; value required (blank values are dropped).
+
     _LINE = re.compile(r"^\s*([a-zA-Z_]+)\s*[:\-]\s*(.+?)\s*$")
 
     def __init__(self, job_post_text: str, *, alias: str = "default", user=None):
@@ -528,67 +391,6 @@ class AddressExtract:
         return out
 
 
-class AddressSearch(AddressExtract):
-    """Find the employer's postal address ONLINE with a web-search-capable model — the
-    fallback when the posting itself states none. Inherits AddressExtract's line-format
-    parsing (`<field>: <value>`, placeholders dropped — see `no-json-llm-io`); differs in
-    transport (web_search, not complete) and in returning the cited sources so the user
-    can double-check before a letter goes out.
-    """
-
-    _FIELDS = (
-        "company",
-        "street",
-        "address_line2",
-        "zip",
-        "city",
-        "country",
-        "email",
-        "phone",
-    )
-    _INSTRUCTION = (
-        "Find the postal address of the EMPLOYER named below (their headquarters, or the\n"
-        "office the role context points to) using web search. Output one\n"
-        "'<field>: <value>' per line, using exactly these field names:\n"
-        "  company, street, address_line2, zip, city, country, email, phone\n"
-        "Omit a line entirely if you cannot find that field online — never guess.\n"
-        "No prose, no markdown, no JSON."
-    )
-    _MAX_CONTEXT_CHARS = 600
-
-    def __init__(
-        self, company: str, posting_text: str, *, alias: str = "default", user=None
-    ):
-        super().__init__(posting_text, alias=alias, user=user)
-        self.company = (company or "").strip()
-
-    def search(self) -> dict:
-        """{"ok": bool, "address": {field: value}, "sources": [url]}. Not capable /
-        nothing found / any failure -> ok False with empties — never raises."""
-        if not can_web_search(self.alias, self.user):
-            logger.info("AddressSearch: alias %s has no web search", self.alias)
-            return {"ok": False, "address": {}, "sources": []}
-        try:
-            res = web_search(prompt=self._prompt(), alias=self.alias, user=self.user)
-        except Exception:
-            logger.exception("AddressSearch: web search failed")
-            return {"ok": False, "address": {}, "sources": []}
-        address = self._parse(res.get("text") or "")
-        return {
-            "ok": bool(address),
-            "address": address,
-            "sources": res.get("sources", []),
-        }
-
-    def _prompt(self) -> str:
-        company = self.company or "the employer in the role context"
-        ctx = self.job_post_text[: self._MAX_CONTEXT_CHARS]
-        return (
-            f"{self._INSTRUCTION}\n\nCOMPANY: {company}\n\n"
-            f"(role context, do not quote): {ctx}\n\nFIELDS:"
-        )
-
-
 class CoverLetterWriter:
     """Turn the embedding-selected `ResumeSnippet`s into cover-letter body prose.
 
@@ -610,17 +412,10 @@ class CoverLetterWriter:
     apply. Any failure -> '' so the caller falls back to the raw stitched snippets.
     """
 
-    # One-page body window, shared by the standard/strong clauses: standard drifted
-    # short ("combined snippet length" shrinks with thin snippets), strong drifted
-    # long (no bound at all) — an explicit word window evens the grades out.
     _TARGET_WORDS = (200, 280)
 
-    _GRADE_CLAUSE = {
-        "light": (
-            "Join the snippets into one letter body. Keep their wording where you can; add only "
-            "minimal connective phrases so it reads as one piece. Do not rewrite or embellish."
-        ),
-        "standard": (
+    _MODE_CLAUSE = {
+        "instruct": (
             "Rework the snippets into a polished, cohesive letter body. This is a full "
             "letter, not a summary: aim for roughly {lo}-{hi} words, keep every concrete "
             "claim, and write one paragraph per theme with real transitions — write the "
@@ -630,7 +425,7 @@ class CoverLetterWriter:
             "call to action and genuine thanks for the consideration. Do not invent "
             "facts the snippets do not state."
         ),
-        "strong": (
+        "conversational": (
             "Compose an original, persuasive letter body tailored to THIS job posting. Use the "
             "posting only to choose emphasis, ordering, and tone — the posting is NEVER a "
             "source of facts about the candidate. Every factual claim — skills, employers, "
@@ -657,7 +452,7 @@ class CoverLetterWriter:
         candidate_name: str = "",
         title: str = "",
         language: str = "en",
-        grade: str = "standard",
+        mode: str = "instruct",
         alias: str = "default",
         user=None,
         posting_text: str = "",
@@ -669,7 +464,7 @@ class CoverLetterWriter:
         self.candidate_name = candidate_name
         self.title = title
         self.language = language
-        self.grade = grade
+        self.mode = mode
         self.alias = alias
         self.user = user
         self.posting_text = posting_text
@@ -689,7 +484,7 @@ class CoverLetterWriter:
         return (raw or "").strip()
 
     def _prompt(self) -> str:
-        clause = self._GRADE_CLAUSE.get(self.grade, self._GRADE_CLAUSE["standard"])
+        clause = self._MODE_CLAUSE.get(self.mode, self._MODE_CLAUSE["instruct"])
         lo, hi = self._TARGET_WORDS
         clause = clause.format(lo=lo, hi=hi)
         common = self._COMMON.format(language=_language_name(self.language))
@@ -697,7 +492,7 @@ class CoverLetterWriter:
             f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
         )
         posting = ""
-        if self.grade == "strong" and self.posting_text:
+        if self.mode == "conversational" and self.posting_text:
             posting = f"JOB POSTING (context only, never a source of facts):\n{self.posting_text}\n\n"
         opening = ""
         if self.opening_paragraph:
@@ -747,11 +542,7 @@ class FaithfulnessCheck:
     a clean letter (the false-assurance trap this check exists to close).
     """
 
-    # Audits prefer a mid-tier model: fact-checking against given sources is cheaper
-    # work than composing, and it keeps a strong run's checks off the expensive model.
-    # (A 1B writer still can't fact-check itself — the pin, or verifier_alias, must
-    # point at something at least standard.)
-    PREFERRED_GRADE: str | None = "standard"
+    PREFERRED_PIN: str | None = "instruct"
 
     _INSTRUCTION = (
         "You are fact-checking a COVER LETTER BODY against the candidate's authored SNIPPETS.\n"
@@ -821,10 +612,7 @@ class LetterCritic:
     memory.
     """
 
-    PREFERRED_GRADE: str | None = (
-        "standard"  # review, not composition — mid tier is enough
-    )
-
+    PREFERRED_PIN: str | None = "instruct"
     _INSTRUCTION = (
         "You are reviewing the BODY of a job-application cover letter that was written "
         "from the candidate's authored SNIPPETS.\n"
@@ -948,9 +736,7 @@ class ParagraphGroundingCheck:
     truth is RESEARCH + PERSONALITY (never snippets, never the posting). Same line format and the
     same honesty rule: count=None on any audit failure, never 0."""
 
-    PREFERRED_GRADE: str | None = (
-        "standard"  # audit, not composition — mid tier is enough
-    )
+    PREFERRED_PIN: str | None = "instruct"
 
     _INSTRUCTION = (
         "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "

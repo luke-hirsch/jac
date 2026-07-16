@@ -1,16 +1,34 @@
-"""Crypto + LLMConfig model + per-user config resolution + admin form."""
+"""Crypto + the LLMConfig model + the HirschAI system row + executor resolution +
+the model catalog + the reachability probe + the Executor object.
+
+Target API = `[backend]-executor-connector` (2026-07-16 single-executor redesign):
+LLMConfig is user+provider+key+default, unique per (user, provider); the tower is
+a system-owned row; models are per-run picks validated against the catalog.
+"""
+
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import TestCase, override_settings
 
-from llm_connector import complete
-from llm_connector.client import LLMClient
-from llm_connector.conf import get_pinned_alias, is_free_alias, pick_alias
+from llm_connector import embed
+from llm_connector.catalog import CATALOG, default_model, is_known_model, models_for
+from llm_connector.conf import (
+    HIRSCHAI_PROVIDER,
+    ExecutorError,
+    default_executor,
+    get_embed_floors,
+    hirschai_row,
+    resolve_config,
+    resolve_executor,
+)
 from llm_connector.crypto import _fernet, decrypt, encrypt
-from llm_connector.models import LLMConfig, LLMGradePin, LLMRequestLog
+from llm_connector.executor import Executor
+from llm_connector.models import LLMConfig
+from llm_connector.probe import hirschai_reachable
 
-from ._helpers import _muted, FakeAdapter, FAKE_LLM
+from ._helpers import TEST_HIRSCHAI, FakeAdapter, fake_row
 
 
 class CryptoTests(TestCase):
@@ -51,14 +69,10 @@ class LLMConfigModelTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create(username="alice")
+        cls.other = User.objects.create(username="bob")
 
     def test_api_key_property_roundtrips_through_encryption(self):
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="anthropic",
-            model="claude-sonnet-4-6",
-        )
+        cfg = LLMConfig.objects.create(user=self.user, provider="anthropic")
         cfg.api_key = "sk-ant-abc"
         cfg.save()
         cfg.refresh_from_db()
@@ -67,38 +81,21 @@ class LLMConfigModelTests(TestCase):
         self.assertTrue(cfg.has_api_key)
 
     def test_empty_api_key_clears_encrypted_value(self):
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="anthropic",
-            model="x",
-        )
+        cfg = LLMConfig.objects.create(user=self.user, provider="anthropic")
         cfg.api_key = "secret"
         cfg.api_key = ""
         self.assertEqual(cfg.api_key_encrypted, "")
         self.assertFalse(cfg.has_api_key)
 
-    def test_unique_per_user_and_alias(self):
-        LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="anthropic",
-            model="x",
-        )
+    def test_one_row_per_user_and_provider(self):
+        LLMConfig.objects.create(user=self.user, provider="anthropic")
         with self.assertRaises(Exception):
-            LLMConfig.objects.create(
-                user=self.user,
-                alias="default",
-                provider="openai",
-                model="y",
-            )
+            LLMConfig.objects.create(user=self.user, provider="anthropic")
 
-    def test_to_config_dict_includes_api_key_and_extras(self):
+    def test_to_config_dict_includes_key_and_extras(self):
         cfg = LLMConfig.objects.create(
             user=self.user,
-            alias="reasoning",
             provider="openai",
-            model="o4-mini",
             max_tokens=8192,
             extra={"reasoning_effort": "high"},
         )
@@ -106,227 +103,301 @@ class LLMConfigModelTests(TestCase):
         cfg.save()
         d = cfg.to_config_dict()
         self.assertEqual(d["provider"], "openai")
-        self.assertEqual(d["model"], "o4-mini")
         self.assertEqual(d["max_tokens"], 8192)
         self.assertEqual(d["api_key"], "sk-foo")
         self.assertEqual(d["reasoning_effort"], "high")
+        # No stored model — WHICH model runs is a per-run catalog pick.
+        self.assertNotIn("model", d)
 
-    def test_to_config_dict_omits_empty_fields(self):
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="ollama",
-            provider="custom",
-            model="qwen",
-            url="http://localhost:11434/v1",
+    def test_default_is_exclusive_per_user(self):
+        first = LLMConfig.objects.create(
+            user=self.user, provider="anthropic", default=True
         )
-        d = cfg.to_config_dict()
-        self.assertEqual(set(d.keys()), {"provider", "model", "url"})
+        bob_row = LLMConfig.objects.create(
+            user=self.other, provider="anthropic", default=True
+        )
+        LLMConfig.objects.create(user=self.user, provider="openai", default=True)
+        first.refresh_from_db()
+        bob_row.refresh_from_db()
+        self.assertFalse(first.default)  # last write wins for alice
+        self.assertTrue(bob_row.default)  # bob's default untouched
 
-    # -- Tower inference server deployment contract ------------------------------
-    # An ollama row pointing at the tower's WireGuard IP (a private address) must
-    # pass model validation ONLY when the operator has allowlisted the tunnel
-    # subnet. This exercises the clean() -> validate_safe_llm_url wiring
-    # (models.py), which the direct validator tests in test_validators.py don't
-    # cover. NOTE: these are GREEN on arrival — the wiring already exists; they are
-    # a regression guard for the tower-inference-server deployment, not a red-first
-    # acceptance test. See .claude/plans/to-do/[infra]-tower-inference-server.md.
+    # -- Tower deployment contract: an ollama row at a private address must pass
+    # validation ONLY when the operator allowlisted the tunnel subnet. Exercises
+    # the clean() -> validate_safe_llm_url wiring on the (system) tower row.
 
     @override_settings(LLM_URL_ALLOWLIST=["10.10.0.0/24"], LLM_URL_ALLOW_PRIVATE=False)
     def test_ollama_row_at_allowlisted_vpn_ip_validates(self):
         cfg = LLMConfig(
-            user=self.user,
-            alias="tower",
-            provider="ollama",
-            model="qwen2.5:7b-instruct",
-            url="http://10.10.0.2:11434/v1",  # tower over wg0, inside the allowlisted /24
+            user=self.user, provider="ollama", url="http://10.10.0.2:11434"
         )
         cfg.full_clean()  # must not raise
 
     @override_settings(LLM_URL_ALLOWLIST=[], LLM_URL_ALLOW_PRIVATE=False)
     def test_ollama_row_at_private_ip_rejected_without_allowlist(self):
         cfg = LLMConfig(
-            user=self.user,
-            alias="tower",
-            provider="ollama",
-            model="qwen2.5:7b-instruct",
-            url="http://10.10.0.2:11434/v1",
+            user=self.user, provider="ollama", url="http://10.10.0.2:11434"
         )
         with self.assertRaisesRegex(ValidationError, "non-public"):
             cfg.full_clean()
 
 
-@override_settings(LLM=FAKE_LLM, LLM_LOGGING=False)
-class UserScopedResolutionTests(TestCase):
+@override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class HirschAiRowTests(TestCase):
+    """The system-owned tower row: settings seed it once, the DB row is the
+    runtime truth afterwards."""
+
+    def test_bootstraps_the_system_row_from_settings(self):
+        row = hirschai_row()
+        self.assertEqual(row.provider, HIRSCHAI_PROVIDER)
+        self.assertEqual(row.user.username, "system")
+        self.assertFalse(row.user.is_active)
+        self.assertEqual(row.url, TEST_HIRSCHAI["url"])
+        self.assertEqual(row.extra["model"], TEST_HIRSCHAI["model"])
+        self.assertEqual(row.extra["embed_model"], TEST_HIRSCHAI["embed_model"])
+
+    def test_idempotent_and_db_wins_over_settings(self):
+        row = hirschai_row()
+        row.url = "http://tower.wg:11434"
+        row.save()
+        again = hirschai_row()
+        self.assertEqual(again.pk, row.pk)
+        self.assertEqual(again.url, "http://tower.wg:11434")
+        self.assertEqual(LLMConfig.objects.filter(provider=HIRSCHAI_PROVIDER).count(), 1)
+
+    def test_system_row_is_visible_via_for_user(self):
+        row = hirschai_row()
+        alice = User.objects.create(username="alice")
+        self.assertIn(row, LLMConfig.objects.for_user(alice))
+
+    @override_settings(HIRSCHAI=None)
+    def test_missing_seed_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            hirschai_row()
+
+    def test_embed_floors_read_the_tower_row(self):
+        row = hirschai_row()
+        row.extra = {**row.extra, "embed_floors": {"skill": 0.4}}
+        row.save()
+        self.assertEqual(get_embed_floors(), {"skill": 0.4})
+
+    def test_embed_floors_empty_when_unset_or_garbage(self):
+        self.assertEqual(get_embed_floors(), {})
+        row = hirschai_row()
+        row.extra = {**row.extra, "embed_floors": "not-a-dict"}
+        row.save()
+        self.assertEqual(get_embed_floors(), {})
+
+
+@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
+class ResolveConfigTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.user = User.objects.create(username="alice")
-        cls.other = User.objects.create(username="bob")
+        cls.alice = User.objects.create(username="alice")
+        cls.bob = User.objects.create(username="bob")
+
+    def test_no_provider_and_no_default_row_resolves_to_hirschai(self):
+        cfg = resolve_config(user=self.alice)
+        self.assertEqual(cfg["provider"], HIRSCHAI_PROVIDER)
+        self.assertEqual(cfg["model"], TEST_HIRSCHAI["model"])  # the tower's own
+
+    def test_no_provider_with_default_row_resolves_to_it(self):
+        fake_row(self.alice, default=True, model="fake-9")
+        cfg = resolve_config(user=self.alice)
+        self.assertEqual(cfg["provider"], "fake")
+        self.assertEqual(cfg["model"], "fake-9")
+
+    def test_explicit_model_overrides_the_rows(self):
+        fake_row(self.alice)
+        cfg = resolve_config("fake", user=self.alice, model="fake-override")
+        self.assertEqual(cfg["model"], "fake-override")
+
+    def test_commercial_model_defaults_from_the_catalog(self):
+        row = LLMConfig(user=self.alice, provider="anthropic")
+        row.api_key = "sk-a"
+        row.save()
+        cfg = resolve_config("anthropic", user=self.alice)
+        self.assertEqual(cfg["model"], default_model("anthropic"))
+
+    def test_missing_commercial_row_raises(self):
+        with self.assertRaises(ExecutorError):
+            resolve_config("anthropic", user=self.alice)
+
+    def test_rows_do_not_leak_across_users(self):
+        fake_row(self.alice)
+        with self.assertRaises(ExecutorError):
+            resolve_config("fake", user=self.bob)
+
+
+@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
+class ResolveExecutorTests(TestCase):
+    """`resolve_executor` = the API boundary's validation: everything a client
+    can name wrong raises ExecutorError (the serializers turn that into a 400)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create(username="alice")
+
+    def _anthropic_row(self, *, key="sk-a", default=False):
+        row = LLMConfig(user=self.alice, provider="anthropic", default=default)
+        if key:
+            row.api_key = key
+        row.save()
+        return row
+
+    def test_hirschai_ignores_a_client_sent_model(self):
+        ex = resolve_executor(self.alice, HIRSCHAI_PROVIDER, "sneaky-model")
+        self.assertTrue(ex.is_hirschai)
+        self.assertIsNone(ex.model)
+
+    def test_unknown_provider_raises(self):
+        with self.assertRaises(ExecutorError):
+            resolve_executor(self.alice, "google")
+
+    def test_commercial_requires_a_stored_key(self):
+        self._anthropic_row(key="")
+        with self.assertRaises(ExecutorError):
+            resolve_executor(self.alice, "anthropic")
+
+    def test_commercial_model_defaults_and_validates_against_catalog(self):
+        self._anthropic_row()
+        ex = resolve_executor(self.alice, "anthropic")
+        self.assertEqual(ex.model, default_model("anthropic"))
+        with self.assertRaises(ExecutorError):
+            resolve_executor(self.alice, "anthropic", "gpt-4o")
+
+    def test_blank_provider_uses_the_default_executor(self):
+        self._anthropic_row(default=True)
+        ex = resolve_executor(self.alice)
+        self.assertEqual(ex.provider, "anthropic")
+        self.assertEqual(ex.model, default_model("anthropic"))
+
+    def test_blank_provider_with_nothing_available_raises(self):
+        with patch("llm_connector.probe.hirschai_reachable", return_value=False):
+            with self.assertRaises(ExecutorError):
+                resolve_executor(self.alice)
+
+
+@override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class DefaultExecutorTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create(username="alice")
+
+    def test_prefers_the_commercial_default_row(self):
+        row = LLMConfig(user=self.alice, provider="anthropic", default=True)
+        row.api_key = "sk-a"
+        row.save()
+        ex = default_executor(self.alice)
+        self.assertEqual(ex.provider, "anthropic")
+        self.assertEqual(ex.model, default_model("anthropic"))
+
+    def test_default_row_without_key_falls_through_to_hirschai(self):
+        LLMConfig.objects.create(user=self.alice, provider="anthropic", default=True)
+        with patch("llm_connector.probe.hirschai_reachable", return_value=True):
+            ex = default_executor(self.alice)
+        self.assertTrue(ex.is_hirschai)
+
+    def test_tower_offline_and_nothing_configured_is_none(self):
+        with patch("llm_connector.probe.hirschai_reachable", return_value=False):
+            self.assertIsNone(default_executor(self.alice))
+
+
+class CatalogTests(TestCase):
+    def test_every_provider_names_exactly_one_default(self):
+        for provider, rows in CATALOG.items():
+            self.assertEqual(
+                sum(1 for r in rows if r.get("default")), 1, f"provider {provider!r}"
+            )
+
+    def test_default_model_is_a_member(self):
+        for provider in CATALOG:
+            self.assertTrue(is_known_model(provider, default_model(provider)))
+
+    def test_unknown_provider_and_model(self):
+        self.assertEqual(models_for("nope"), [])
+        self.assertIsNone(default_model("nope"))
+        self.assertFalse(is_known_model("anthropic", "gpt-4o"))
+
+    def test_hirschai_is_not_in_the_catalog(self):
+        # The tower's models live on its system row, not in the pick list.
+        self.assertNotIn(HIRSCHAI_PROVIDER, CATALOG)
+
+
+@override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class ProbeTests(TestCase):
+    def setUp(self):
+        from llm_connector import probe
+
+        probe._CACHE.update(ts=0.0, ok=False)
+
+    def test_reachable_when_tags_answers(self):
+        with patch("llm_connector.probe.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.status = 200
+            self.assertTrue(hirschai_reachable(refresh=True))
+        url = mock_open.call_args[0][0]
+        self.assertTrue(str(url).endswith("/api/tags"))
+
+    def test_unreachable_on_any_error(self):
+        with patch(
+            "llm_connector.probe.request.urlopen", side_effect=OSError("down")
+        ):
+            self.assertFalse(hirschai_reachable(refresh=True))
+
+    def test_result_is_cached_and_refresh_busts_it(self):
+        with patch("llm_connector.probe.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.status = 200
+            hirschai_reachable(refresh=True)
+            hirschai_reachable()
+            self.assertEqual(mock_open.call_count, 1)  # cache hit
+            hirschai_reachable(refresh=True)
+            self.assertEqual(mock_open.call_count, 2)
+
+
+@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
+class ExecutorObjectTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create(username="alice")
 
     def setUp(self):
         FakeAdapter.instances.clear()
 
-    def test_user_with_config_uses_their_config(self):
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="reasoning",
-            provider="fake",
-            model="user-model",
-            extra={"_response": "user-specific"},
-        )
-        cfg.api_key = "sk-personal"
-        cfg.save()
-        client = LLMClient("reasoning", user=self.user)
-        self.assertEqual(client._config["model"], "user-model")
-        self.assertEqual(client._config["api_key"], "sk-personal")
-        self.assertEqual(client.complete("hi"), "user-specific")
+    def test_complete_runs_on_the_named_provider_and_model(self):
+        fake_row(self.alice, model="fake-1")
+        out = Executor("fake", "fake-2", self.alice).complete("hi")
+        self.assertEqual(out, "pong")
+        adapter = FakeAdapter.instances[-1]
+        self.assertEqual(adapter.config["provider"], "fake")
+        self.assertEqual(adapter.config["model"], "fake-2")  # the per-run pick wins
 
-    def test_user_without_config_falls_back_to_default(self):
-        with _muted():
-            client = LLMClient("reasoning", user=self.user)
-        self.assertEqual(client._config["model"], "fake-1")
-        self.assertEqual(client.complete("hi"), "pong")
+    def test_model_none_uses_the_rows_own_model(self):
+        fake_row(self.alice, model="fake-1")
+        Executor("fake", None, self.alice).complete("hi")
+        self.assertEqual(FakeAdapter.instances[-1].config["model"], "fake-1")
 
-    def test_user_default_alias_can_override_global_default(self):
-        LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="fake",
-            model="alice-default",
-            extra={"_response": "alice-says-hi"},
-        )
-        client = LLMClient("default", user=self.user)
-        self.assertEqual(client._config["model"], "alice-default")
-        self.assertEqual(client.complete("hi"), "alice-says-hi")
+    def test_web_search_routes_to_the_adapter(self):
+        fake_row(self.alice, provider="fakesearch", model="fs-1")
+        res = Executor("fakesearch", user=self.alice).web_search("who is acme?")
+        self.assertEqual(res["sources"], ["https://example.com/about"])
 
-    def test_no_user_reads_settings_directly(self):
-        client = LLMClient("default")
-        self.assertEqual(client._config["model"], "fake-1")
+    def test_supports_web_search_flags(self):
+        self.assertFalse(Executor("fake", user=self.alice).supports_web_search)
+        self.assertTrue(Executor("fakesearch", user=self.alice).supports_web_search)
+        self.assertFalse(Executor(HIRSCHAI_PROVIDER).supports_web_search)
 
-    def test_one_users_config_does_not_leak_to_another(self):
-        LLMConfig.objects.create(
-            user=self.user,
-            alias="reasoning",
-            provider="fake",
-            model="alice-model",
-        )
-        with _muted():
-            client_bob = LLMClient("reasoning", user=self.other)
-        self.assertEqual(client_bob._config["model"], "fake-1")
+    def test_is_hirschai(self):
+        self.assertTrue(Executor(HIRSCHAI_PROVIDER).is_hirschai)
+        self.assertFalse(Executor("anthropic").is_hirschai)
 
-    def test_missing_default_alias_raises_on_fallback(self):
-        with override_settings(LLM={"other": {"provider": "fake", "model": "x"}}):
-            with _muted(), self.assertRaises(ImproperlyConfigured):
-                LLMClient("anything", user=self.user)
-
-    def test_complete_helper_threads_user(self):
-        LLMConfig.objects.create(
-            user=self.user,
-            alias="reasoning",
-            provider="fake",
-            model="m",
-            extra={"_response": "personal"},
-        )
-        self.assertEqual(complete("hi", alias="reasoning", user=self.user), "personal")
-
-
-@override_settings(LLM=FAKE_LLM, LLM_LOGGING=False)
-class GradePinResolutionTests(TestCase):
-    """`pick_alias`: per-strength favourite-model routing. A rung's PREFERRED_GRADE
-    resolves to the user's pin for that tier; no pin / a stale pin / a paid pin under
-    free_only all fall back to the run's main alias."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = User.objects.create(username="alice")
-        LLMConfig.objects.create(
-            user=cls.user,
-            alias="local",
-            provider="ollama",
-            model="qwen3:8b",
-            url="http://localhost:11434",
-        )
-        LLMConfig.objects.create(
-            user=cls.user,
-            alias="claude",
-            provider="anthropic",
-            model="claude-opus-4-8",
-        )
-
-    def _pin(self, strength, alias):
-        LLMGradePin.objects.create(user=self.user, strength=strength, alias=alias)
-
-    def test_no_pin_falls_back_to_the_main_alias(self):
-        self.assertEqual(
-            pick_alias("standard", fallback="main", user=self.user), "main"
-        )
-
-    def test_pin_wins_over_the_main_alias(self):
-        self._pin("standard", "local")
-        self.assertEqual(
-            pick_alias("standard", fallback="main", user=self.user), "local"
-        )
-
-    def test_no_preference_or_no_user_is_a_no_op(self):
-        self._pin("standard", "local")
-        self.assertEqual(pick_alias(None, fallback="main", user=self.user), "main")
-        self.assertEqual(pick_alias("standard", fallback="main", user=None), "main")
-
-    def test_stale_pin_is_ignored(self):
-        self._pin("standard", "deleted-row")
-        with _muted():
-            self.assertEqual(
-                pick_alias("standard", fallback="main", user=self.user), "main"
-            )
-
-    def test_default_is_always_pinnable(self):
-        self._pin("light", "default")
-        self.assertEqual(get_pinned_alias("light", user=self.user), "default")
-
-    def test_free_only_refuses_a_paid_pin(self):
-        self._pin("standard", "claude")
-        self.assertEqual(
-            pick_alias("standard", fallback="main", user=self.user, free_only=True),
-            "main",
-        )
-        # …but without the cost guard the pin routes normally.
-        self.assertEqual(
-            pick_alias("standard", fallback="main", user=self.user), "claude"
-        )
-
-    def test_free_only_accepts_a_free_pin(self):
-        self._pin("standard", "local")
-        self.assertEqual(
-            pick_alias("standard", fallback="main", user=self.user, free_only=True),
-            "local",
-        )
-
-    def test_is_free_alias(self):
-        self.assertTrue(is_free_alias("local", user=self.user))
-        self.assertFalse(is_free_alias("claude", user=self.user))
-        # the settings "default" (provider "fake" here) is not in FREE_PROVIDERS;
-        # muted: resolving it without a user row logs the expected fallback warning.
-        with _muted():
-            self.assertFalse(is_free_alias("default", user=self.user))
-
-
-@override_settings(LLM=FAKE_LLM, LLM_LOGGING=True)
-class LLMRequestLogUserAttributionTests(TestCase):
-    def test_log_attributes_user_when_provided(self):
-        user = User.objects.create(username="alice")
-        LLMConfig.objects.create(
-            user=user,
-            alias="reasoning",
-            provider="fake",
-            model="m",
-        )
-        LLMClient("reasoning", user=user).complete("hi")
-        log = LLMRequestLog.objects.get()
-        self.assertEqual(log.user, user)
-
-    def test_log_user_is_null_when_no_user(self):
-        LLMClient("default").complete("hi")
-        log = LLMRequestLog.objects.get()
-        self.assertIsNone(log.user)
+    def test_embed_is_tower_only(self):
+        # The module-level embed() must always resolve the HirschAI executor —
+        # embedding is a tower capability; commercial runs simply don't embed.
+        with patch("llm_connector.get_client") as get_client:
+            get_client.return_value.embed.return_value = [[1.0]]
+            out = embed(["x"])
+        get_client.assert_called_once_with(HIRSCHAI_PROVIDER)
+        self.assertEqual(out, [[1.0]])
 
 
 class LLMConfigAdminFormTests(TestCase):
@@ -337,9 +408,8 @@ class LLMConfigAdminFormTests(TestCase):
     def _form_data(self, **overrides):
         data = {
             "user": str(self.user.pk),
-            "alias": "default",
+            "default": "",
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
             "url": "",
             "max_tokens": "",
             "extra": "{}",
@@ -360,31 +430,19 @@ class LLMConfigAdminFormTests(TestCase):
     def test_empty_api_key_on_edit_preserves_existing(self):
         from llm_connector.admin import LLMConfigAdminForm
 
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="anthropic",
-            model="claude-sonnet-4-6",
-        )
+        cfg = LLMConfig.objects.create(user=self.user, provider="anthropic")
         cfg.api_key = "sk-original"
         cfg.save()
         form = LLMConfigAdminForm(self._form_data(api_key=""), instance=cfg)
         self.assertTrue(form.is_valid(), form.errors)
-        updated = form.save()
-        self.assertEqual(updated.api_key, "sk-original")
+        self.assertEqual(form.save().api_key, "sk-original")
 
     def test_new_api_key_on_edit_replaces_existing(self):
         from llm_connector.admin import LLMConfigAdminForm
 
-        cfg = LLMConfig.objects.create(
-            user=self.user,
-            alias="default",
-            provider="anthropic",
-            model="x",
-        )
+        cfg = LLMConfig.objects.create(user=self.user, provider="anthropic")
         cfg.api_key = "sk-old"
         cfg.save()
         form = LLMConfigAdminForm(self._form_data(api_key="sk-new"), instance=cfg)
         self.assertTrue(form.is_valid(), form.errors)
-        updated = form.save()
-        self.assertEqual(updated.api_key, "sk-new")
+        self.assertEqual(form.save().api_key, "sk-new")

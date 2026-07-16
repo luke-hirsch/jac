@@ -1,5 +1,10 @@
 # [fullstack] application-pinned-entries
 
+> **⚠️ BACKEND HALF SUPERSEDED (2026-07-16).** `[backend]-entry-pins` now owns the model
+> field (`JobApplication.pinned_entries`), the API validation, and the CVFilter keep
+> guarantees + high-mode warning. What remains here is the SPA pin UI (pin buttons in the
+> editor/result view, warning badges) — rewrite as a `[frontend]` guide in the SPA phase.
+
 > Spun out of the *LLM-mode redesign* follow-up (Lukas, 2026-07-15). Rides after **guide 3
 > (staggered-instruct-pipeline)** — it reuses the shortlist's `force_include` hook. Independent of
 > guides 4–6 otherwise; can land any time after 3.

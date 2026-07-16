@@ -243,12 +243,12 @@ class CoverLetter:
     `job_posting.address`. `build()` returns a dict of letter parts plus a rendered `text`.
     """
 
-    # How much the writer reshapes even same-language prose, by grade. Strong composes its
+    # How much the writer reshapes even same-language prose, by mode. Strong composes its
     # own letter (pipeline v2), so its tax reflects free composition, not polished stitching.
-    _REWRITE_TAX = {"light": 0.05, "standard": 0.20, "strong": 0.60}
+    _REWRITE_TAX = {"": 0.0, "instruct": 0.20, "conversational": 0.60}
     # Prose-quality critique runs on the grades whose writers actually reshape text;
     # light glue is exempt (a 1B can't act on critique — and glue is the point there).
-    _CRITIC_GRADES = ("standard", "strong")
+    _CRITIC_MODES = ("instruct", "conversational")
     # A standard "polish" that lost >40% of the snippets' words is a summary, not a
     # polish — deterministic backstop, works even when the critic model is down.
     _MIN_BODY_RATIO = 0.6
@@ -273,7 +273,7 @@ class CoverLetter:
         cv,
         *,
         address=None,
-        grade: str = "standard",
+        mode: str = "light",
         alias: str = "default",
         max_body_snippets: int = 3,
         verify_grounding: bool = False,
@@ -292,7 +292,7 @@ class CoverLetter:
                 self.address = job_posting.address
             except Exception:  # noqa: BLE001 — unsaved/absent reverse 1:1
                 self.address = None
-        self.grade = grade
+        self.mode = mode
         self.alias = alias
         self.max_body_snippets = max_body_snippets
         self.verify_grounding = verify_grounding
@@ -301,11 +301,11 @@ class CoverLetter:
         # None` keeps the downstream `x or self.alias` fallbacks working). A light
         # run never routes onto a paid pin (free_only — the showcase rung stays
         # zero-cost).
-        free_only = grade == "light"
+        free_only = mode == "instruct"
         self.verifier_alias = (
             verifier_alias
             or pick_alias(
-                FaithfulnessCheck.PREFERRED_GRADE,
+                FaithfulnessCheck.PREFERRED_PIN,
                 fallback="",
                 user=self.user,
                 free_only=free_only,
@@ -317,7 +317,7 @@ class CoverLetter:
         self.embed_alias = (
             embed_alias
             or pick_alias(
-                SnippetEmbed.PREFERRED_GRADE,
+                SnippetEmbed.PREFERRED_PIN,
                 fallback="",
                 user=self.user,
                 free_only=free_only,
@@ -350,7 +350,7 @@ class CoverLetter:
             candidate_name=self._candidate_name(),
             title=title,
             language=language,
-            grade=self.grade,
+            mode=self.mode,
             alias=self.alias,
             user=self.user,
             posting_text=self._posting_text(),
@@ -366,7 +366,7 @@ class CoverLetter:
         # The critic reviews prose quality on standard+strong; audit claims and critic
         # notes then share ONE repair rewrite (strong re-audits the rewrite; the
         # advisory critique is not re-run).
-        verify = self.verify_grounding or self.grade == "strong"
+        verify = self.verify_grounding or self.mode == "conversational"
         grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
         critique = self._critique(body, sel["ordered"], weave_failed)
         body, grounding, critique = self._repair(
@@ -526,7 +526,7 @@ class CoverLetter:
         """
         if ai_fallback or not snippets:
             return 1.0
-        tax = self._REWRITE_TAX.get(self.grade, self._REWRITE_TAX["standard"])
+        tax = self._REWRITE_TAX.get(self.mode, self._REWRITE_TAX["instruct"])
         native_w = sum(
             len(s.content.split()) for s in snippets if s.language == language
         )
@@ -574,13 +574,13 @@ class CoverLetter:
         same channel, so they must not depend on the critic model being up: standard's
         shrinkage check (a polish that lost >40% of the snippet words is summarising)
         and the one-page ceiling on both grades."""
-        if self.grade not in self._CRITIC_GRADES or weave_failed or not snippets:
+        if self.mode not in self._CRITIC_MODES or weave_failed or not snippets:
             return {"count": None, "claims": []}
         critique = LetterCritic(
             body, snippets, alias=self.verifier_alias or self.alias, user=self.user
         ).critique()
         backstops = []
-        if self.grade == "standard" and self._shrunk(body, snippets):
+        if self.mode == "instruct" and self._shrunk(body, snippets):
             backstops.append(self._SHRINKAGE_NOTE)
         if self._overlong(body):
             backstops.append(
@@ -610,14 +610,14 @@ class CoverLetter:
         is re-audited when auditing is on (safety stays honest about the shipped body);
         the critique is NOT re-run — advisory — its `repaired` flag means "the flagged
         draft was replaced", set only when the critique itself contributed notes.
-        `grounding.repaired` keeps its v2 contract on strong: True only when a rewrite
+        `grounding.repaired` keeps its v2 contract on conversational: True only when a rewrite
         actually replaced the body. `opening` travels along so the rewrite keeps the
         same arc context as draft one."""
-        strong = self.grade == "strong"
-        claims = (grounding.get("claims") or []) if strong else []
+        conversational = self.mode == "conversational"
+        claims = (grounding.get("claims") or []) if conversational else []
         notes = critique.get("claims") or []
         if not claims and not notes:
-            if strong:
+            if conversational:
                 return body, {**grounding, "repaired": False}, critique
             return body, grounding, critique
         rewritten = CoverLetterWriter(
@@ -625,7 +625,7 @@ class CoverLetter:
             candidate_name=self._candidate_name(),
             title=title,
             language=language,
-            grade=self.grade,
+            mode=self.mode,
             alias=self.alias,
             user=self.user,
             posting_text=self._posting_text(),
@@ -634,11 +634,11 @@ class CoverLetter:
             opening_paragraph=opening,
         ).write()
         if not rewritten:
-            out_g = {**grounding, "repaired": False} if strong else grounding
+            out_g = {**grounding, "repaired": False} if conversational else grounding
             out_c = {**critique, "repaired": False} if notes else critique
             return body, out_g, out_c
         new_g = self._grounding(rewritten, snippets, weave_failed=False, verify=verify)
-        if strong:
+        if conversational:
             new_g = {**new_g, "repaired": True}
         out_c = {**critique, "repaired": True} if notes else critique
         return rewritten, new_g, out_c
@@ -666,7 +666,7 @@ class CoverLetter:
         }
         if not self.personal_paragraph:
             return blank  # slot not requested -> nothing
-        if self.grade == "light":
+        if self.mode == "light":
             return self._stub()  # weak showcase tier never researches
         alias = self.research_alias or self.alias
         personality = self._personality_dossier(alias)

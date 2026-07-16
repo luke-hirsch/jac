@@ -1,10 +1,17 @@
 # [frontend] model-first-generate-panel
 
+> **⚠️ STALE (2026-07-16 executor rework).** The panel's data source is now
+> `GET /api/llm/executors/` (`[backend]-executor-connector`): HirschAI + per-provider rows
+> with catalog models. Aliases are dead; modes renamed `standard`/`high` (`high`
+> commercial-only). Rewrite against the new backend at activation — this is the guide that
+> un-breaks the SPA.
+
 > **Guide 5** — *LLM-mode redesign*. Depends on **guide 4** (`GET /api/jac/executors/`); renders
 > whatever `models`/`knobs` the endpoint advertises once `[fullstack]-llm-model-catalog-and-knobs`
 > enriches it (degrades gracefully to none before that). Replaces the `grade` dropdown with a
-> **model-first panel**, adds the **auto-run on application create**, and **removes the backend
-> compat `grade` bridge** guide 1 added (this is the guide that lets it go).
+> **model-first panel** and adds the **auto-run on application create**. The backend has spoken
+> mode-only since guide 2 — the SPA runs broken from guide 2 until this guide lands (accepted,
+> dev-only); this is the guide that un-breaks it. Pure frontend: no backend rows here.
 >
 > **Backlog plan.** Full code + red tests (vitest, `frontend/tests/` — see the
 > `frontend-test-layout` memory) at activation.
@@ -46,12 +53,10 @@ and the page shows why.
 | Path | Change |
 | --- | --- |
 | `frontend/src/lib/queries/generations.ts` | Payload `grade` → `mode` + `alias` + optional `params`; `Grade` type → `Mode` (`"manual" \| "instruct" \| "conversational"`); `meta.grade` reads → `meta.mode` (+ executor/model for the badge). |
-| `frontend/src/lib/queries/llm.ts` | A `useExecutors()` query hitting `/api/jac/executors/`; `aliasesForGrade`/`pinnedAliasFor`/`AliasStrength` → executor/mode-keyed; the per-alias `strength` display **dies here** (guide 4 rekeyed the pins API; final backend autodetect deletion is guide 7's). |
+| `frontend/src/lib/queries/llm.ts` | A `useExecutors()` query hitting `/api/jac/executors/`; `aliasesForGrade`/`pinnedAliasFor`/`AliasStrength` → executor/mode-keyed; the per-alias `strength` display **dies here** (the backend deleted strength + rekeyed the pins to support roles `embed`/`instruct` in guide 2 — these fields/keys are already gone from the API). |
 | `frontend/src/components/applications/generate-panel.tsx` | The model-first layout above: picker with disabled-with-reason entries; per-pick options; offline banner; the **token-generosity hint** on paid executors ("side tasks run on the free local model to save your tokens — change?"); the "No AI" affordance routing to guide 6. Result badge shows executor + strategy (+ guide 3's `meta.prefilter` when `"full"` on a paid alias — "sent the whole career DB"). Maps the create 409 `llm_unreachable` to the offline state. |
 | `frontend/src/routes/_authenticated/applications/index.tsx` | The hardcoded `grade: "light"` seed becomes the **auto-run**: after a successful application create, if `useExecutors()` returns a non-null `default` → POST an `instruct` run on it; else no POST — land on the detail page in its offline/manual state. |
 | `frontend/src/lib/queries/{jac,applications}.ts` | Run summary types `grade` → `mode`. |
-| **Backend** `jac/serializers.py` | **Remove** the compat `grade` `SerializerMethodField` from the read serializers, the legacy-`grade` acceptance in the create `validate()`, and guide 2's file-local mode→grade literal dict (`# compat: dies with guide 5`) — the SPA now speaks `mode`. |
-| **Backend** `jac/models.py` | **Delete** `GRADE_TO_MODE`, `KNOWN_MODE_INPUTS`, and the legacy-grade branch in `normalize_mode` (keep its blank/unknown→`instruct` coercion — that's input tolerance, not the bridge). After this guide the word "grade" survives only in the connector's strength machinery, which guide 7 deletes (see guide 1's compat ledger). |
 
 ## Approach / key decisions
 
@@ -82,13 +87,9 @@ and the page shows why.
 - **Strategy defaults are per-executor**, read from the endpoint's `strategies` order: Dr. Jacll
   has no toggle at all (instruct only); a commercial pick defaults to `conversational` with
   `instruct` selectable for experimentation.
-- **Bridge removal is part of this guide.** Only here, once the SPA sends/reads `mode`, is it safe
-  to delete the backend `grade` compat. Do it in the same branch so `main` never has an SPA on
-  `mode` talking to a server still requiring `grade`. One deploy-order caveat: a browser still
-  holding the *old* cached bundle sends `grade`, which the bridge-less server now ignores — the run
-  silently becomes `instruct` on the default alias (free, so no cost surprise). Single-operator
-  today, so "hard-refresh after deploy" is the whole mitigation; with real users the asset hash
-  makes it moot on next load.
+- **No backend work here.** Guide 2 already deleted the whole `grade` vocabulary — the server
+  ignores a stray `grade` key (unknown → `instruct`) and its read shapes carry `mode` only. This
+  guide just makes the SPA speak that language.
 
 ## Tests (written at activation)
 
@@ -102,10 +103,6 @@ and the page shows why.
   `default` is non-null — never true for a paid-only setup); never-yank: the selected executor
   going unavailable keeps the selection and flags submit-disabled; per-pick options visibility
   (Dr. Jacll bare; commercial shows the strategy toggle + exactly the advertised knobs).
-- Backend: read serializer no longer emits `grade`; create ignores a stray `grade` key (unknown →
-  `instruct`, the guide-1 coercion now catches it); absence assertions for
-  `GRADE_TO_MODE`/`KNOWN_MODE_INPUTS` on `jac.models` (scaffolding — delete after merge, like
-  guide 2's).
 
 ## Verification
 

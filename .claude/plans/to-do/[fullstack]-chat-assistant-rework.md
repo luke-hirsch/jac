@@ -1,20 +1,25 @@
 # [fullstack] chat-assistant-rework
 
-> **Guide 7** — spun out of the *LLM-mode redesign* conversation. Mostly independent of guides
-> 1–6 (it only intersects at removing the `get_alias_strength` chat gate in `views.py`). Reworks the
-> narrow "refine the letter body" chat into a **streamed, real-multi-turn job-hunting assistant**,
-> and drops the model-capability gate.
+> **⚠️ STALE (2026-07-16 executor rework).** The chat endpoint is now executor-keyed
+> (`provider`/`model` via `resolve_executor`) and the strength gate is gone — any executor
+> chats. Rework the UX against that backend; the alias plumbing referenced below is dead.
+
+> **Guide 7** — spun out of the *LLM-mode redesign* conversation. Independent of guides 1–6:
+> the `get_alias_strength` chat gate and the entire connector strength/autodetect machinery
+> **already died in guide 2** (direction change 2026-07-16 — no staged deletions). This guide
+> reworks the narrow "refine the letter body" chat into a **streamed, real-multi-turn job-hunting
+> assistant**.
 >
 > **Backlog plan.** Full copy-paste code + red tests at activation. The SSE-vs-WS transport is a
 > decision embedded below (recommendation given); streaming needs a live click-through to verify.
 
 ## Context / goal
 
-Today's `chat` (`LetterChat`) is a narrow letter-body refiner: gated to standard+ via
-`get_alias_strength(alias) == "light"` (`views.py:434`), **sync one-shot**, and it flattens the
-transcript into `USER:/ASSISTANT:` text in a single `complete()` — it doesn't use provider-native
-multi-turn at all (the adapters were just never exercised with it, though `base.py` shows
-`complete(messages)`/`stream(messages)` have always been the contract).
+Today's `chat` (`LetterChat`) is a narrow letter-body refiner: **sync one-shot**, and it flattens
+the transcript into `USER:/ASSISTANT:` text in a single `complete()` — it doesn't use
+provider-native multi-turn at all (the adapters were just never exercised with it, though
+`base.py` shows `complete(messages)`/`stream(messages)` have always been the contract). Its old
+strength gate (`get_alias_strength(alias) == "light"`) died in guide 2.
 
 Lukas wants it to **feel like chatting with an AI in its own app, leaning to job hunting**:
 - **Scope** — a job-hunting assistant, not just a letter tool: talk about the posting, tailor the
@@ -24,15 +29,11 @@ Lukas wants it to **feel like chatting with an AI in its own app, leaning to job
   letter/CV text), not to the whole conversation.
 - **Experience** — **stream tokens** with **real multi-turn `messages`** (system + transcript),
   like ChatGPT/Claude.
-- **No capability gate** — any alias the user configured is fair game (their choice, same as picking
-  a small model in any app). And since guide 2 rekeys the eval commands to `--mode` (and deletes
-  jac's `Grade`/`normalize_grade` outright) and guide 5 deletes the connector's `strength` display,
-  the chat gate and `llm_check`'s strength line are the **last `get_alias_strength` callers — this
-  guide owns the connector autodetect deletion** (Lukas, 2026-07-15: gone entirely):
-  `get_alias_strength`, `_autodetect_strength`, `_STRENGTHS`, the `strength` config-key handling in
-  `conf.py`, the `LLM_STRENGTH` env knob in `settings.py`, and the `llm_check` strength output.
-  `grep -rn "strength\|Grade" backend/` afterwards should hit only migrations and comments — that
-  grep is the redesign's closing checkmark (guide 1's compat ledger ends here).
+- **No capability gate** — any alias the user configured is fair game (their choice, same as
+  picking a small model in any app). Guide 2 already deleted the gate along with the whole
+  connector autodetect machinery (its verification grep is the redesign's closing checkmark);
+  this guide's only obligation is **not reintroducing one** — the picker offers every configured
+  alias.
 
 `rewrite` (`ParagraphRewrite`) is already ungated and fine — this guide leaves it, only aligning its
 tone note. The rework is about `chat`.
@@ -42,14 +43,13 @@ tone note. The rework is about `chat`.
 | Path | Change |
 | --- | --- |
 | `backend/jac/llm_prompts.py` | `LetterChat` reworked: new assistant `_INSTRUCTION` (job-hunting, drafting-scoped guardrail); build a real **`messages`** list (system with posting + letter + tailored-CV context, then the transcript turns) instead of a flat prompt; add `stream()` yielding token deltas. Keep the `REVISED BODY:` marker convention (parsed client-side now). |
-| `backend/jac/views.py` | `chat` action → **streams** (SSE `StreamingHttpResponse`, `text/event-stream`). **Delete** the `get_alias_strength == "light"` gate + the `get_alias_strength` import if now unused. Keep `_chat_problem` shape/size checks (pre-LLM, still cheap). Add a `ScopedRateThrottle` (`llm-chat`) on the action. Pass `application.cv_content` into `LetterChat`. |
+| `backend/jac/views.py` | `chat` action → **streams** (SSE `StreamingHttpResponse`, `text/event-stream`). Keep `_chat_problem` shape/size checks (pre-LLM, still cheap). Add a `ScopedRateThrottle` (`llm-chat`) on the action. Pass `application.cv_content` into `LetterChat`. (The strength gate is already gone — guide 2.) |
 | `frontend/src/components/applications/refine-chat.tsx` | Consume the SSE stream (`fetch` + `response.body.getReader()` + `TextDecoder`), render deltas live; multi-turn transcript state; "apply revision to letter" affordance from the client-side `REVISED BODY:` split. Rename/relabel toward "assistant", not "refine letter". The streamed `fetch` must go through the same CSRF-header helper the JSON mutations use — a raw `fetch` silently misses the token and 403s only against session auth. |
 | `frontend/src/lib/letter-chat.ts` | Pure helpers: build the request body, parse a streamed line into a delta, split a finished reply on `REVISED BODY:`. (Testable per the `frontend-test-layout` memory.) |
-| `frontend/src/lib/queries/llm.ts` | **Remove** the chat alias-strength filter — the model picker offers any configured alias for chat (the free executor displays as "Dr. Jacll", guide 5's branding constant; once `[fullstack]-llm-model-catalog-and-knobs` lands, reuse its catalog dropdown here — one shared source). |
-| `backend/llm_connector/conf.py` + `backend/lukehirsch/settings.py` + `backend/llm_connector/management/commands/llm_check.py` | **Final autodetect deletion** (see Context): `get_alias_strength`, `_autodetect_strength`, `_STRENGTHS`, the `strength` config key, `LLM_STRENGTH`, and `llm_check`'s strength line. (Jac's `Grade`/`normalize_grade` already died in guide 2.) |
+| `frontend/src/lib/queries/llm.ts` | The chat model picker offers any configured alias (the strength vocabulary is already gone from the API since guide 2 and from the SPA types since guide 5; the free executor displays as "Dr. Jacll", guide 5's branding constant; once `[fullstack]-llm-model-catalog-and-knobs` lands, reuse its catalog dropdown here — one shared source). |
 | `frontend/src/components/applications/letter-editor.tsx` | Wire the assistant panel + the "apply revision" path into the body editor. |
 | `backend/jac/tests/test_llm_rungs.py` | Update `LetterChatTests` — `messages` build (system carries posting/letter/CV; transcript roles), `stream()` yields deltas, revision marker still recognised. |
-| `backend/jac/tests/test_job_application.py` | Update the chat-endpoint tests (`:537`) — streamed response shape; **assert the strength gate is gone** (a `light` alias now chats). |
+| `backend/jac/tests/test_job_application.py` | Update the chat-endpoint tests (`:537`) — streamed response shape. (The gate-is-gone assertion landed with guide 2.) |
 | `backend/llm_connector/tests/test_adapters.py` | Add a multi-turn `messages` + `stream()` test for ollama/custom (the path this rework relies on; currently unexercised). |
 
 ## Approach / key decisions
@@ -151,10 +151,10 @@ tone note. The rework is about `chat`.
 - `test_llm_rungs.py::LetterChatTests` — `messages` build: a `system` message carrying the posting,
   the current body, and the tailored CV; transcript turns mapped to `{role, content}`; `stream()`
   yields deltas (mock the client stream); the `REVISED BODY:` marker still splits.
-- `test_job_application.py` chat endpoint — a **`light` alias now chats** (gate gone); the response
-  is `text/event-stream` and carries `delta`/`done` events; `_chat_problem` still 400s bad
-  transcripts before any LLM call; the throttle 429s past the scoped rate (override the rate in the
-  test so it doesn't need 20 requests).
+- `test_job_application.py` chat endpoint — the response is `text/event-stream` and carries
+  `delta`/`done` events; `_chat_problem` still 400s bad transcripts before any LLM call; the
+  throttle 429s past the scoped rate (override the rate in the test so it doesn't need 20
+  requests).
 - `test_adapters.py` — ollama/custom `stream(messages=[...multi-turn...])` yields chunks and sends
   the roles through (the previously-unexercised path this rework leans on).
 - `frontend/tests/lib/letter-chat.test.ts` — request-body builder, SSE-line → delta parse, and the
@@ -164,8 +164,8 @@ tone note. The rework is about `chat`.
 
 With a **small local ollama model** configured (proving the "any model, their choice" point):
 open an application's assistant, ask a job-hunting question → tokens stream in live; ask it to
-tighten the letter → it proposes a revision and "apply to letter" swaps the body; confirm a `light`
-alias is no longer refused. `tsc -b` + vitest + the backend modules green.
+tighten the letter → it proposes a revision and "apply to letter" swaps the body. `tsc -b` +
+vitest + the backend modules green.
 
 ## Results
 
