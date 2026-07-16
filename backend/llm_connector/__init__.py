@@ -1,70 +1,31 @@
-"""Public API for the llm_connector app.
-
-Convenience wrappers around LLMClient so callers don't need to instantiate
-the client directly for simple one-shot completions.
-
-Pass `user=` on every user-driven call so the per-user LLMConfig is resolved
-instead of falling back to settings.LLM["default"].
-"""
-
 from .client import LLMClient
+from .conf import HIRSCHAI_PROVIDER
 
 
-def get_client(alias: str = "default", user=None) -> LLMClient:
-    """Instantiate an LLMClient for the given alias and optional user."""
-    return LLMClient(alias, user=user)
+def get_client(
+    provider: str | None = None, *, user=None, model: str | None = None
+) -> LLMClient:
+    return LLMClient(provider, user=user, model=model)
 
 
 def complete(
-    prompt: str | None = None,
-    *,
-    messages: list[dict] | None = None,
-    alias: str = "default",
-    user=None,
-    **kwargs,
+    prompt=None, *, messages=None, provider=None, model=None, user=None, **kwargs
 ) -> str:
-    """Send a single completion request and return the response text."""
-    return get_client(alias, user=user).complete(
+    return get_client(provider, user=user, model=model).complete(
         prompt=prompt, messages=messages, **kwargs
     )
 
 
 def stream(
-    prompt: str | None = None,
-    *,
-    messages: list[dict] | None = None,
-    alias: str = "default",
-    user=None,
-    **kwargs,
+    prompt=None, *, messages=None, provider=None, model=None, user=None, **kwargs
 ):
-    """Stream a completion response, yielding text chunks as a generator."""
-    return get_client(alias, user=user).stream(
+    return get_client(provider, user=user, model=model).stream(
         prompt=prompt, messages=messages, **kwargs
     )
 
 
-def embed(
-    inputs: list[str],
-    *,
-    alias: str = "default",
-    user=None,
-) -> list[list[float]]:
-    """Return an embedding vector per input string for the given alias.
-
-    Only providers with an embedding endpoint support this (today: Ollama).
-    """
-    return get_client(alias, user=user).embed(inputs)
-
-
-def web_search(
-    prompt=None, *, messages=None, alias="default", user=None, **kwargs
-) -> dict:
-    """Run a single web-search-backed completion. {"text": str, "sources": [str]}."""
-    return get_client(alias, user=user).web_search(
-        prompt=prompt, messages=messages, **kwargs
-    )
-
-
-def can_web_search(alias="default", user=None) -> bool:
-    """True if the alias resolves to a provider with native web search (no call made)."""
-    return get_client(alias, user=user).supports_web_search
+def embed(inputs: list[str]) -> list[list[float]]:
+    """Embed on the tower. Embedding is a HirschAI-only capability by design:
+    commercial executors never see embedding work (and never could route it here
+    without an explicit call site — the privacy grep in Verification checks that)."""
+    return get_client(HIRSCHAI_PROVIDER).embed(inputs)

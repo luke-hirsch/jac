@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from .base import LLMTransportError
-from .conf import get_alias_config, logging_enabled
+from .conf import logging_enabled, resolve_config
 from .registry import get_adapter_class
 
 # One retry for connection-level failures (host unreachable / timeout) — enough to ride
@@ -49,16 +49,16 @@ class LLMClient:
     per-user LLMConfig rows are respected when `user` is provided.
     """
 
-    def __init__(self, alias: str = "default", user=None):
-        """Args:
-        alias: LLM alias name to look up (e.g. "default", "reasoning").
-        user: Django user instance or PK. When provided, per-user LLMConfig
-            takes precedence over settings.LLM.
-        """
-        self.alias = alias
+    def __init__(
+        self, provider: str | None = None, *, user=None, model: str | None = None
+    ):
+        """provider None -> the user's default executor (their default commercial
+        row, else HirschAI). `model` overrides the resolved config's model."""
         self.user = user
-        self._config = get_alias_config(alias, user=user)
-        adapter_cls = get_adapter_class(self._config["provider"])
+        self._config = resolve_config(provider, user=user, model=model)
+        self.provider = self._config["provider"]
+        self.model = self._config.get("model", "")
+        adapter_cls = get_adapter_class(self.provider)
         self._adapter = adapter_cls(self._config)
 
     def _with_retry(self, operation: str, call):
@@ -158,7 +158,6 @@ class LLMClient:
 
             LLMRequestLog.objects.create(
                 user=self.user,
-                alias=self.alias,
                 provider=self._config["provider"],
                 model=self._config.get("model", ""),
                 prompt_tokens=prompt_tokens,

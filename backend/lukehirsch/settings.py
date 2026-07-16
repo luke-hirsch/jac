@@ -182,18 +182,13 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 
-LLM = {
-    "default": {
-        "provider": os.getenv("LLM_DEFAULT_PROVIDER", "ollama"),
-        "url": os.getenv("LLM_URL", "http://localhost:11434/v1"),
-        "model": os.getenv("LLM_MODEL", "llama3.2:1b"),
-        "embed_model": os.getenv("LLM_EMBED_MODEL", "qwen3-embedding:0.6b"),
-        "timeout": env_int("LLM_TIMEOUT", 300),
-        "think": env_bool("LLM_THINKING", False),
-        "strength": os.getenv("LLM_STRENGTH", "light"),
-    }
+HIRSCHAI = {
+    "url": os.getenv("HIRSCHAI_URL", "http://localhost:11434"),
+    "model": os.getenv("HIRSCHAI_MODEL", "qwen3.5:9b"),
+    "embed_model": os.getenv("HIRSCHAI_EMBED_MODEL", "qwen3-embedding:0.6b"),
+    "timeout": env_int("LLM_TIMEOUT", 300),
+    "think": env_bool("LLM_THINKING", False),
 }
-
 
 LLM_LOGGING = True
 

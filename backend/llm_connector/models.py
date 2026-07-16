@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from lukehirsch.managers import SystemScopedManager
 
 from .crypto import decrypt, encrypt
 from .validators import validate_safe_llm_url
@@ -12,13 +13,13 @@ class Provider(models.TextChoices):
 
 
 class LLMConfig(models.Model):
-    """Per-user LLM alias configuration. Maps `(user, alias)` to a provider +
-    model + credentials. API keys are Fernet-encrypted at rest; the cleartext
-    is only ever materialised via the `api_key` property.
+    """One row per (user, provider): the provider credential + the default flag.
 
-    Resolution order (see `llm_connector.conf.get_alias_config`):
-      1. LLMConfig(user, alias) if it exists,
-      2. else fall back to settings.LLM["default"] (the zero-cost Ollama config).
+    The model is deliberately thin — WHICH model runs is a per-run pick from
+    `llm_connector.catalog`, never stored here. `url`/`max_tokens`/`extra` exist for the
+    system-owned HirschAI row (tower url, chat/embed model names, think flag) and are not
+    exposed over the user API. Rows owned by the system user are the shared executors
+    (today: HirschAI), same pattern as Domain/ApplicationLayout.
     """
 
     user = models.ForeignKey(
@@ -42,6 +43,8 @@ class LLMConfig(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SystemScopedManager()
 
     class Meta:
         unique_together = [("user", "provider")]
@@ -94,7 +97,6 @@ class LLMRequestLog(models.Model):
         blank=True,
         related_name="llm_request_logs",
     )
-    alias = models.CharField(max_length=100)
     provider = models.CharField(max_length=100)
     model = models.CharField(max_length=200)
     prompt_tokens = models.IntegerField(null=True, blank=True)
@@ -109,4 +111,4 @@ class LLMRequestLog(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.alias} ({self.provider}) @ {self.created_at:%Y-%m-%d %H:%M:%S}"
+        return f" {self.provider} - {self.model} -  {self.created_at:%Y-%m-%d %H:%M:%S}"
