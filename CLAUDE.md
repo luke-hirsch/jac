@@ -126,6 +126,16 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
+4. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
+   per-model pricing metadata in the model catalog (see `[fullstack]-llm-model-catalog-and-knobs`).
+
+> **LLM-mode redesign — planned 2026-07-15, guides in `to-do/`.** Grades + autodetect die; three
+> modes (`manual`/`instruct`/`conversational` — mode = selection strategy, alias = executor);
+> **model-first generate panel** (free executor "Dr. Jacll" + the user's configured aliases);
+> reachability probe + executors endpoint; auto-run on application create (never retroactive);
+> per-application pins; model catalog + effort/temperature knobs (Anthropic + OpenAI curated,
+> Google benched); chat-assistant rework. Guide 1 is activated on `backend/mode-enum-and-plumbing`
+> (red tests on disk).
 
 > **Application editor + render/export phase — done (2026-07-10 wrap-up).** All frontend guides
 > (`cv-snippets`, `cv-editor`, `letter-editor`, `tailored-render`, `render-export`) are in

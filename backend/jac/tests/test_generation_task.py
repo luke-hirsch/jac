@@ -81,12 +81,84 @@ class GenerateRunTaskTests(TestCase):
         app = _application(self.user, **application_kwargs)
         return GenerationRun.objects.create(job_application=app, alias="default")
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_mode_maps_to_internal_grade(self, mock_cv, mock_letter, mock_extract):
+        """`[backend]-mode-enum-and-plumbing`: the task translates the run's mode to the internal
+        pipeline grade (instruct->standard, conversational->strong) and passes that grade to both
+        the CV filter and the letter writer. `manual` never reaches the pipeline — see
+        test_manual_run_fails_fast_without_llm_calls. Red until the `mode` field exists.
+        """
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+        cases = {
+            "instruct": "standard",
+            "conversational": "strong",
+        }
+        for mode, expected_grade in cases.items():
+            with self.subTest(mode=mode):
+                run = GenerationRun.objects.create(
+                    job_application=_application(self.user), alias="default", mode=mode
+                )
+                generate_run(run.pk)
+                self.assertEqual(
+                    mock_cv.return_value.filter_cv.call_args.kwargs["grade"],
+                    expected_grade,
+                )
+                self.assertEqual(
+                    mock_letter.call_args.kwargs["grade"], expected_grade
+                )
+
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_manual_run_fails_fast_without_llm_calls(
+        self, mock_cv, mock_letter, mock_extract
+    ):
+        """`manual` = No AI. The API refuses to create manual runs; a row that exists anyway
+        (admin/ORM/a future bug) must fail fast and loud — zero pipeline work — instead of
+        silently burning LLM time under a "No AI" label."""
+        run = GenerationRun.objects.create(
+            job_application=_application(self.user), alias="default", mode="manual"
+        )
+        generate_run(run.pk)
+        run.refresh_from_db()
+        self.assertEqual(run.status, GenerationRun.Status.failed)
+        self.assertIn("manual", run.error)
+        mock_cv.assert_not_called()
+        mock_letter.assert_not_called()
+        mock_extract.assert_not_called()
+
+    @patch("jac.tasks.pick_alias", return_value="default")
+    @patch("jac.tasks.AddressExtract")
+    @patch("jac.tasks.CoverLetter")
+    @patch("jac.tasks.CV")
+    def test_cost_guard_follows_the_alias_not_the_mode(
+        self, mock_cv, mock_letter, mock_extract, mock_pick
+    ):
+        """`[backend]-mode-enum-and-plumbing`: `free_only` derives from the run's ALIAS
+        (`is_free_alias`), not from the mode/grade — a run on the free default alias must never
+        route support rungs onto paid pins, even in `conversational` mode. Red now: today
+        free_only = (grade == "light"), so a conversational run would pass False."""
+        mock_cv.return_value.filter_cv.return_value = {}
+        mock_extract.return_value.extract.return_value = {}
+        mock_letter.return_value.build.return_value = _LETTER
+        run = GenerationRun.objects.create(
+            job_application=_application(self.user),
+            alias="default",
+            mode="conversational",
+        )
+        generate_run(run.pk)
+        self.assertTrue(mock_pick.called)
+        self.assertIs(mock_pick.call_args.kwargs["free_only"], True)
+
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_happy_path_writes_result_and_marks_done(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {"title": "Dev", "language": "en"}
@@ -105,12 +177,11 @@ class GenerateRunTaskTests(TestCase):
         posting.refresh_from_db()
         self.assertEqual(posting.title, "Dev")
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_done_autofills_empty_application(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {}
@@ -128,12 +199,11 @@ class GenerateRunTaskTests(TestCase):
         self.assertEqual(app.letter_meta, _LETTER_META)
         self.assertEqual(app.cv_content, run.result["cv"])
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_run_persists_extracted_address(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         """The extracted recipient address is saved on the posting (1:1) — updated on a
         re-run, never duplicated — so the SPA can prefill the letter recipient."""
@@ -166,12 +236,11 @@ class GenerateRunTaskTests(TestCase):
         addr.refresh_from_db()
         self.assertEqual(addr.company, "ACME GmbH")
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_run_fills_application_deadline(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         """The extracted `deadline` line is parsed to a real date and written to the owning
         application (foundation lifecycle guide) — same fill-if-empty hand-off as cv/letter."""
@@ -189,12 +258,11 @@ class GenerateRunTaskTests(TestCase):
         app.refresh_from_db()
         self.assertEqual(app.deadline, date(2026, 8, 1))
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_run_does_not_clobber_manual_deadline(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         """A deadline the user already set is never overwritten by a later run's extraction."""
         mock_cv.return_value.filter_cv.return_value = {}
@@ -208,12 +276,11 @@ class GenerateRunTaskTests(TestCase):
         app.refresh_from_db()
         self.assertEqual(app.deadline, date(2026, 6, 30))
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_done_never_clobbers_edited_application(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {}
@@ -227,12 +294,11 @@ class GenerateRunTaskTests(TestCase):
         self.assertEqual(app.cover_letter, "my hand-written letter")
         self.assertEqual(app.cv_content, {})
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_failure_marks_failed_with_error(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {}
@@ -246,12 +312,11 @@ class GenerateRunTaskTests(TestCase):
         self.assertEqual(run.status, "failed")
         self.assertIn("boom", run.error)
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_soft_time_limit_reads_as_timeout(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {}
@@ -265,12 +330,11 @@ class GenerateRunTaskTests(TestCase):
         self.assertEqual(run.status, "failed")
         self.assertIn("timed out", run.error)
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_transport_error_hints_at_the_model_server(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         mock_cv.return_value.filter_cv.return_value = {}
         mock_extract.return_value.extract.return_value = {}
@@ -304,12 +368,11 @@ class GenerateRunTaskTests(TestCase):
         self.assertEqual(cancelled.error, "cancelled by user")
         mock_cv.assert_not_called()
 
-    @patch("jac.tasks.get_alias_strength", return_value="light")
     @patch("jac.tasks.AddressExtract")
     @patch("jac.tasks.CoverLetter")
     @patch("jac.tasks.CV")
     def test_cancel_during_run_wins_over_done(
-        self, mock_cv, mock_letter, mock_extract, _mock_strength
+        self, mock_cv, mock_letter, mock_extract
     ):
         """A cancel landing mid-pipeline keeps the run failed: the finishing task must
         not overwrite it with `done`, and must not auto-fill the application."""

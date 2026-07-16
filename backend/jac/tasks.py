@@ -24,13 +24,13 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from llm_connector.base import LLMTransportError
 from llm_connector.client import retry_reporter
-from llm_connector.conf import get_alias_strength, pick_alias
+from llm_connector.conf import is_free_alias, pick_alias
 
 from jac.cover_letter import CoverLetter, editable_body
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import AddressExtract
-from jac.models import GenerationRun, JobPostAddress
+from jac.models import GenerationRun, JobPostAddress, Mode, mode_to_grade
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,11 @@ def generate_run(run_id: int) -> None:
         return
     run.status = GenerationRun.Status.running
     publish_event(run.pk, {"event": "progress", "status": run.status, "stage": ""})
+    if run.mode == Mode.manual:
+        _fail(
+            run, "manual mode never generates — build the application content by hand"
+        )
+        return
 
     def notify_retry(operation: str, delay_s: float, error: str) -> None:
         # Transient, not persisted: the DB keeps the real stage; the browser just gets
@@ -143,7 +148,8 @@ def generate_run(run_id: int) -> None:
             user = application.user
             jp = application.posting
             alias = run.alias or "default"
-            grade = run.grade or get_alias_strength(alias, user=user)
+            mode = run.mode or Mode.instruct
+            grade = mode_to_grade(mode)
 
             # 1. Tailor the CV.
             _progress(run, "filtering CV")
@@ -165,7 +171,7 @@ def generate_run(run_id: int) -> None:
                 AddressExtract.PREFERRED_GRADE,
                 fallback=alias,
                 user=user,
-                free_only=grade == "light",
+                free_only=is_free_alias(alias, user=user),
             )
             extracted = AddressExtract(
                 jp.posting_text, alias=extract_alias, user=user
@@ -202,10 +208,11 @@ def generate_run(run_id: int) -> None:
             ).build()
 
         result = {
-            "meta": {"grade": grade, "alias": alias},
+            "meta": {"mode": mode, "grade": grade, "alias": alias},
             "cv": serialize_cv_selection(cv),
             "cover_letter": letter,
         }
+
         # Terminal write, conditional on still running: a cancel that landed mid-pipeline
         # wins, and its result is discarded.
         finished = GenerationRun.objects.filter(

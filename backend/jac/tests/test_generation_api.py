@@ -75,7 +75,9 @@ class GenerationRunCreateTests(APITestCase):
         mock_task.apply_async.assert_not_called()
 
     @patch("jac.views.generate_run")
-    def test_omitted_grade_means_autodetect(self, _mock_task):
+    def test_omitted_mode_defaults_to_instruct(self, _mock_task):
+        # `[backend]-mode-enum-and-plumbing`: no autodetect anymore — a blank mode is `instruct`
+        # (the AI default; the SPA offers `manual` itself when nothing is reachable).
         _mock_task.apply_async.return_value.id = "task-1"
         self.client.force_login(self.user)
         r = self.client.post(
@@ -84,26 +86,54 @@ class GenerationRunCreateTests(APITestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 201, r.data)
-        # Blank grade → the task derives it from the alias strength.
-        self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).grade, "")
+        self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).mode, "instruct")
 
     @patch("jac.views.generate_run")
-    def test_unknown_grade_is_coerced_to_light(self, _mock_task):
+    def test_unknown_mode_is_coerced_to_instruct(self, _mock_task):
         _mock_task.apply_async.return_value.id = "task-2"
         self.client.force_login(self.user)
-        with self.assertLogs(level="WARNING") as logs:
-            r = self.client.post(
-                "/api/jac/generations/",
-                {"job_application": self.app.pk, "grade": "nonsense"},
-                format="json",
-            )
-        self.assertEqual(r.status_code, 201, r.data)
-        self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).grade, "light")
-        # normalize_grade returns the Grade enum member, so the coerced value's repr in the
-        # message is `Grade.light`, not `'light'` — assert on the stable offending-value part.
-        self.assertTrue(
-            any("Invalid grade 'nonsense' coerced to" in m for m in logs.output)
+        r = self.client.post(
+            "/api/jac/generations/",
+            {"job_application": self.app.pk, "mode": "nonsense"},
+            format="json",
         )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(GenerationRun.objects.get(pk=r.data["id"]).mode, "instruct")
+
+    @patch("jac.views.generate_run")
+    def test_legacy_grade_key_is_mapped_to_a_mode(self, _mock_task):
+        # Compat bridge: the SPA still sends `grade` until the mode-selection-ui guide.
+        # light collapses into instruct — the embed-only tier is no longer user-facing.
+        _mock_task.apply_async.return_value.id = "task-3"
+        self.client.force_login(self.user)
+        cases = {"strong": "conversational", "light": "instruct"}
+        for grade, expected_mode in cases.items():
+            with self.subTest(grade=grade):
+                r = self.client.post(
+                    "/api/jac/generations/",
+                    {"job_application": self.app.pk, "grade": grade},
+                    format="json",
+                )
+                self.assertEqual(r.status_code, 201, r.data)
+                self.assertEqual(
+                    GenerationRun.objects.get(pk=r.data["id"]).mode, expected_mode
+                )
+
+    @patch("jac.views.generate_run")
+    def test_manual_mode_is_rejected_at_create(self, mock_task):
+        # `manual` = No AI. A manual generation run is a contradiction — the SPA builds manual
+        # applications without a run (manual-no-run-mode guide), and the server must enforce
+        # that too, not just the UI: 400 with a field error, no row, nothing enqueued.
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/api/jac/generations/",
+            {"job_application": self.app.pk, "mode": "manual"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("mode", r.data)
+        self.assertFalse(GenerationRun.objects.exists())
+        mock_task.apply_async.assert_not_called()
 
 
 class GenerationRunReadTests(APITestCase):
@@ -125,6 +155,18 @@ class GenerationRunReadTests(APITestCase):
         self.assertEqual(r.data["status"], "done")
         self.assertEqual(r.data["result"]["meta"]["grade"], "light")
         self.assertEqual(r.data["posting_title"], "Backend dev")
+
+    def test_read_exposes_mode_and_compat_grade(self):
+        # `[backend]-mode-enum-and-plumbing`: additive read bridge — `mode` is canonical, `grade`
+        # stays as a derived compat key so the old SPA keeps working until mode-selection-ui.
+        run = GenerationRun.objects.create(
+            job_application=_application(self.alice), mode="conversational"
+        )
+        self.client.force_login(self.alice)
+        r = self.client.get(f"/api/jac/generations/{run.pk}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["mode"], "conversational")
+        self.assertEqual(r.data["grade"], "strong")
 
     def test_other_user_cannot_read(self):
         self.client.force_login(self.bob)

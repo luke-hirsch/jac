@@ -162,11 +162,13 @@ class GradeCohesionTests(TestCase):
             self.assertEqual(member.name, member.value)
 
     def test_generation_run_field_uses_choices(self):
+        # `[backend]-mode-enum-and-plumbing`: the field renamed grade -> mode and its choices are
+        # the Mode enum (red until the rename + migration land).
         from jac.models import GenerationRun
 
-        field = GenerationRun._meta.get_field("grade")
+        field = GenerationRun._meta.get_field("mode")
         self.assertTrue(field.choices)
-        self.assertIn("strong", [value for value, _ in field.choices])
+        self.assertIn("conversational", [value for value, _ in field.choices])
 
     def test_old_gradechoice_is_gone(self):
         from jac.models import GenerationRun
@@ -181,6 +183,59 @@ class GradeCohesionTests(TestCase):
         self.assertEqual(normalize_grade("bogus"), "light")
         self.assertEqual(normalize_grade("strong"), "strong")
         self.assertEqual(normalize_grade("standard"), "standard")
+
+
+class ModeVocabularyTests(TestCase):
+    """`[backend]-mode-enum-and-plumbing`: Mode replaces model *strength* as the run axis. THREE
+    modes — the mode names the selection strategy, the alias names the executor, "automatic" is a
+    trigger property (SPA auto-runs instruct on create when the tower answers), not a mode. Red
+    until jac.models defines Mode + normalize_mode + mode_to_grade and GenerationRun.mode defaults
+    to instruct.
+    """
+
+    def test_mode_enum_values(self):
+        from jac.models import Mode
+
+        self.assertEqual(list(Mode.values), ["manual", "instruct", "conversational"])
+        # name == value for every member (no light=high style mismatch).
+        for member in Mode:
+            self.assertEqual(member.name, member.value)
+
+    def test_normalize_mode_passes_through_modes(self):
+        from jac.models import normalize_mode
+
+        for mode in ("manual", "instruct", "conversational"):
+            self.assertEqual(normalize_mode(mode), mode)
+
+    def test_normalize_mode_maps_legacy_grades(self):
+        # light and standard both collapse into instruct — the embed-only tier is no longer
+        # user-facing (it becomes instruct's prefilter/degrade stage in guide 3).
+        from jac.models import normalize_mode
+
+        self.assertEqual(normalize_mode("light"), "instruct")
+        self.assertEqual(normalize_mode("standard"), "instruct")
+        self.assertEqual(normalize_mode("strong"), "conversational")
+
+    def test_normalize_mode_defaults_to_instruct(self):
+        from jac.models import normalize_mode
+
+        self.assertEqual(normalize_mode(""), "instruct")
+        self.assertEqual(normalize_mode(None), "instruct")
+        self.assertEqual(normalize_mode("bogus"), "instruct")
+
+    def test_mode_to_grade_translation(self):
+        # manual->light is the defensive floor for generic mapping code only — manual runs are
+        # rejected at the API and fail-fasted in the task, they never execute.
+        from jac.models import mode_to_grade
+
+        self.assertEqual(mode_to_grade("manual"), "light")
+        self.assertEqual(mode_to_grade("instruct"), "standard")
+        self.assertEqual(mode_to_grade("conversational"), "strong")
+
+    def test_field_default_is_instruct(self):
+        from jac.models import GenerationRun, Mode
+
+        self.assertEqual(GenerationRun._meta.get_field("mode").default, Mode.instruct)
 
 
 class GenerationRunDefaultsTests(TestCase):

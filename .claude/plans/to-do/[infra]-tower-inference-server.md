@@ -234,6 +234,16 @@ LLM_URL_ALLOWLIST=10.10.0.0/24         # so a per-user ollama row at the tower a
 > Set it to `standard` to unlock the instruct rung; `strong` is available too but a 7–8B model
 > isn't honestly a "strong" model — `standard` is the right rung for it.
 
+> **Ordering note — the LLM-mode redesign retires this knob.** Guides 1–5 of the mode redesign
+> replace autodetected *strength* with a per-run **mode** the user picks; once
+> `selection-ladder-remap` + the executors endpoint land, `LLM_STRENGTH` matters only to the two eval
+> commands. If the tower lands **before** the redesign, set `LLM_STRENGTH=standard` as above; if
+> **after**, skip the knob — the tower is simply where `instruct` on the default free alias (the
+> staggered embed→instruct pipeline) runs, reached via `LLM_URL` alone, and the "product call"
+> below dissolves: the executors endpoint offers the free executor (public name "Dr. Jacll" —
+> guide 5; deliberately *not* named after the tower) whenever it answers. Either ordering
+> works; just don't chase a stale env var afterwards (guide 7 deletes it outright).
+
 > **Product call, make it on purpose.** Moving the *default* off `light` changes what the default
 > **showcases**. Per [[project-purpose-cv-showcase]] the `light` rung is a deliberate demonstration
 > that *small self-hosted models are viable*. A 7–8B default on your own GPU is arguably a stronger
@@ -294,6 +304,15 @@ services:
 > carries **only** VPS↔ollama and never becomes the default route. The tower's own internet keeps
 > going out the plain home gateway. Three independent paths, zero overlap. If you ever see JAC
 > latency spike or the tower's public IP change, check that neither VPN swallowed the default route.
+
+> **Docker punches through ufw — the second thing that bites people.** Compose `ports:` entries are
+> programmed into iptables by Docker itself and are **not** subject to the ufw rules above:
+> `"8080:8080"` binds `0.0.0.0` and is reachable from the whole LAN even with
+> `ufw default deny incoming`. That doesn't weaken the JAC boundary — ollama is a **host** systemd
+> service, so ufw genuinely governs `:11434` — but it silently exposes every container UI. Publish
+> on a specific address instead (`"127.0.0.1:8080:8080"`, or the LAN IP if the phone needs it) or
+> filter via the `DOCKER-USER` chain, and verify the same way as ollama: a LAN-side `curl` that is
+> *supposed* to fail.
 
 ### Jellyfin — "softbox for phone" *(assumption — confirm)*
 

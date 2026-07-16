@@ -7,6 +7,7 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 
 from jac.models import (
+    KNOWN_MODE_INPUTS,
     ApplicationLayout,
     Certification,
     Domain,
@@ -18,10 +19,12 @@ from jac.models import (
     JobPosting,
     Language,
     Location,
+    Mode,
     Project,
     ResumeSnippet,
     Skill,
-    normalize_grade,
+    mode_to_grade,
+    normalize_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -484,15 +487,15 @@ class GenerationRunCreateSerializer(
     ScopeRelatedToUserMixin, serializers.ModelSerializer
 ):
     user_scoped_fields = ("job_application",)
-    # Blank = auto-detect from the alias strength in the task (`run.grade or
-    # get_alias_strength(...)`); the model default "light" only applies to direct ORM creates.
-    grade = serializers.CharField(required=False, allow_blank=True, default="")
+    # Canonical key is `mode`. A legacy `grade` (light/standard/strong) is still accepted and
+    # mapped (the SPA flips to `mode` in the model-first-generate-panel guide). Blank/unknown → `instruct`.
+    mode = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = GenerationRun
         fields = [
             "job_application",
-            "grade",
+            "mode",
             "alias",
             "verify_grounding",
             "verifier_alias",
@@ -505,21 +508,38 @@ class GenerationRunCreateSerializer(
             "min_skill_proficiency",
         ]
 
-    def validate_grade(self, value):
-        # Blank stays blank (the task auto-detects from alias strength). A non-blank but unknown
-        # grade is coerced to the safe rung rather than 400'd — a typo shouldn't fail the request.
-        if not value:
-            return value
-        normalized = normalize_grade(value)
-        if normalized != value:
-            logger.warning("Invalid grade %r coerced to %r", value, normalized)
-        return normalized
+    def validate(self, attrs):
+        # Bridge: prefer an explicit `mode`, else a legacy `grade` key the old SPA still sends.
+        # A blank or unrecognised value coerces to `instruct` (never a 400 — a typo shouldn't
+        # fail the request), warning only when the value was non-blank and genuinely unknown.
+        raw = (attrs.get("mode") or self.initial_data.get("grade") or "").strip()
+        if raw and raw not in KNOWN_MODE_INPUTS:
+            logger.warning("Unrecognised mode %r coerced to %r", raw, Mode.instruct)
+        mode = normalize_mode(raw)
+        if mode == Mode.manual:
+            # "No AI" never enqueues a run — the SPA builds manual applications directly
+            # (manual-no-run-mode guide). This 400 is the server-side guarantee; the UI
+            # guard alone would be bypassable.
+            raise serializers.ValidationError(
+                {
+                    "mode": [
+                        "manual never runs a generation — curate the application directly."
+                    ]
+                }
+            )
+        attrs["mode"] = mode
+        return attrs
 
 
 class GenerationRunSerializer(serializers.ModelSerializer):
     posting_title = serializers.CharField(
         source="job_application.posting.title", read_only=True, default=""
     )
+    # Compat: the SPA still reads `grade` until the model-first-generate-panel guide. Derive it from `mode`.
+    grade = serializers.SerializerMethodField()
+
+    def get_grade(self, obj) -> str:
+        return mode_to_grade(obj.mode)
 
     class Meta:
         model = GenerationRun
@@ -530,6 +550,7 @@ class GenerationRunSerializer(serializers.ModelSerializer):
             "stage",
             "error",
             "result",
+            "mode",
             "grade",
             "alias",
             "personal_paragraph",
@@ -547,9 +568,14 @@ class GenerationRunSummarySerializer(serializers.ModelSerializer):
     """Compact nested shape for `JobApplicationSerializer.runs` — no `result` payload,
     the SPA fetches a run's detail (or subscribes to its socket) separately."""
 
+    grade = serializers.SerializerMethodField()
+
+    def get_grade(self, obj) -> str:
+        return mode_to_grade(obj.mode)
+
     class Meta:
         model = GenerationRun
-        fields = ["id", "status", "stage", "grade", "alias", "created_at"]
+        fields = ["id", "status", "stage", "mode", "grade", "alias", "created_at"]
         read_only_fields = fields
 
 
