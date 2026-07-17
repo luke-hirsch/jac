@@ -529,6 +529,7 @@ class JobApplication(models.Model):
     cv_content = models.JSONField(default=dict, blank=True)
     cover_letter = models.TextField(blank=True)
     letter_meta = models.JSONField(default=dict, blank=True)
+    pinned_entries = models.JSONField(default=list, blank=True)
     layout = models.ForeignKey(
         ApplicationLayout,
         on_delete=models.SET_DEFAULT,

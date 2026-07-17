@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import TypeVar
 
 from django.conf import settings
@@ -598,6 +599,17 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
     create-only. `layout` may reference the user's own layouts or the system defaults.
     """
 
+    _PIN_RE = re.compile(r"^(skill|job|project|education|certification|language):\d+$")
+    _PIN_MODELS = {
+        "skill": Skill,
+        "job": Job,
+        "project": Project,
+        "education": Education,
+        "certification": Certification,
+        "language": Language,
+    }
+    MAX_PINS = 50
+
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     user_scoped_fields = ("posting",)
     posting_text = serializers.CharField(write_only=True, required=False)
@@ -614,6 +626,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "cv_content",
             "cover_letter",
             "letter_meta",
+            "pinned_entries",
             "layout",
             "status",
             "deadline",
@@ -668,6 +681,33 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
                 {"posting": "The posting is bound on create and cannot be changed."}
             )
         return attrs
+
+    def validate_pinned_entries(self, value):
+        """Shape + ownership. Stale pins (entry deleted later) are tolerated at
+        merge time; garbage is not tolerated at write time."""
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise serializers.ValidationError("Expected a list of entry ids.")
+        if len(value) > self.MAX_PINS:
+            raise serializers.ValidationError(
+                f"At most {self.MAX_PINS} pins — pin less, or build the CV manually."
+            )
+        bad = [v for v in value if not self._PIN_RE.match(v)]
+        if bad:
+            raise serializers.ValidationError(f"Malformed entry ids: {bad}")
+        user = self.context["request"].user
+        for etype, model in self._PIN_MODELS.items():
+            pks = [int(v.split(":")[1]) for v in value if v.startswith(f"{etype}:")]
+            if not pks:
+                continue
+            owned = set(
+                model.objects.filter(user=user, pk__in=pks).values_list("pk", flat=True)
+            )
+            missing = [pk for pk in pks if pk not in owned]
+            if missing:
+                raise serializers.ValidationError(
+                    f"Not found or not yours: {etype}:{missing}"
+                )
+        return list(dict.fromkeys(value))
 
     def create(self, validated_data):
         text = validated_data.pop("posting_text", "").strip()

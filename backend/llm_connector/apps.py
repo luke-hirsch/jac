@@ -9,17 +9,13 @@ class LLMConnectorConfig(AppConfig):
     def ready(self):
         import warnings
 
-        from .conf import FALLBACK_ALIAS, get_llm_settings
+        from django.conf import settings
 
-        try:
-            llm = get_llm_settings()
-        except Exception as exc:
-            warnings.warn(str(exc), stacklevel=2)
-            return
-
-        if FALLBACK_ALIAS not in llm:
+        seed = getattr(settings, "HIRSCHAI", None)
+        if not seed or "url" not in seed:
             warnings.warn(
-                f"settings.LLM[{FALLBACK_ALIAS!r}] is missing — required as "
-                "the zero-cost fallback for users without a personal LLMConfig.",
+                "settings.HIRSCHAI (with at least a 'url') is missing — it seeds "
+                "the system HirschAI row, the zero-cost fallback for users without "
+                "a personal LLMConfig.",
                 stacklevel=2,
             )
