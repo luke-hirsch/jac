@@ -127,15 +127,22 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
 4. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
-   per-model pricing metadata in the model catalog (see `[fullstack]-llm-model-catalog-and-knobs`).
+   per-model pricing metadata in the model catalog (see `[fullstack]-model-knobs`).
 
-> **LLM-mode redesign — planned 2026-07-15, guides in `to-do/`.** Grades + autodetect die; three
-> modes (`manual`/`instruct`/`conversational` — mode = selection strategy, alias = executor);
-> **model-first generate panel** (free executor "Dr. Jacll" + the user's configured aliases);
-> reachability probe + executors endpoint; auto-run on application create (never retroactive);
-> per-application pins; model catalog + effort/temperature knobs (Anthropic + OpenAI curated,
-> Google benched); chat-assistant rework. Guide 1 is activated on `backend/mode-enum-and-plumbing`
-> (red tests on disk).
+> **Single-executor redesign — backend landed (`456a72f`…`f738eaf`; rework guides 1–3 in
+> `done/`, Results chapters not yet logged).** A run touches exactly one executor: **HirschAI**
+> (system-owned ollama row; local MacBook ollama until the tower/VPS move — tower guide parked
+> in `plans/backlog/`) or anthropic/openai on the user's key. Modes `manual`/`standard`/`high`
+> (`high` commercial-only); per-run model validated against the curated catalog
+> (`llm_connector/catalog.py` — the catalog IS the gate); `GET /api/llm/executors/` is the
+> SPA's single source; auto-run on application create (backend-side, never retro); entry pins
+> force-kept by every rung. **SPA phase = the current `to-do/` stack, in order:**
+> `[frontend]-model-first-generate-panel` → `[frontend]-llm-config-tab-v2` →
+> `[frontend]-manual-no-run-mode` → `[frontend]-entry-pins-ui` → `[fullstack]-model-knobs` →
+> `[fullstack]-chat-assistant-rework` (all rewritten 2026-07-17 against the landed backend).
+> The SPA is knowingly broken until the first two land. The "current state" bullets above
+> still describe the alias/grade era for llm_connector + pipeline — next `/wrap-up` refreshes
+> them; the `done/` rework guides are the accurate spec meanwhile.
 
 > **Application editor + render/export phase — done (2026-07-10 wrap-up).** All frontend guides
 > (`cv-snippets`, `cv-editor`, `letter-editor`, `tailored-render`, `render-export`) are in

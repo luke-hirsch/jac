@@ -1,117 +1,94 @@
 # [frontend] model-first-generate-panel
 
-> **⚠️ STALE (2026-07-16 executor rework).** The panel's data source is now
-> `GET /api/llm/executors/` (`[backend]-executor-connector`): HirschAI + per-provider rows
-> with catalog models. Aliases are dead; modes renamed `standard`/`high` (`high`
-> commercial-only). Rewrite against the new backend at activation — this is the guide that
-> un-breaks the SPA.
-
-> **Guide 5** — *LLM-mode redesign*. Depends on **guide 4** (`GET /api/jac/executors/`); renders
-> whatever `models`/`knobs` the endpoint advertises once `[fullstack]-llm-model-catalog-and-knobs`
-> enriches it (degrades gracefully to none before that). Replaces the `grade` dropdown with a
-> **model-first panel** and adds the **auto-run on application create**. The backend has spoken
-> mode-only since guide 2 — the SPA runs broken from guide 2 until this guide lands (accepted,
-> dev-only); this is the guide that un-breaks it. Pure frontend: no backend rows here.
+> **SPA phase, guide 1 — the guide that un-breaks the SPA.** Rewritten 2026-07-17 against the
+> landed single-executor backend (rework guides 1–3 in `done/`). The backend has spoken
+> executors + `standard`/`high` since `456a72f`…`18ed4d9`; the SPA still speaks grade/alias
+> everywhere and is knowingly broken. Pure frontend — no backend rows here.
 >
 > **Backlog plan.** Full code + red tests (vitest, `frontend/tests/` — see the
 > `frontend-test-layout` memory) at activation.
 
 ## Context / goal
 
-Redesign UX (Lukas, 2026-07-15): **the model is the primary pick; everything else hangs off it.**
+The generate panel becomes **executor-first**: pick the machine; mode and model hang off it.
 
-1. **Model picker first.** The list = **Dr. Jacll** (the free self-hosted executor) + every
-   commercial alias the user configured. Unavailable entries are disabled with the reason inline,
-   never hidden.
-2. **Options appear per pick.** Dr. Jacll → deliberately bare: strategy is fixed to `instruct`
-   (the endpoint advertises only that) and no knobs — "maybe temperature? but maybe not. maybe
-   that's just what it is." A commercial pick → a **model dropdown** (catalog + free-text escape),
-   the **strategy toggle**, and the provider's **knobs** (effort / temperature).
-3. **Generate** POSTs `mode` (strategy), `alias` (executor), and `params` (model/knobs — catalog
-   guide). Or the user takes the parallel **"No AI — curate by hand"** affordance (guide 6) — a
-   separate action, *not* a fake entry in the model list.
+The landed backend contract this guide builds against (verify against code at activation,
+not against this file):
 
-Plus the redesign's headline UX: **creating an application fills itself in when Dr. Jacll
-answers** — the SPA auto-enqueues a free `instruct` run on create; when he's down, nothing runs
-and the page shows why.
-
-### Naming (all Lukas, 2026-07-15)
-
-- The free executor's public name is **"Dr. Jacll"** (Jekyll, via jac). Rejected names, each for a
-  reason worth remembering: *auto* (suggests a model is being picked automatically), *default*
-  (the auto-draft role may later be reassignable to a configured commercial model — don't weld the
-  name to the role), *tower* (no "runs on an office machine" impression). It's a **frontend
-  branding constant** keyed off the internal alias `default` — the API stays branding-free, and
-  guide 7's chat picker reuses the same constant.
-- The strategies need **public labels** — nobody outside this repo knows what
-  "instruct"/"conversational" stand for. Recommendation to react to: **instruct = "Quick
-  tailor"**, **conversational = "Deep tailor"** (speed vs. depth is the honest user-facing
-  difference). API values stay `instruct`/`conversational`; this is copy, Lukas has final word.
+- **`GET /api/llm/executors/`** — one request, all rows:
+  `{provider, label, self_hosted, configured, reachable, default, models, modes}`.
+  - HirschAI row: `provider: "ollama"`, `label: "HirschAI"`, `configured: true`, live
+    `reachable` (30 s-cached probe), `models: []` (the tower model is operator-fixed),
+    `modes: ["standard"]`, `default: true` iff no commercial default row exists.
+  - Commercial rows (anthropic / openai): `reachable: null`, `configured`/`default` from the
+    user's `LLMConfig` rows, `models` = catalog `[{id, label, default?}]`,
+    `modes: ["standard", "high"]`.
+- **`POST /api/jac/generations/`** takes `job_application`, `mode`, `provider`, `model`
+  (+ CV scoping). Blanks resolve server-side (mode → `standard`, provider → the user's
+  default executor, model → catalog default; HirschAI ignores a client-sent `model`). 400s,
+  shaped `{"provider": [msg]}` / `{"mode": [msg]}`: `manual` mode; `high` on HirschAI;
+  unconfigured provider; unknown model (the catalog **is** the gate — a rework decision, no
+  free-text escape); nothing available (HirschAI offline + no commercial row).
+- **Auto-run is backend-side** (`JobApplicationViewSet.perform_create`): creating an
+  application spawns a `standard` run on the user's default executor when one exists, never
+  retroactively. The SPA **must not** POST a run at create anymore.
+- Run read shapes / result meta carry `mode` + `provider` + `model`; `grade`/`alias` are
+  gone. Result CV rows additionally carry `pinned` + `warning` (rendering belongs to
+  `[frontend]-entry-pins-ui`; type them here so the shapes compile).
 
 ## Affected files
 
 | Path | Change |
 | --- | --- |
-| `frontend/src/lib/queries/generations.ts` | Payload `grade` → `mode` + `alias` + optional `params`; `Grade` type → `Mode` (`"manual" \| "instruct" \| "conversational"`); `meta.grade` reads → `meta.mode` (+ executor/model for the badge). |
-| `frontend/src/lib/queries/llm.ts` | A `useExecutors()` query hitting `/api/jac/executors/`; `aliasesForGrade`/`pinnedAliasFor`/`AliasStrength` → executor/mode-keyed; the per-alias `strength` display **dies here** (the backend deleted strength + rekeyed the pins to support roles `embed`/`instruct` in guide 2 — these fields/keys are already gone from the API). |
-| `frontend/src/components/applications/generate-panel.tsx` | The model-first layout above: picker with disabled-with-reason entries; per-pick options; offline banner; the **token-generosity hint** on paid executors ("side tasks run on the free local model to save your tokens — change?"); the "No AI" affordance routing to guide 6. Result badge shows executor + strategy (+ guide 3's `meta.prefilter` when `"full"` on a paid alias — "sent the whole career DB"). Maps the create 409 `llm_unreachable` to the offline state. |
-| `frontend/src/routes/_authenticated/applications/index.tsx` | The hardcoded `grade: "light"` seed becomes the **auto-run**: after a successful application create, if `useExecutors()` returns a non-null `default` → POST an `instruct` run on it; else no POST — land on the detail page in its offline/manual state. |
-| `frontend/src/lib/queries/{jac,applications}.ts` | Run summary types `grade` → `mode`. |
+| `lib/queries/llm.ts` | Delete the alias/strength/pin vocabulary (`AliasStrength`, `aliasesForGrade`, `pinnedAliasFor`, `useLLMAliases`, pin queries); add `useExecutors()` on `/api/llm/executors/` (refetch on window focus + interval so the panel notices HirschAI coming up/going down). Config-tab types move with `[frontend]-llm-config-tab-v2`. |
+| `lib/queries/generations.ts` | `Grade` → `Mode` (`"manual" \| "standard" \| "high"`); payload `{mode, provider, model}`; `meta.grade`/`meta.alias` reads → `meta.mode`/`provider`/`model`; result-row types gain `pinned`/`warning`. |
+| `lib/queries/{jac,applications}.ts` | Run-summary types follow (`grade` → `mode` + `provider`/`model`). |
+| `components/applications/generate-panel.tsx` | Rebuild: executor picker (disable-don't-hide, reasons inline), per-pick options (HirschAI = deliberately bare; commercial = model dropdown + mode toggle), offline as a first-class state, submit → the new payload. |
+| `routes/_authenticated/applications/index.tsx` | Delete the create-time `grade: "light"` run POST — creation alone triggers the backend auto-run; navigate to the detail page, which picks the run up. |
+| `components/applications/result-view.tsx` + `use-run-lifecycle.ts` | Badge reads `meta.mode/provider/model`; confirm the lifecycle hook seeds from a run the SPA didn't POST itself (it rehydrates from the runs list, so likely free — verify, don't assume). |
 
 ## Approach / key decisions
 
-- **`useExecutors()` is the gate.** One query, cached, refetched on an interval / window focus so
-  the UI notices the tower coming up. The panel renders the picker from it; never hardcodes the
-  list.
-- **Auto-run on create, never retro.** The auto-run fires exactly **once**, at application create,
-  and only when the executors query returns a non-null `default` (by guide 4's rules that is
-  always the free executor — paid never runs unasked). If the tower is down at create, the
-  application stays empty and *stays* empty when the tower later returns — no background
-  generation the user didn't watch start ("no one likes surprises"); the panel simply offers
-  Generate again. If the create-time POST races the tower dying, the 409 lands in the same offline
-  state — the auto-run failing to start is never an error toast, just the offline panel.
-- **Show every executor always; disable, don't hide.** A vanishing option reads as a bug and makes
-  the panel unpredictable across visits. Dr. Jacll offline is greyed with "offline — pick your own
-  model or curate by hand"; an unkeyed config is greyed with "no API key". The disabled reasons
-  double as the status display.
-- **Never yank an explicit selection.** The dynamic default applies only until the user touches
-  the picker. If a background refetch makes the *selected* executor unavailable, keep the
-  selection, disable Generate, and show the reason inline — don't silently flip the dropdown under
-  the user's cursor mid-click.
-- **Offline is a first-class state, not an error.** When Dr. Jacll is unavailable, the panel says
-  so and steers to "No AI" (always available) or a configured commercial executor — it does not
-  present a dead Generate button.
-- **Handle the enqueue 409.** Guide 4's `llm_unreachable` fail-fast fires exactly when the poll is
-  stale (tower died between refetches) — map it to the same offline state and trigger an executors
-  refetch, not a generic error toast: the user should see *why*, not "request failed".
-- **Strategy defaults are per-executor**, read from the endpoint's `strategies` order: Dr. Jacll
-  has no toggle at all (instruct only); a commercial pick defaults to `conversational` with
-  `instruct` selectable for experimentation.
-- **No backend work here.** Guide 2 already deleted the whole `grade` vocabulary — the server
-  ignores a stray `grade` key (unknown → `instruct`) and its read shapes carry `mode` only. This
-  guide just makes the SPA speak that language.
+- **The endpoint is the single source.** The picker renders exactly what `useExecutors()`
+  returns, labels included — `"HirschAI"` comes from the API's `label` field, so the SPA
+  needs **no branding constant**. ("Dr. Jacll" is dead; the executor is named HirschAI,
+  decided with the rework.)
+- **Disable, don't hide; never yank.** Unavailable rows stay visible with the reason inline
+  ("offline", "no API key" — the disabled reasons double as status display). A background
+  refetch never flips the user's explicit selection; it disables Generate with the reason.
+- **Mode is a per-pick toggle speaking server vocabulary.** Driven by the row's `modes` —
+  never hardcoded. HirschAI: no toggle (`standard` only). Commercial: `standard`/`high`,
+  default `high`. Copy may explain ("High = holistic selection, compose-licence letter,
+  always audited"); API values stay `standard`/`high`.
+- **Offline is a state, not an error.** No executor at all → the panel says so and steers to
+  "No AI — curate by hand" (`[frontend]-manual-no-run-mode`) — a parallel affordance, never a
+  fake picker entry. The create 400 "nothing available" maps to this same state plus an
+  executors refetch, not an error toast.
+- **Auto-run UX.** Create with HirschAI up → the detail page opens onto a pending/running
+  `standard` run (existing WS flow streams it). Tower down at create → the application stays
+  empty, and stays empty when the tower returns (backend rule, never retro) — the panel
+  simply offers Generate.
+- **No knobs here.** `[fullstack]-model-knobs` adds effort/temperature + `params`; this
+  panel leaves the per-pick options area open but ships without.
 
-## Tests (written at activation)
+## Tests (at activation)
 
-- `frontend/tests/lib/generations.test.ts` — payload builder emits `mode` + `alias` (+ `params`
-  passthrough), omits blanks; the 409 `llm_unreachable` response maps to the offline state, not a
-  generic error.
-- `frontend/tests/lib/llm.test.ts` — executor/mode-keyed helpers; no strength anywhere in the
-  types.
-- `frontend/tests/lib/executors.test.ts` — endpoint result → picker rows (disabled + reason for
-  offline-free / unkeyed-paid); the **auto-run decision** pure helper (`shouldAutoRun` true iff
-  `default` is non-null — never true for a paid-only setup); never-yank: the selected executor
-  going unavailable keeps the selection and flags submit-disabled; per-pick options visibility
-  (Dr. Jacll bare; commercial shows the strategy toggle + exactly the advertised knobs).
+- `frontend/tests/lib/generations.test.ts` — payload builder: `{mode, provider, model}`
+  passthrough, blanks omitted; meta/row types compile with `pinned`/`warning`.
+- `frontend/tests/lib/executors.test.ts` — endpoint rows → picker rows: disabled+reason
+  matrix (HirschAI offline / unkeyed commercial); default-row preselect; never-yank (selected
+  row going unavailable keeps the selection, flags submit-disabled); per-pick options
+  (HirschAI bare; commercial shows exactly the row's `models` and `modes`).
+- `frontend/tests/lib/llm.test.ts` — no alias/strength vocabulary anywhere in the types.
 
 ## Verification
 
-`tsc -b` clean; vitest green; click-through: **create an application with ollama up → it fills
-itself in without touching Generate**; stop ollama, create another → nothing runs, Dr. Jacll is
-greyed "offline", the panel steers to No AI; start ollama again → the empty application does *not*
-retro-generate, but Generate is offered; pick a commercial executor → model dropdown, strategy
-labels, and knobs appear, plus the token-generosity hint; a generated run's badge shows executor +
-strategy.
+`tsc -b` clean; vitest green. Click-through: ollama up → create an application → it fills
+itself in without touching Generate (auto-run streams; badge `standard / HirschAI`); stop
+ollama → create another → empty application, HirschAI greyed "offline", panel steers to No
+AI; restart ollama → the empty application does **not** retro-generate, Generate is offered;
+with a configured Anthropic row → model dropdown + mode toggle appear, a `high` run's badge
+shows provider + model.
 
 ## Results
 

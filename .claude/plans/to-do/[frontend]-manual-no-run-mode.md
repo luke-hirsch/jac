@@ -1,79 +1,71 @@
 # [frontend] manual-no-run-mode
 
-> **⚠️ STALE (2026-07-16 executor rework).** The manual flow itself survives, but this
-> guide references the dead alias vocabulary and the old guide stack; auto-run on create
-> is now backend-side (`[backend]-pipeline-single-executor`) and `manual` simply means
-> "no executor available / chosen". Rewrite against the executor backend at activation.
-
-> **Guide 6** — *LLM-mode redesign*. Depends on **guide 1** (`Mode.manual`); pairs with guide 5
-> (the panel routes `manual` here). This is the **guaranteed-offline path**: no LLM, no generation
-> run — the user hand-curates the application from their career DB.
+> **SPA phase, guide 3.** Rewritten 2026-07-17 for the single-executor backend: the alias
+> vocabulary is gone, the auto-run lives backend-side, and `POST /api/jac/generations/` 400s
+> `mode="manual"` (landed — this no-run flow is the *only* manual path; a buggy or hostile
+> client can't turn "No AI" into an LLM run). Pairs with
+> `[frontend]-model-first-generate-panel` (the panel routes "No AI" here).
 >
 > **Backlog plan.** Full code + red tests at activation.
 
 ## Context / goal
 
-`manual` ("No AI") must work with zero models present. Instead of enqueuing a `GenerationRun`, the
-user goes straight to the editor with a curatable canvas: the CV editor already supports
-reorder / deselect / delete / add-from-career-DB per section, and snippets have CRUD. What's missing
-is the **entry point** — starting an application in `manual` mode without a run — and **seeding** the
-editor so there's something to prune rather than a blank page.
+`manual` ("No AI") must work with **zero executors**: HirschAI offline + no commercial row
+means `default_executor()` is None, the backend spawns no auto-run, and the application
+arrives **empty** — exactly the state this guide fills. The CV editor already curates
+(reorder / deselect / delete / add-from-career-DB per section) and snippets have CRUD;
+missing is the **entry point** (start hand-curating without a run) and **seeding** (something
+to prune rather than a blank page).
 
 ## Affected files
 
 | Path | Change |
 | --- | --- |
-| `frontend/src/components/applications/generate-panel.tsx` | The "No AI — curate by hand" affordance (guide 5's model-first panel — manual is a parallel action, not an entry in the model picker): "Start hand-curated" seeds `cv_content` from the full career DB (or an empty canvas, per the seed decision) and opens the editor; no POST to `/generations/`. |
-| `frontend/src/lib/cv-doc.ts` (+ a seed helper) | Build an initial `cv_content` from the user's career-DB entries (all entries, unranked, `relevance_score` absent/0) so `fitCv` and the editor have real rows. Reuse the existing career-DB queries; no new shape. |
-| `frontend/src/lib/queries/applications.ts` | A mutation to set `cv_content`/`letter_meta` on the application directly (already exists for edits — confirm it covers the seed write). |
-| **Backend** (small) | Confirm an application can be fully built + exported with **no** `GenerationRun` attached (result-view / export-card must not assume a run). If the letter editor needs `letter_meta` furniture, seed a minimal default (language from the posting, empty snippets) without any LLM call. |
+| `components/applications/generate-panel.tsx` | The "No AI — curate by hand" affordance (guide 1's panel — a parallel action, not a picker entry): "Start hand-curated" seeds `cv_content` from the full career DB and opens the editor; no generations POST. |
+| `lib/cv-doc.ts` (+ a seed helper) | Build an initial `cv_content` from the user's career-DB entries (all entries, unranked, no `relevance_score`) so `fitCv` and the editor have real rows. Reuse the existing career-DB queries; no new shape. |
+| `lib/queries/applications.ts` | Confirm the existing `cv_content`/`letter_meta` mutation covers the seed write. |
+| **Backend** (confirm only) | An application with **zero** runs serializes, renders, and exports without error; if the letter editor needs `letter_meta` furniture, seed a minimal default client-side (language from the posting, empty snippets) — no LLM call anywhere. |
 
 ## Approach / key decisions
 
-- **No run, no task, no LLM.** The whole point is offline tolerance — the manual flow must not touch
-  `llm_connector` at all. Guard: seeding + editing must work with the worker down and ollama down.
-- **The backend guarantee lives in guide 1, lean on it.** `POST /generations/` 400s
-  `mode="manual"` and the task fail-fasts stray manual rows — so this no-run flow is the *only*
-  manual path, and a buggy or hostile client can't turn "No AI" into an LLM run. This guide's
-  backend work is therefore only the no-run rendering/export confirmation below.
-- **Seed only into an empty application.** Mirror the run auto-fill invariant (`tasks.py` fills
-  only while `cv_content`/`cover_letter` are empty): "Start hand-curated" seeds only when
-  `cv_content` is empty; when it isn't, ask ("Replace the current CV content?") before overwriting.
-  A double-click, a re-render, or a later revisit must never silently clobber curation.
-- **A seeded application blocks later auto-fill — deliberately.** Seeding makes the application
-  non-empty, so a later AI run will *not* auto-fill it; the user applies that run's result
-  explicitly (existing rule). That's the right behavior — going manual first means AI output never
-  overwrites hand work unasked — but say it in the apply-button copy rather than letting it read as
-  a bug ("this replaces your current content").
-- **Seed = full career DB, unranked.** Give the user everything to prune (matches how the editor
-  already treats deselection), rather than a blank page. The `manual` CV has no `relevance_score`;
-  `fitCv` orders favourites-last as it does for a degraded run.
-- **Interaction with the auto-run (guide 5):** when the tower was up at create, the application
-  arrives already filled by the free instruct run — picking `manual` then means pruning *that*
-  content (a perfectly good canvas), or replacing it with the full-career-DB seed behind the
-  existing confirm. The empty-canvas seed path below is the tower-down case, which is exactly when
-  `manual` is the offered default.
-- **Letter is optional in manual.** No writer model → no auto letter. Offer the snippet-append /
-  manual compose path the letter editor already has; the `PERSONAL_STUB`/export-blocker rules are
-  untouched (a manual letter has no stub to gate).
-- **Cross-check the async-loop assumptions.** The result-view + `use-run-lifecycle` hook currently
-  assume a run exists; a `manual` application has none. Ensure the detail page renders from
+- **No run, no task, no LLM.** The manual flow must not touch `llm_connector` at all. Guard:
+  seeding + editing + export must work with the celery worker down *and* ollama down.
+- **The backend guarantee is landed — lean on it.** The serializer rejects `mode="manual"`
+  on `/generations/`; nothing to build server-side beyond the no-run rendering confirmation.
+- **Seed only into an empty application.** Mirrors the task's auto-fill invariant (fills only
+  while empty): "Start hand-curated" seeds only when `cv_content` is empty; otherwise ask
+  ("Replace the current CV content?") before overwriting. A double-click or revisit must
+  never silently clobber curation.
+- **A seeded application blocks later auto-fill — deliberately.** Non-empty means a later AI
+  run won't auto-fill; the user applies results explicitly (existing rule). Say it in the
+  apply-button copy ("this replaces your current content") so it doesn't read as a bug.
+- **Seed = full career DB, unranked.** Everything to prune, not a blank page. No
+  `relevance_score`; `fitCv` orders favourites-last as for a degraded run.
+- **Interaction with the backend auto-run:** when HirschAI was up at create, the application
+  arrives already filled by the auto-run — picking manual then means pruning *that* content
+  (a fine canvas), or re-seeding behind the existing confirm. The empty-canvas path is the
+  tower-down case — exactly when manual is the offered default.
+- **Letter is optional in manual.** No writer model → no auto letter; the snippet-append /
+  manual compose path already exists. `PERSONAL_STUB`/export-blocker rules untouched (a
+  manual letter has no stub to gate).
+- **Cross-check the runless assumptions.** `result-view` + `use-run-lifecycle` currently
+  assume a run exists; a manual application has none. The detail page must render from
   `application.cv_content`/`cover_letter` directly when there are no runs.
 
-## Tests (written at activation)
+## Tests (at activation)
 
-- `frontend/tests/lib/cv-doc.test.ts` — the manual seed builds a full-career-DB `cv_content` with
-  the expected sections and no scores; the seed helper flags a non-empty `cv_content` (pure
-  function returns a needs-confirmation signal instead of the overwrite).
-- `frontend/tests/lib/...` — the detail page's data selection prefers `application.*` and does not
-  require a run (pure selector logic).
-- Backend — an application with zero `GenerationRun`s serializes + exports without error.
+- `frontend/tests/lib/cv-doc.test.ts` — the seed builds a full-career-DB `cv_content` with
+  expected sections and no scores; the seed helper returns a needs-confirmation signal for a
+  non-empty `cv_content` instead of overwriting.
+- Pure selector logic: the detail page's data selection prefers `application.*` and requires
+  no run.
+- Backend: an application with zero `GenerationRun`s serializes + exports without error.
 
 ## Verification
 
-With **ollama stopped and the celery worker stopped**: create an application, pick "No AI", curate
-the CV, compose a letter from snippets, and export a PDF — end to end, no errors, no network calls to
-any model. This is the acceptance for "the app works when the tower is offline".
+With **ollama stopped and the celery worker stopped**: create an application, pick "No AI",
+curate the CV, compose a letter from snippets, export a PDF — end to end, no errors, zero
+model traffic. This is the acceptance for "the app works when the tower is offline".
 
 ## Results
 
