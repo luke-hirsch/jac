@@ -124,7 +124,7 @@ class GenerationRunReadTests(APITestCase):
         cls.user = make_user()
         cls.other = make_user("bob")
         cls.application = make_application(cls.user)
-        cls.run = GenerationRun.objects.create(
+        cls.gen_run = GenerationRun.objects.create(
             job_application=cls.application,
             mode=Mode.high,
             provider="anthropic",
@@ -136,7 +136,7 @@ class GenerationRunReadTests(APITestCase):
         self.client.force_login(self.user)
 
     def test_detail_shape_names_the_executor(self):
-        r = self.client.get(f"{RUNS_URL}{self.run.pk}/")
+        r = self.client.get(f"{RUNS_URL}{self.gen_run.pk}/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(
             set(r.data),
@@ -151,7 +151,7 @@ class GenerationRunReadTests(APITestCase):
 
     def test_list_is_owner_scoped(self):
         r = self.client.get(RUNS_URL)
-        self.assertEqual([row["id"] for row in r.data], [self.run.pk])
+        self.assertEqual([row["id"] for row in r.data["results"]], [self.gen_run.pk])
 
 
 class GenerationRunCancelTests(APITestCase):

@@ -14,6 +14,7 @@ from django.utils import timezone
 from llm_connector.executor import Executor
 
 from jac.llm_prompts import (
+    CompanyResearcher,
     CoverLetterWriter,
     FaithfulnessCheck,
     LetterCritic,
@@ -22,7 +23,6 @@ from jac.llm_prompts import (
     SnippetEmbed,
 )
 from jac.models import Mode, ResumeSnippet
-from jac.research import CompanyResearcher
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,7 @@ class CoverLetter:
         opening = "" if pp["is_stub"] else pp["text"]
 
         woven = CoverLetterWriter(
-            sel["ordered"],
+            snippets=sel["ordered"],
             candidate_name=self._candidate_name(),
             title=title,
             language=language,
@@ -299,7 +299,7 @@ class CoverLetter:
         grounding = self._grounding(body, sel["ordered"], weave_failed)
         critique = self._critique(body, sel["ordered"], weave_failed)
         body, grounding, critique = self._repair(
-            body, sel["ordered"], grounding, critique, language, title, verify, opening
+            body, sel["ordered"], grounding, critique, language, title, opening
         )
 
         result = {
@@ -510,9 +510,7 @@ class CoverLetter:
     def _overlong(self, body) -> bool:
         return len(body.split()) > self._MAX_BODY_WORDS
 
-    def _repair(
-        self, body, snippets, grounding, critique, language, title, verify, opening
-    ):
+    def _repair(self, body, snippets, grounding, critique, language, title, opening):
         """ONE combined repair pass over draft one, never a loop: strong's unsupported
         claims and any critique notes ride the same rewrite. Afterwards the grounding
         is re-audited when auditing is on (safety stays honest about the shipped body);
@@ -529,7 +527,7 @@ class CoverLetter:
                 return body, {**grounding, "repaired": False}, critique
             return body, grounding, critique
         rewritten = CoverLetterWriter(
-            snippets,
+            snippets=snippets,
             candidate_name=self._candidate_name(),
             title=title,
             language=language,
