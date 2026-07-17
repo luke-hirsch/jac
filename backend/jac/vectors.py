@@ -13,7 +13,6 @@ import hashlib
 import logging
 
 from llm_connector import embed
-from llm_connector.conf import get_alias_config, pick_alias
 from vector_store import store
 
 logger = logging.getLogger(__name__)
@@ -31,21 +30,20 @@ def _uid(user):
     return getattr(user, "pk", user)
 
 
-def collection_for(alias: str, user) -> str | None:
-    """The alias's collection — it follows the resolved embed model (floors are
-    calibrated per embedder; a model switch lands in a fresh collection).
-    None -> unresolvable, caller falls back."""
+def collection_for() -> str | None:
+    """The tower embed model's collection (floors + vectors are embedder-specific;
+    a model switch on the HirschAI row lands in a fresh collection). None -> off."""
+    from llm_connector.conf import hirschai_row
+
     try:
-        cfg = get_alias_config(alias, user=user)
-    except Exception:  # noqa: BLE001 — unresolvable alias -> classic path
+        cfg = hirschai_row().to_config_dict()
+    except Exception:  # noqa: BLE001 — no row -> classic path
         return None
     model = cfg.get("embed_model") or cfg.get("model") or ""
     return store.collection_name(model) if model else None
 
 
-def reconcile(
-    user, alias: str, doc: str, desired: dict, *, delete_orphans=False
-) -> bool:
+def reconcile(user, doc: str, desired: dict, delete_orphans=False) -> bool:
     """Bring the user's `doc` corpus in line with `desired` ({entry_id: text}):
     embed and upsert entries whose content hash is missing or stale; optionally
     drop points absent from `desired`.
@@ -57,7 +55,7 @@ def reconcile(
     client = store.get_client()
     if client is None or user is None:
         return False
-    name = collection_for(alias, user)
+    name = collection_for()
     if not name:
         return False
     uid = _uid(user)
@@ -67,7 +65,9 @@ def reconcile(
             eid for eid, text in desired.items() if have.get(eid) != content_hash(text)
         ]
         if stale:
-            vecs = embed(inputs=[desired[eid] for eid in stale], alias=alias, user=user)
+            vecs = embed(
+                inputs=[desired[eid] for eid in stale],
+            )
             if len(vecs) != len(stale):
                 return False
             store.ensure_collection(client, name, dim=len(vecs[0]))
@@ -92,7 +92,10 @@ def reconcile(
 
 
 def ranked_via_store(
-    query_text: str, entries: list, *, doc, user, alias
+    query_text: str,
+    entries: list,
+    doc,
+    user,
 ) -> list | None:
     """Store-backed replacement for the per-run full embed. Reconciles the run's
     (possibly filtered) entry subset, embeds ONLY the query, and cosine-searches
@@ -102,12 +105,14 @@ def ranked_via_store(
     if not store.is_enabled() or user is None or not entries:
         return None
     desired = {e["id"]: e.get("text") or "" for e in entries}
-    if not reconcile(user, alias, doc, desired):
+    if not reconcile(user, doc, desired):
         return None
     client = store.get_client()
-    name = collection_for(alias, user)
+    name = collection_for() or ""
     try:
-        qvecs = embed(inputs=[query_text], alias=alias, user=user)
+        qvecs = embed(
+            inputs=[query_text],
+        )
         if len(qvecs) != 1:
             return None
         hits = store.search(
@@ -118,7 +123,7 @@ def ranked_via_store(
         return None
     by_id = {h["id"]: h for h in hits}
     if set(by_id) != set(desired):
-        # a hole right after a successful reconcile is real inconsistency —
+        # a hole right after a succfessful reconcile is real inconsistency —
         # don't guess scores, run the classic path
         logger.warning("vector search incomplete (doc=%s) — falling back", doc)
         return None
@@ -143,11 +148,3 @@ def snippet_corpus(user_id) -> dict:
         f"{s.kind}:{s.pk}": s.content
         for s in ResumeSnippet.objects.filter(user=_uid(user_id), is_active=True)
     }
-
-
-def sync_alias(user) -> str:
-    """The alias background ingest embeds on: the user's light pin when present,
-    else the zero-cost default — the same target the query path resolves to."""
-    from jac.llm_prompts import Embed
-
-    return pick_alias(Embed.PREFERRED_GRADE, fallback="default", user=user)

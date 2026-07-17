@@ -108,7 +108,7 @@ class PersonalityProfile(models.Model):
             self.answers_updated_at and self.answers_updated_at > self.dossier_built_at
         )
 
-    def ensure_dossier(self, *, alias: str = "default", user=None) -> str:
+    def ensure_dossier(self, executor) -> str:
         """Return the dossier, distilling (1 LLM call) if missing or stale. '' if no answers."""
         if not self.has_answers():
             return ""
@@ -122,7 +122,7 @@ class PersonalityProfile(models.Model):
             q.slug: q.prompt for q in PersonalityQuestion.objects.for_user(self.user)
         }
         text = PersonalityDistiller(
-            self.answers, labels=labels, alias=alias, user=user
+            self.answers, labels=labels, executor=executor
         ).distill()
         if text:
             self.dossier = text

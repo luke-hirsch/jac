@@ -41,6 +41,12 @@ def queue_vector_sync(sender, instance, **kwargs):
 
     if not store.is_enabled():
         return
+    # Privacy gate (2026-07-16): a user whose DEFAULT executor is commercial has
+    # opted their data OUT of the tower
+    from llm_connector.models import LLMConfig
+
+    if LLMConfig.objects.filter(user_id=instance.user_id, default=True).exists():
+        return
     user_id = instance.user_id
     transaction.on_commit(lambda: _enqueue(user_id))
 

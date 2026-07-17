@@ -22,8 +22,7 @@ from celery import current_app as celery_current_app
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
-from llm_connector import can_web_search
-from llm_connector.conf import get_alias_strength
+from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -32,7 +31,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from jac.cv import CV
-from jac.llm_prompts import AddressSearch, LetterChat, ParagraphRewrite
+from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
     ApplicationLayout,
     Certification,
@@ -43,6 +42,7 @@ from jac.models import (
     JobApplication,
     Language,
     Location,
+    Mode,
     Project,
     ResumeSnippet,
     Skill,
@@ -67,6 +67,13 @@ from jac.serializers import (
 from jac.tasks import GENERATION_EXPIRES_S, generate_run, publish_event
 
 logger = logging.getLogger(__name__)
+
+
+def _enqueue_run(run: GenerationRun) -> None:
+    """Queue the Celery task and remember its id (what cancel() revokes)."""
+    async_result = generate_run.apply_async(args=[run.pk], expires=GENERATION_EXPIRES_S)
+    run.task_id = async_result.id
+    run.save(update_fields=["task_id"])
 
 
 class BulkActionMixin:
@@ -363,13 +370,29 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             .prefetch_related("runs")
         )
 
+    def perform_create(self, serializer):
+        """creates application and evokes auto applicatiopn generation run after creation"""
+        application = serializer.save()
+
+        executor = default_executor(self.request.user)
+        if executor is None:
+            return
+        run = GenerationRun.objects.create(
+            job_application=application,
+            mode=Mode.standard,
+            provider=executor.provider,
+            model=executor.model or "",
+        )
+        _enqueue_run(run)
+
     @extend_schema(
         request=inline_serializer(
             "ParagraphRewrite",
             {
                 "text": serializers.CharField(),
                 "instruction": serializers.CharField(required=False, allow_blank=True),
-                "alias": serializers.CharField(required=False),
+                "provider": serializers.CharField(required=False),
+                "model": serializers.CharField(required=False),
             },
         ),
         responses=OpenApiResponse(description="{'text': rewritten passage}"),
@@ -382,6 +405,16 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         model yields nothing, so the client keeps the original text."""
         application = self.get_object()
         text = request.data.get("text") or ""
+        try:
+            executor = resolve_executor(
+                request.user,
+                request.data.get("provider", ""),
+                request.data.get("model", ""),
+            )
+        except ExecutorError as exc:
+            return Response(
+                {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
+            )
         if not text.strip():
             return Response(
                 {"text": ["This field is required."]},
@@ -396,8 +429,7 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             text,
             instruction=(request.data.get("instruction") or "").strip(),
             language=application.posting.language or "en",
-            alias=(request.data.get("alias") or "default").strip() or "default",
-            user=request.user,
+            executor=executor,
         ).rewrite()
         if not rewritten:
             return Response(
@@ -410,9 +442,10 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         request=inline_serializer(
             "LetterChatRequest",
             {
-                "alias": serializers.CharField(required=False),
                 "body": serializers.CharField(required=False, allow_blank=True),
                 "messages": serializers.ListField(child=serializers.DictField()),
+                "provider": serializers.CharField(required=False),
+                "model": serializers.CharField(required=False),
             },
         ),
         responses=OpenApiResponse(description="{'reply': str, 'revision': str | None}"),
@@ -425,29 +458,28 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         strength probe here is the backstop. Sync like `rewrite` — one completion per
         turn."""
         application = self.get_object()
+
         body = request.data.get("body") or ""
         messages = request.data.get("messages") or []
-        alias = (request.data.get("alias") or "default").strip() or "default"
+        try:
+            executor = resolve_executor(
+                request.user,
+                request.data.get("provider", ""),
+                request.data.get("model", ""),
+            )
+        except ExecutorError as exc:
+            return Response(
+                {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
+            )
         problem = self._chat_problem(body, messages)
         if problem:
             return Response(problem, status=status.HTTP_400_BAD_REQUEST)
-        if get_alias_strength(alias, user=request.user) == "light":
-            return Response(
-                {
-                    "alias": [
-                        "This model is too small to chat usefully — pick a "
-                        "standard or strong one."
-                    ]
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         out = LetterChat(
-            body,
-            messages,
-            posting_text=application.posting.posting_text,
-            language=application.posting.language or "en",
-            alias=alias,
-            user=request.user,
+            body=body,
+            transcript=messages,
+            executor=executor,
+            job_posting=str(application.posting.posting_text),
+            language=str(application.posting.language),
         ).reply()
         if not out["reply"] and not out["revision"]:
             return Response(
@@ -482,43 +514,6 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         if len(body) > LetterChat._MAX_BODY_CHARS:
             return {"body": ["Letter body too long."]}
         return None
-
-    @extend_schema(
-        request=inline_serializer(
-            "FindAddress",
-            {"alias": serializers.CharField(required=False)},
-        ),
-        responses=OpenApiResponse(
-            description="{'address': {field: value}, 'sources': [url]}"
-        ),
-    )
-    @action(detail=True, methods=["post"])
-    def find_address(self, request, pk=None):
-        """Web-search the employer's postal address for the letter's recipient block.
-        Sync like `rewrite` (a single web-search call); nothing is persisted — the
-        client merges the found fields into its letter_meta draft. 400 when the alias
-        can't web-search (the UI only offers capable ones; this is the backstop),
-        502 when the search yields nothing usable."""
-        application = self.get_object()
-        alias = (request.data.get("alias") or "default").strip() or "default"
-        if not can_web_search(alias, request.user):
-            return Response(
-                {"alias": ["This model cannot web-search."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        posting = application.posting
-        company = getattr(getattr(posting, "address", None), "company", "")
-        result = AddressSearch(
-            company, posting.posting_text, alias=alias, user=request.user
-        ).search()
-        if not result["ok"]:
-            return Response(
-                {
-                    "detail": "No address found — try another model or fill it in by hand."
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        return Response({"address": result["address"], "sources": result["sources"]})
 
     @extend_schema(
         request=inline_serializer(
@@ -582,13 +577,7 @@ class GenerationRunViewSet(
 
     def perform_create(self, serializer):
         run = serializer.save()
-        # `expires` keeps a task queued while no worker is up from firing hours later;
-        # the task id is what cancel() revokes.
-        async_result = generate_run.apply_async(
-            args=[run.pk], expires=GENERATION_EXPIRES_S
-        )
-        run.task_id = async_result.id
-        run.save(update_fields=["task_id"])
+        _enqueue_run(run)
         self._created = run
 
     def create(self, request, *args, **kwargs):

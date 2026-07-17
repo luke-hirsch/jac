@@ -1,14 +1,8 @@
-"""Cover-letter pipeline: pick the right ResumeSnippets for a posting, turn them into a
-letter body with the chat model, and assemble the sender/recipient/subject around that body.
-
-Pipeline v3: snippet *selection* is embedding-ranked against the posting on every grade
-(structural fallback when no embedder is reachable) with an MMR-diversified body pick;
-the *writer's licence* scales with grade — light glues, standard polishes, strong
-composes (and uniquely sees the posting, compensated by an always-on grounding audit
-plus a prose critic whose findings share the single repair pass). The personal
-paragraph OPENS the letter and travels into the writer as arc context. Snippet text
-remains the only permitted source of facts at every grade — that is the anti-AI-slop
-guard.
+"""snippet selection is embedding-ranked on HirschAI
+runs and structural on commercial runs (the tower must not see commercial-run data);
+the writer's licence scales with mode — standard polishes, high composes (and uniquely sees the posting);
+proofread (critic) + fact-check (grounding audit) always run, on the run's executor;
+one shared repair pass.
 """
 
 from __future__ import annotations
@@ -17,7 +11,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.utils import timezone
-from llm_connector.conf import pick_alias
+from llm_connector.executor import Executor
 
 from jac.llm_prompts import (
     CoverLetterWriter,
@@ -27,7 +21,7 @@ from jac.llm_prompts import (
     PersonalParagraphWriter,
     SnippetEmbed,
 )
-from jac.models import ResumeSnippet
+from jac.models import Mode, ResumeSnippet
 from jac.research import CompanyResearcher
 
 logger = logging.getLogger(__name__)
@@ -60,22 +54,7 @@ def editable_body(letter: dict) -> str:
 
 
 class SnippetSelector:
-    """Pick 1 intro + 1 closing + up to `max_body` body snippets for a posting.
-
-    Primary ranking (every grade) is embedding cosine against the posting text: the alias
-    chain `embed_alias` → `alias` → "default" is walked and the first embedder that yields
-    usable vectors wins — the server default always carries an `embed_model`, so commercial
-    writer aliases still rank via the local embedder. When no alias can embed (or there is
-    no posting text), selection degrades to the legacy structural scorer — relevance to what
-    survived CV filtering, with its > 0 keep-gate. The embed path has no gate: the ranking
-    is the gate — and the body pick is MMR-diversified (relevance minus overlap with
-    what's already picked), so the "best three" are three different stories, not one
-    story three times.
-
-    Native posting-language is a tiebreak only on both paths, never a gate; intro/closing
-    are the best-scoring of their kind, or None when the user has none. `select()` reports
-    which path ran under `"ranking"`.
-    """
+    """ """
 
     _BODY_KINDS = (
         ResumeSnippet.Kind.achievement,
@@ -95,8 +74,7 @@ class SnippetSelector:
         *,
         posting_text: str = "",
         user=None,
-        alias: str = "default",
-        embed_alias: str | None = None,
+        executor: Executor,
     ):
         self.cv = cv
         self.user_pk = user_pk
@@ -105,8 +83,7 @@ class SnippetSelector:
         self.lang = posting_language
         self.posting_text = posting_text
         self.user = user
-        self.alias = alias
-        self.embed_alias = embed_alias
+        self.executor = executor
 
     def _kept_context(self) -> dict:
         """Gather the pks/domains/skills of the entries that survived filtering."""
@@ -140,28 +117,25 @@ class SnippetSelector:
         return f"{s.kind}:{s.pk}"
 
     def _embed_scores(self, active: list) -> dict | None:
-        """{snippet id: {'score': cosine vs the posting, 'vec': raw vector}} via the
-        first embed-capable alias in the chain, or None when nothing can embed. Failure
-        walks the chain instead of raising — a letter must never die because an
-        embedder is down."""
-        if not active or not self.posting_text:
+        """Embedding ranking — HirschAI runs only. A commercial run must not send
+        snippet text to the tower (single-executor invariant), and commercial
+        executors have no embed endpoint of their own; it degrades to the
+        structural scorer instead. None -> structural."""
+        if not active or not self.posting_text or not self.executor.is_hirschai:
             return None
         entries = [{"id": self._sid(s), "text": s.content} for s in active]
-        tried: list[str] = []
-        for alias in (self.embed_alias, self.alias, "default"):
-            if not alias or alias in tried:
-                continue
-            tried.append(alias)
-            try:
-                ranked = SnippetEmbed(
-                    self.posting_text, entries, user=self.user, alias=alias
-                ).ranked_vectors()
-            except Exception as exc:  # noqa: BLE001 — walk the chain on any failure
-                logger.info("snippet embedding via %r unavailable: %s", alias, exc)
-                continue
-            if ranked:
-                return {r["id"]: {"score": r["score"], "vec": r["vec"]} for r in ranked}
-        return None
+        try:
+            ranked = SnippetEmbed(
+                self.posting_text, entries, user=self.executor.user
+            ).ranked_vectors()
+        except Exception as exc:  # noqa: BLE001 — a letter never dies on a dead embedder
+            logger.info("snippet embedding unavailable: %s", exc)
+            return None
+        return (
+            {r["id"]: {"score": r["score"], "vec": r["vec"]} for r in ranked}
+            if ranked
+            else None
+        )
 
     def _rel(self, scores: dict, s) -> float:
         e = scores.get(self._sid(s))
@@ -243,28 +217,20 @@ class CoverLetter:
     `job_posting.address`. `build()` returns a dict of letter parts plus a rendered `text`.
     """
 
-    # How much the writer reshapes even same-language prose, by mode. Strong composes its
-    # own letter (pipeline v2), so its tax reflects free composition, not polished stitching.
-    _REWRITE_TAX = {"": 0.0, "instruct": 0.20, "conversational": 0.60}
-    # Prose-quality critique runs on the grades whose writers actually reshape text;
-    # light glue is exempt (a 1B can't act on critique — and glue is the point there).
-    _CRITIC_MODES = ("instruct", "conversational")
-    # A standard "polish" that lost >40% of the snippets' words is a summary, not a
-    # polish — deterministic backstop, works even when the critic model is down.
+    _REWRITE_TAX = {"standard": 0.20, "high": 0.60}
+
     _MIN_BODY_RATIO = 0.6
     _SHRINKAGE_NOTE = (
         "the body summarizes the snippets instead of writing them out — rewrite at "
         "full length, one paragraph per theme, keeping every concrete claim"
     )
-    # One-page ceiling (deterministic, like the shrinkage backstop): a body past this
-    # word count will not fit an A4 page once the address blocks, subject, and a
-    # personal paragraph sit around it. Sits above the writer's ~280-word target
-    # (CoverLetterWriter._TARGET_WORDS) so only real overshoot triggers a repair.
+
     _MAX_BODY_WORDS = 320
     _OVERLENGTH_NOTE = (
         "the body is {words} words — cut it to at most {max} words so the letter fits "
         "one page: drop the weakest material, keep full sentences"
     )
+    MAX_BODY_SNIPPETS = 4
 
     def __init__(
         self,
@@ -273,14 +239,9 @@ class CoverLetter:
         cv,
         *,
         address=None,
-        mode: str = "light",
-        alias: str = "default",
-        max_body_snippets: int = 3,
-        verify_grounding: bool = False,
-        verifier_alias: str | None = None,
-        personal_paragraph: bool = False,
-        research_alias: str | None = None,
-        embed_alias: str | None = None,
+        mode: str = Mode.standard,
+        executor: Executor,
+        max_body_snippets: int | None = None,
     ):
         self.user = user if isinstance(user, User) else User.objects.get(pk=user)
         self.job_posting = job_posting
@@ -293,50 +254,19 @@ class CoverLetter:
             except Exception:  # noqa: BLE001 — unsaved/absent reverse 1:1
                 self.address = None
         self.mode = mode
-        self.alias = alias
-        self.max_body_snippets = max_body_snippets
-        self.verify_grounding = verify_grounding
-        # Per-rung routing: an explicit alias always wins; otherwise the user's pin
-        # for the rung's PREFERRED_GRADE; otherwise the run's main alias (the `or
-        # None` keeps the downstream `x or self.alias` fallbacks working). A light
-        # run never routes onto a paid pin (free_only — the showcase rung stays
-        # zero-cost).
-        free_only = mode == "instruct"
-        self.verifier_alias = (
-            verifier_alias
-            or pick_alias(
-                FaithfulnessCheck.PREFERRED_PIN,
-                fallback="",
-                user=self.user,
-                free_only=free_only,
-            )
-            or None
-        )
-        self.personal_paragraph = personal_paragraph
-        self.research_alias = research_alias
-        self.embed_alias = (
-            embed_alias
-            or pick_alias(
-                SnippetEmbed.PREFERRED_PIN,
-                fallback="",
-                user=self.user,
-                free_only=free_only,
-            )
-            or None
-        )
+        self.executor = executor
+        self.max_body_snippets = max_body_snippets or self.MAX_BODY_SNIPPETS
 
     def build(self) -> dict:
         language = (getattr(self.job_posting, "language", "") or "en").lower()[:2]
         title = getattr(self.job_posting, "title", "") or ""
         sel = SnippetSelector(
-            self.cv,
-            self.user.pk,
+            cv=self.cv,
+            user_pk=self.user.pk,
             max_body=self.max_body_snippets,
             posting_language=language,
-            posting_text=self._posting_text(),
-            user=self.user,
-            alias=self.alias,
-            embed_alias=self.embed_alias,
+            posting_text=self.job_posting,
+            executor=self.executor,
         ).select()
 
         # Personal paragraph FIRST (letter-quality decision, 2026-07-12): it opens the
@@ -351,9 +281,8 @@ class CoverLetter:
             title=title,
             language=language,
             mode=self.mode,
-            alias=self.alias,
-            user=self.user,
-            posting_text=self._posting_text(),
+            executor=self.executor,
+            posting_text=self.job_posting,
             opening_paragraph=opening,
         ).write()
         # The writer returns '' when the LLM failed OR there were no snippets to weave. Either
@@ -366,8 +295,8 @@ class CoverLetter:
         # The critic reviews prose quality on standard+strong; audit claims and critic
         # notes then share ONE repair rewrite (strong re-audits the rewrite; the
         # advisory critique is not re-run).
-        verify = self.verify_grounding or self.mode == "conversational"
-        grounding = self._grounding(body, sel["ordered"], weave_failed, verify)
+
+        grounding = self._grounding(body, sel["ordered"], weave_failed)
         critique = self._critique(body, sel["ordered"], weave_failed)
         body, grounding, critique = self._repair(
             body, sel["ordered"], grounding, critique, language, title, verify, opening
@@ -539,32 +468,13 @@ class CoverLetter:
         ai_w = trans_w + tax * native_w + personal_words
         return round(ai_w / total, 2)
 
-    def _grounding(self, body, snippets, weave_failed, verify) -> dict:
-        """Audit the woven body against the snippets. {'count': int | None, 'claims': [str]}.
+    def _grounding(self, body, snippets, weave_failed) -> dict:
 
-        count=None  -> not checked: audit off, no snippets to check against, or the audit LLM
-                       failed (FaithfulnessCheck never returns 0 on failure — see its docstring).
-        count=0     -> checked and fully grounded. Includes the raw-fallback path, where the body
-                       IS the verbatim snippet text, so by construction nothing is unsupported.
-        count>0     -> that many claims in the body the snippets do not support.
-
-        `verify` is `verify_grounding` for light/standard (opt-in, one extra LLM call) and
-        forced True for strong — the grade that composes freely never ships unaudited. Runs
-        under verifier_alias: a 1B writer cannot fact-check itself, so point it at a strong
-        model.
-        """
-        if not verify or not snippets:
-            return {"count": None, "claims": []}
         if (
             weave_failed
         ):  # body is the verbatim snippets -> grounded by construction, no call
             return {"count": 0, "claims": []}
-        return FaithfulnessCheck(
-            body,
-            snippets,
-            alias=self.verifier_alias or self.alias,
-            user=self.user,
-        ).critique()
+        return FaithfulnessCheck(body, snippets, executor=self.executor).critique()
 
     def _critique(self, body, snippets, weave_failed) -> dict:
         """Advisory prose-quality review: {'count': int | None, 'claims': [str]}.
@@ -574,11 +484,9 @@ class CoverLetter:
         same channel, so they must not depend on the critic model being up: standard's
         shrinkage check (a polish that lost >40% of the snippet words is summarising)
         and the one-page ceiling on both grades."""
-        if self.mode not in self._CRITIC_MODES or weave_failed or not snippets:
+        if weave_failed or not snippets:
             return {"count": None, "claims": []}
-        critique = LetterCritic(
-            body, snippets, alias=self.verifier_alias or self.alias, user=self.user
-        ).critique()
+        critique = LetterCritic(body, snippets, executor=self.executor).critique()
         backstops = []
         if self.mode == "instruct" and self._shrunk(body, snippets):
             backstops.append(self._SHRINKAGE_NOTE)
@@ -626,9 +534,8 @@ class CoverLetter:
             title=title,
             language=language,
             mode=self.mode,
-            alias=self.alias,
-            user=self.user,
-            posting_text=self._posting_text(),
+            executor=self.executor,
+            posting_text=self.job_posting,
             unsupported_claims=claims,
             revision_notes=notes,
             opening_paragraph=opening,
@@ -637,7 +544,7 @@ class CoverLetter:
             out_g = {**grounding, "repaired": False} if conversational else grounding
             out_c = {**critique, "repaired": False} if notes else critique
             return body, out_g, out_c
-        new_g = self._grounding(rewritten, snippets, weave_failed=False, verify=verify)
+        new_g = self._grounding(rewritten, snippets, weave_failed=False)
         if conversational:
             new_g = {**new_g, "repaired": True}
         out_c = {**critique, "repaired": True} if notes else critique
@@ -654,54 +561,34 @@ class CoverLetter:
         }
 
     def _personal_paragraph(self, language, title) -> dict:
-        """Real-or-stub personal paragraph. Capability-driven, not grade-gated (except light,
-        which never researches). Stubs — loudly, never silently — on light grade, no personality,
-        a non-web-capable model, failed/empty research, or an empty write. Costs nothing on the
-        stub paths (the free checks run before any LLM call)."""
-        blank = {
-            "text": "",
-            "is_stub": False,
-            "sources": [],
-            "grounding": {"count": None, "claims": []},
-        }
-        if not self.personal_paragraph:
-            return blank  # slot not requested -> nothing
-        if self.mode == "light":
-            return self._stub()  # weak showcase tier never researches
-        alias = self.research_alias or self.alias
-        personality = self._personality_dossier(alias)
+        """Real-or-stub opening paragraph. Real ONLY when the run's executor can
+        web-search (commercial) AND a personality dossier exists; every HirschAI
+        run stubs — loudly, never silently (the stub keeps the export blocker
+        armed). Research, write, and audit all run on the run's executor."""
+        if not self.executor.supports_web_search:
+            return self._stub()
+        personality = self._personality_dossier()
         if not personality:
-            return self._stub()  # no "you" to ground -> stub (before paying)
+            return self._stub()
         company = self._recipient()["company"]
         research = CompanyResearcher(
-            company,
-            getattr(self.job_posting, "posting_text", ""),
-            alias=alias,
-            user=self.user,
-            language=language,
+            company, self._posting_text(), executor=self.executor, language=language
         ).research()
         if not research["ok"]:
-            return self._stub()  # non-capable model / search failed / empty
+            return self._stub()
         text = PersonalParagraphWriter(
-            posting_text=getattr(self.job_posting, "posting_text", ""),
+            posting_text=self._posting_text(),
             title=title,
             language=language,
             company_dossier=research["dossier"],
             personality_dossier=personality,
-            alias=alias,
-            user=self.user,
+            executor=self.executor,
         ).write()
         if not text:
             return self._stub()
-        grounding = {"count": None, "claims": []}
-        if self.verify_grounding:
-            grounding = ParagraphGroundingCheck(
-                text,
-                research["dossier"],
-                personality,
-                alias=self.verifier_alias or alias,
-                user=self.user,
-            ).critique()
+        grounding = ParagraphGroundingCheck(
+            text, research["dossier"], personality, executor=self.executor
+        ).critique()
         return {
             "text": text,
             "is_stub": False,
@@ -709,7 +596,7 @@ class CoverLetter:
             "grounding": grounding,
         }
 
-    def _personality_dossier(self, alias) -> str:
+    def _personality_dossier(self) -> str:
         try:
             from spa.models import PersonalityProfile
 
@@ -718,4 +605,4 @@ class CoverLetter:
             return ""
         if not prof or not prof.has_answers():
             return ""
-        return prof.ensure_dossier(alias=alias, user=self.user)
+        return prof.ensure_dossier(executor=self.executor)

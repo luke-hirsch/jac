@@ -68,6 +68,8 @@ def serialize_cv_selection(cv) -> dict:
                     "id": f"{singular}:{obj.pk}",
                     "label": label_fn(obj),
                     "relevance_score": getattr(obj, "relevance_score", None),
+                    "pinned": getattr(obj, "pinned", False),
+                    "warning": getattr(obj, "selection_warning", ""),
                 }
             )
         out[section] = rows

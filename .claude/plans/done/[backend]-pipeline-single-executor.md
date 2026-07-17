@@ -213,16 +213,9 @@ Scorer renames + signatures (bodies unchanged apart from the calls):
         return Conversational(self.job_post_text, self.entries, executor=self.executor).selection()
 ```
 
-`_floors()` loses its arguments: `{**defaults, **get_embed_floors()}`. The pinned hooks (guide 3
-wires + tests them; type them now so the file is written once):
-
-- `_select_ranked` keep condition: `labels.get(e["id"], 0) >= self._KEEP_LABEL or
-  e.get("favourite") or e["id"] in self.pinned`.
-- `_select` (embed floors): after the floor cut, force pinned entries back the same way
-  favourites are guaranteed by `min_keep` top-up (append missing pinned, keep sort order).
-- `_select_holistic`: force pinned back exactly like favourites, and every output row gains
-  `"pinned": e["id"] in self.pinned` plus, for a pinned entry the model did NOT choose,
-  `"warning": self._PIN_WARNING`:
+The selection layer, written out in full (the pinned hooks are typed here once; guide 3 only
+wires the model field + API and owns the tests). `_propagate` and the class constants are
+unchanged except for one addition next to `_FAVOURITE_BONUS`:
 
 ```python
     _PIN_WARNING = (
@@ -230,8 +223,238 @@ wires + tests them; type them now so the file is written once):
     )
 ```
 
-- `_group_all` / `_select` / `_select_ranked` rows also carry
-  `"pinned": e["id"] in self.pinned` (no warning — only the holistic rung has an opinion).
+`_floors()` — only the helper call changes (no arguments: there is exactly one embedder now):
+
+```python
+    def _floors(self) -> dict:
+        """Per-section cosine floors: the tower row's `embed_floors` over the
+        _SECTION_POLICY defaults. Floors are an embedder property; the only
+        embedder is HirschAI, so no per-alias resolution remains."""
+        defaults = {s: p["drop_below"] for s, p in self._SECTION_POLICY.items()}
+        return {**defaults, **get_embed_floors()}
+```
+
+`_group_all` — every row now carries the `pinned` flag (manual mode + scoring-failure fallback):
+
+```python
+    def _group_all(self) -> dict:
+        """Fallback when scoring fails (and the manual mode): every entry kept,
+        score 0.0."""
+        out: dict[str, list[dict]] = {}
+        for e in self.entries:
+            out.setdefault(e["type"], []).append(
+                {**e, "score": 0.0, "pinned": e["id"] in self.pinned}
+            )
+        return out
+```
+
+`_select` (the embed-floor path). Two changes: pins survive the floor cut **inside the
+keep-predicate** (so they stay in ranked position, no post-hoc append), and the `min_keep`
+top-up switches from the old `keep = items[:min_keep]` replacement to `_select_ranked`'s
+append-style top-up. That switch is load-bearing, not cosmetic: the old replacement would have
+silently *dropped* a pinned entry ranked below `min_keep` — exactly the bug pins exist to
+prevent.
+
+```python
+    def _select(self, base: dict) -> dict:
+        """Apply propagation + per-section drop. Empty base -> keep everything unscored."""
+        if not base:
+            return self._group_all()
+
+        eff = self._propagate(base)
+        floors = self._floors()
+
+        # Favourite nudge: small, post-propagation, so it tilts close calls without
+        # lifting a ~0-scored entry over its section floor (see _FAVOURITE_BONUS).
+        for e in self.entries:
+            if e.get("favourite"):
+                eid = e["id"]
+                eff[eid] = eff.get(eid, 0.0) + self._FAVOURITE_BONUS
+
+        by_section: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_section.setdefault(e["type"], []).append(e)
+
+        out: dict[str, list[dict]] = {}
+        for section, items in by_section.items():
+            policy = self._SECTION_POLICY.get(
+                section, {"drop_below": 0.0, "min_keep": 0}
+            )
+            items.sort(key=lambda e: eff.get(e["id"], 0.0), reverse=True)
+
+            floor = floors.get(section, policy.get("drop_below", 0.0))
+            min_keep = policy["min_keep"]
+            if min_keep is None:
+                keep = items
+            else:
+                # A pin survives the floor cut in its ranked position — the
+                # guarantee lives inside the keep-predicate, not as an append.
+                keep = [
+                    e
+                    for e in items
+                    if eff.get(e["id"], 0.0) >= floor or e["id"] in self.pinned
+                ]
+                if len(keep) < min_keep:
+                    # Top up from the highest-ranked remainder (pins are already
+                    # in; the old `items[:min_keep]` replacement would drop a
+                    # below-rank pin).
+                    kept_ids = {e["id"] for e in keep}
+                    for e in items:  # already score-desc sorted
+                        if e["id"] not in kept_ids:
+                            keep.append(e)
+                            kept_ids.add(e["id"])
+                            if len(keep) >= min_keep:
+                                break
+                    keep.sort(key=lambda e: eff.get(e["id"], 0.0), reverse=True)
+
+            out[section] = [
+                {
+                    **e,
+                    "score": round(eff.get(e["id"], 0.0), 4),
+                    "pinned": e["id"] in self.pinned,
+                }
+                for e in keep
+            ]
+        return out
+```
+
+`_select_ranked` (the instruct-label path). The keep-verdict gains the pin clause; rows gain
+the flag; everything else (stable label-desc sort, top-up, languages keep-all) is the current
+body:
+
+```python
+    def _select_ranked(self, labels: dict) -> dict:
+        """Selection for LLM relevance *labels* (0.._LABEL_MAX) — the instruct rung.
+
+        Keep by the model's own verdict rather than an absolute floor, and do NOT
+        propagate (the LLM already reasoned relationally from the entry text).
+        Per section:
+          - rank by label desc, stable (ties keep the CV's natural order);
+          - keep every entry rated >= _KEEP_LABEL, plus all favourites and all
+            pinned entries (user overrides);
+          - guarantee min_keep by topping up from the highest-ranked remainder;
+          - languages (min_keep None) keep everything.
+        Kept-count therefore varies with fit (intended) — never clamped.
+        """
+        by_section: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_section.setdefault(e["type"], []).append(e)
+
+        out: dict[str, list[dict]] = {}
+        for section, items in by_section.items():
+            policy = self._SECTION_POLICY.get(section, {"min_keep": 0})
+            min_keep = policy["min_keep"]
+            items.sort(key=lambda e: labels.get(e["id"], 0), reverse=True)
+
+            if min_keep is None:
+                keep = list(items)
+            else:
+                keep = [
+                    e
+                    for e in items
+                    if labels.get(e["id"], 0) >= self._KEEP_LABEL
+                    or e.get("favourite")
+                    or e["id"] in self.pinned
+                ]
+                if len(keep) < min_keep:
+                    kept_ids = {e["id"] for e in keep}
+                    for e in items:  # already label-desc sorted
+                        if e["id"] not in kept_ids:
+                            keep.append(e)
+                            kept_ids.add(e["id"])
+                            if len(keep) >= min_keep:
+                                break
+                    keep.sort(key=lambda e: labels.get(e["id"], 0), reverse=True)
+
+            out[section] = [
+                {
+                    **e,
+                    "score": labels.get(e["id"], 0),
+                    "pinned": e["id"] in self.pinned,
+                }
+                for e in keep
+            ]
+        return out
+```
+
+`_select_holistic` (the high-mode path). Pins join favourites in the force-back guardrail, and
+this is the ONLY rung that emits a `warning`: a pinned entry the model did not choose is kept
+anyway and flagged — the model may editorialise, never drop a pin. Chosen pins carry
+`warning: ""`; the other rungs emit no `warning` key at all (they have no opinion).
+
+```python
+    def _select_holistic(self, selected: list[dict]) -> dict:
+        """Selection for the high mode: trust the conversational model's chosen,
+        ordered set and apply guardrails only — force favourites AND pins back,
+        never drop languages, guarantee min_keep. No floors, no propagation, no
+        count clamp (count tracks fit, by design).
+
+        `selected` is an ordered [{id, why}]; entries absent from it are dropped,
+        except as forced back by the guardrails. Surviving entries carry
+        score=None (the rung emits no numeric score) and reason=<why>.
+        """
+        entry_by_id = {e["id"]: e for e in self.entries}
+        why_by_id = {s["id"]: s["why"] for s in selected}
+
+        by_section_all: dict[str, list[dict]] = {}
+        for e in self.entries:
+            by_section_all.setdefault(e["type"], []).append(e)
+
+        # the model's chosen entries, per section, in its priority order
+        chosen_by_section: dict[str, list[dict]] = {}
+        for s in selected:
+            e = entry_by_id.get(s["id"])
+            if e is not None:
+                chosen_by_section.setdefault(e["type"], []).append(e)
+
+        out: dict[str, list[dict]] = {}
+        for section, items in by_section_all.items():
+            policy = self._SECTION_POLICY.get(section, {"min_keep": 0})
+            min_keep = policy["min_keep"]
+
+            keep = list(chosen_by_section.get(section, []))
+            kept_ids = {e["id"] for e in keep}
+
+            # favourites and pins are user overrides — force back any the model
+            # didn't pick (pins additionally get the warning at emit time).
+            for e in items:
+                if (
+                    e.get("favourite") or e["id"] in self.pinned
+                ) and e["id"] not in kept_ids:
+                    keep.append(e)
+                    kept_ids.add(e["id"])
+
+            # languages are never dropped; otherwise top up to min_keep from the
+            # remainder (natural order) without re-ordering the model's picks.
+            if min_keep is None:
+                for e in items:
+                    if e["id"] not in kept_ids:
+                        keep.append(e)
+                        kept_ids.add(e["id"])
+            elif len(keep) < min_keep:
+                for e in items:
+                    if e["id"] not in kept_ids:
+                        keep.append(e)
+                        kept_ids.add(e["id"])
+                        if len(keep) >= min_keep:
+                            break
+
+            out[section] = [
+                {
+                    **e,
+                    "score": None,
+                    "reason": why_by_id.get(e["id"], ""),
+                    "pinned": e["id"] in self.pinned,
+                    "warning": (
+                        self._PIN_WARNING
+                        if e["id"] in self.pinned and e["id"] not in why_by_id
+                        else ""
+                    ),
+                }
+                for e in keep
+            ]
+        return out
+```
 
 ### 3. `jac/cv.py`
 

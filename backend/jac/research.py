@@ -1,7 +1,5 @@
 import logging
 
-from llm_connector import can_web_search, web_search
-
 logger = logging.getLogger(__name__)
 
 
@@ -21,37 +19,25 @@ class CompanyResearcher:
         "is uncertain, omit it. Do not mention the job posting. No headers, no markdown."
     )
 
-    def __init__(
-        self,
-        company,
-        posting_text,
-        *,
-        alias="default",
-        user=None,
-        language="en",
-        max_uses=5,
-    ):
+    def __init__(self, company, posting_text, executor, language="en", max_uses=5):
         self.company = (company or "").strip()
         self.posting_text = posting_text or ""
-        self.alias = alias
-        self.user = user
+        self.executor = executor
         self.language = language
         self.max_uses = max_uses
 
     def research(self) -> dict:
         if not self.company:
             return self._empty()
-        if not can_web_search(self.alias, self.user):
+        if not self.executor.supports_web_search:
             logger.info(
-                "CompanyResearcher: alias %s has no web search; skipping", self.alias
+                "CompanyResearcher: %s cannot web-search; skipping",
+                self.executor.provider,
             )
             return self._empty()
         try:
-            res = web_search(
-                prompt=self._prompt(),
-                alias=self.alias,
-                user=self.user,
-                max_uses=self.max_uses,
+            res = self.executor.web_search(
+                prompt=self._prompt(), max_uses=self.max_uses
             )
         except NotImplementedError:  # backstop if a flag is wrong
             return self._empty()

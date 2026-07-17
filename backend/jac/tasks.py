@@ -24,13 +24,14 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from llm_connector.base import LLMTransportError
 from llm_connector.client import retry_reporter
-from llm_connector.conf import is_free_alias, pick_alias
+from llm_connector.executor import Executor
 
 from jac.cover_letter import CoverLetter, editable_body
 from jac.cv import CV
+from jac.filter import GenerationError
 from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import AddressExtract
-from jac.models import GenerationRun, JobPostAddress, Mode, mode_to_grade
+from jac.models import GenerationRun, JobPostAddress, Mode
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +148,8 @@ def generate_run(run_id: int) -> None:
             application = run.job_application
             user = application.user
             jp = application.posting
-            alias = run.alias or "default"
-            mode = run.mode or Mode.instruct
-            grade = mode_to_grade(mode)
+            executor = Executor(run.provider or "ollama", run.model or None, user)
+            mode = run.mode or Mode.standard
 
             # 1. Tailor the CV.
             _progress(run, "filtering CV")
@@ -160,22 +160,15 @@ def generate_run(run_id: int) -> None:
                 ended=run.ended,
                 min_skill_proficiency=run.min_skill_proficiency or None,
             )
-            cv.apply_selection(cv.filter_cv(jp.posting_text, grade=grade, alias=alias))
+            cv.apply_selection(cv.filter_cv(jp.posting_text, mode, executor))
 
             # 2. Extract the recipient address; refresh the persisted JobPosting.
             # Support rung: runs on the user's pin for its preferred tier when present
             # (a strong run shouldn't spend its expensive model on field extraction);
             # a light run never routes onto a paid pin.
             _progress(run, "reading posting")
-            extract_alias = pick_alias(
-                AddressExtract.PREFERRED_GRADE,
-                fallback=alias,
-                user=user,
-                free_only=is_free_alias(alias, user=user),
-            )
-            extracted = AddressExtract(
-                jp.posting_text, alias=extract_alias, user=user
-            ).extract()
+
+            extracted = AddressExtract(jp.posting_text, executor=executor).extract()
             jp.title = extracted.get("title", "") or jp.title
             jp.language = extracted.get("language", "en") or "en"
             jp.save(update_fields=["title", "language", "updated_at"])
@@ -189,26 +182,17 @@ def generate_run(run_id: int) -> None:
                 application.save(update_fields=["deadline", "updated_at"])
 
             # 3. Build the cover letter.
-            _progress(
-                run,
-                "researching company" if run.personal_paragraph else "writing letter",
-            )
+            _progress(run, "writing letter")
             letter = CoverLetter(
-                user,
-                jp,
-                cv,
-                address=addr,
-                grade=grade,
-                alias=alias,
-                max_body_snippets=run.max_body_snippets,
-                verify_grounding=run.verify_grounding,
-                verifier_alias=run.verifier_alias or None,
-                personal_paragraph=run.personal_paragraph,
-                research_alias=run.research_alias or None,
+                user, jp, cv, address=addr, mode=mode, executor=executor
             ).build()
 
         result = {
-            "meta": {"mode": mode, "grade": grade, "alias": alias},
+            "meta": {
+                "mode": mode,
+                "provider": executor.provider,
+                "model": executor.model or "",
+            },
             "cv": serialize_cv_selection(cv),
             "cover_letter": letter,
         }
@@ -274,6 +258,9 @@ def generate_run(run_id: int) -> None:
             f"could not reach the language model ({exc}) — "
             "check that the model server is running",
         )
+    except GenerationError as exc:
+        logger.warning("generate_run %s: %s", run_id, exc)
+        _fail(run, str(exc))
     except Exception as exc:  # noqa: BLE001 — surface any pipeline failure to the client
         logger.exception("generate_run %s failed", run_id)
         _fail(run, str(exc))
@@ -291,13 +278,12 @@ def sync_user_vectors(user_id: int) -> None:
 
     if not store.is_enabled():
         return
-    alias = vectors.sync_alias(user_id)
+
     vectors.reconcile(
-        user_id, alias, vectors.DOC_CV, vectors.cv_corpus(user_id), delete_orphans=True
+        user_id, vectors.DOC_CV, vectors.cv_corpus(user_id), delete_orphans=True
     )
     vectors.reconcile(
         user_id,
-        alias,
         vectors.DOC_SNIPPET,
         vectors.snippet_corpus(user_id),
         delete_orphans=True,

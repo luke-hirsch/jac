@@ -1,7 +1,13 @@
-from llm_connector.conf import get_embed_floors, pick_alias
+from llm_connector.conf import get_embed_floors
+from llm_connector.executor import Executor
 
 from jac.llm_prompts import Conversational, Embed, Instruct
-from jac.models import Grade
+from jac.models import Mode
+
+
+class GenerationError(RuntimeError):
+    """A selection rung failed with no safe fallback on this executor. The task
+    fails the run loudly — a paid run must never silently keep everything."""
 
 
 class CVFilter:
@@ -29,68 +35,79 @@ class CVFilter:
     }
     _LABEL_MAX = 3
     _KEEP_LABEL = 1
+    _PIN_WARNING = (
+        "pinned by you — the high-mode selection would have dropped this entry"
+    )
 
     def __init__(
         self,
         job_post_text: str,
         entries: list[dict],
-        grade: str = "light",
-        user=None,
-        alias: str = "default",
+        executor: Executor,
+        mode: str = Mode.standard,
+        pinned: set[str] | frozenset[str] | None = None,
     ):
         assert isinstance(job_post_text, str)
         self.job_post_text = job_post_text
         self.entries = entries
-        self.grade = grade
-        self.user = user
-        self.alias = alias
-        # The embed rung (light, and the fallback every rung degrades to) runs on the
-        # user's light pin when present — the main alias of a standard/strong run is
-        # usually no embedder at all. Light runs never route onto a paid pin.
-        self.embed_alias = pick_alias(
-            Embed.PREFERRED_GRADE,
-            fallback=alias,
-            user=user,
-            free_only=grade == Grade.light,
-        )
+        self.mode = mode
+        # No executor = the tower (CLI/tests). The single-executor invariant:
+        # every rung below runs HERE; embedding is tower-only and only ever
+        # reached when the executor IS the tower.
+        self.executor = executor or Executor("ollama")
+        self.pinned = frozenset(pinned or ())
 
     def output(self) -> dict:
-        """Return {section: [entry dicts + score], ...}, each section ranked desc.
+        """{section: [entry dicts + score], ...}, ranked desc per section.
 
-        Rungs differ in BOTH scorer and selection strategy, and each degrades to the next:
-          - strong:   conversational LLM holistic selection (_select_holistic);
-          - standard: Instruct-LLM relevance labels -> keep-by-verdict (_select_ranked);
-          - light:    embedding cosine -> propagation + absolute floors (_select).
+        The ladder, per executor:
+          - manual:            keep everything unscored, ZERO llm/embed calls;
+          - high:              holistic conversational selection, degrades to the
+                               instruct path (same executor);
+          - standard/HirschAI: instruct labels -> keep-by-verdict, degrades to the
+                               embedding floor (tower-only capability);
+          - standard/commercial: instruct labels; one retry, then GenerationError —
+                               there is no embedding floor off the tower, and a paid
+                               run must fail loudly rather than keep-all.
         """
-        if self.grade == Grade.strong:
-            selected = self._strong_selection()
+        if self.mode == Mode.manual:
+            # "No AI" is a promise: even a buggy caller must not turn it into
+            # network traffic. Nothing is filtered; the human prunes.
+            return self._group_all()
+        if self.mode == Mode.high:
+            selected = self._holistic_selection()
             if selected:
                 return self._select_holistic(selected)
-        if self.grade in (Grade.standard, Grade.strong):
-            labels = self._standard_scores()
+        attempts = 1 if self.executor.is_hirschai else 2
+        for _ in range(attempts):
+            labels = self._instruct_scores()
             if labels:
                 return self._select_ranked(labels)
-        return self._select(self._light_scores())
+        if self.executor.is_hirschai:
+            return self._select(self._embed_scores())
+        raise GenerationError(
+            f"selection failed on {self.executor.provider} — try again or switch executor"
+        )
 
     # --- score sources (each returns {id: float} or {} on failure) ---------------------
 
-    def _light_scores(self) -> dict:
+    def _embed_scores(self) -> dict:
         ranked = Embed(
-            self.job_post_text, self.entries, user=self.user, alias=self.embed_alias
+            self.job_post_text, self.entries, user=self.executor.user
         ).ranked_entries()
         return {r["id"]: r["score"] for r in ranked} if ranked else {}
 
-    def _standard_scores(self) -> dict:
-        """Instruct-LLM relevance labels {id: 0.._LABEL_MAX}. Empty on failure -> light fallback."""
+    def _instruct_scores(self) -> dict:
+        """Instruct-LLM relevance labels {id: 0.._LABEL_MAX}. {} on failure."""
         ranked = Instruct(
-            self.job_post_text, self.entries, user=self.user, alias=self.alias
+            self.job_post_text, self.entries, executor=self.executor
         ).ranked_entries()
         return {r["id"]: r["score"] for r in ranked} if ranked else {}
 
-    def _strong_selection(self) -> list[dict]:
-        """Conversational holistic selection: ordered [{id, why}]. Empty -> standard fallback."""
+    def _holistic_selection(self) -> list[dict]:
+        """Conversational holistic selection: ordered [{id, why}]. [] -> instruct fallback."""
         return Conversational(
-            self.job_post_text, self.entries, user=self.user, alias=self.alias
+            self.job_post_text, self.entries, executor=self.executor
         ).selection()
 
     # --- shared selection layer --------------------------------------------------------
@@ -129,7 +146,7 @@ class CVFilter:
         """
         defaults = {s: p["drop_below"] for s, p in self._SECTION_POLICY.items()}
         # Floors are an embedder property, so they follow the resolved embed alias.
-        return {**defaults, **get_embed_floors(self.embed_alias, user=self.user)}
+        return {**defaults, **get_embed_floors()}
 
     def _select(self, base: dict) -> dict:
         """Apply propagation + per-section drop. Empty base -> keep everything unscored."""
@@ -162,32 +179,53 @@ class CVFilter:
             if min_keep is None:
                 keep = items
             else:
-                keep = [e for e in items if eff.get(e["id"], 0.0) >= floor]
+                keep = [
+                    e
+                    for e in items
+                    if eff.get(e["id"], 0.0) >= floor or e["id"] in self.pinned
+                ]
                 if len(keep) < min_keep:
-                    keep = items[:min_keep]
+                    kept_ids = {e["id"] for e in keep}
+                    for e in items:  # already score-desc sorted
+                        if e["id"] not in kept_ids:
+                            keep.append(e)
+                            kept_ids.add(e["id"])
+                            if len(keep) >= min_keep:
+                                break
+                    keep.sort(key=lambda e: eff.get(e["id"], 0.0), reverse=True)
 
             out[section] = [
-                {**e, "score": round(eff.get(e["id"], 0.0), 4)} for e in keep
+                {
+                    **e,
+                    "score": round(eff.get(e["id"], 0.0), 4),
+                    "pinned": e["id"] in self.pinned,
+                }
+                for e in keep
             ]
         return out
 
     def _group_all(self) -> dict:
-        """Fallback when scoring fails: every entry kept, score 0.0."""
+        """Fallback when scoring fails (and the manual mode): every entry kept,
+        score 0.0."""
         out: dict[str, list[dict]] = {}
         for e in self.entries:
-            out.setdefault(e["type"], []).append({**e, "score": 0.0})
+            out.setdefault(e["type"], []).append(
+                {**e, "score": 0.0, "pinned": e["id"] in self.pinned}
+            )
         return out
 
     def _select_ranked(self, labels: dict) -> dict:
-        """Selection for LLM relevance *labels* (0.._LABEL_MAX) — the standard rung.
+        """Selection for LLM relevance *labels* (0.._LABEL_MAX) — the instruct rung.
 
-        Keep by the model's own verdict rather than an absolute floor, and do NOT propagate
-        (the LLM already reasoned relationally from the entry text). Per section:
-          - rank by label desc, stable (ties keep the CV's natural order — recency / name);
-          - keep every entry rated >= _KEEP_LABEL, plus all favourites (pinned);
+        Keep by the model's own verdict rather than an absolute floor, and do NOT
+        propagate (the LLM already reasoned relationally from the entry text).
+        Per section:
+          - rank by label desc, stable (ties keep the CV's natural order);
+          - keep every entry rated >= _KEEP_LABEL, plus all favourites and all
+            pinned entries (user overrides);
           - guarantee min_keep by topping up from the highest-ranked remainder;
           - languages (min_keep None) keep everything.
-        Kept-count therefore varies with fit (intended) — never clamped to a target.
+        Kept-count therefore varies with fit (intended) — never clamped.
         """
         by_section: dict[str, list[dict]] = {}
         for e in self.entries:
@@ -205,7 +243,9 @@ class CVFilter:
                 keep = [
                     e
                     for e in items
-                    if labels.get(e["id"], 0) >= self._KEEP_LABEL or e.get("favourite")
+                    if labels.get(e["id"], 0) >= self._KEEP_LABEL
+                    or e.get("favourite")
+                    or e["id"] in self.pinned
                 ]
                 if len(keep) < min_keep:
                     kept_ids = {e["id"] for e in keep}
@@ -217,17 +257,25 @@ class CVFilter:
                                 break
                     keep.sort(key=lambda e: labels.get(e["id"], 0), reverse=True)
 
-            out[section] = [{**e, "score": labels.get(e["id"], 0)} for e in keep]
+            out[section] = [
+                {
+                    **e,
+                    "score": labels.get(e["id"], 0),
+                    "pinned": e["id"] in self.pinned,
+                }
+                for e in keep
+            ]
         return out
 
     def _select_holistic(self, selected: list[dict]) -> dict:
-        """Selection for the strong rung: trust the conversational model's chosen, ordered
-        set and apply guardrails only — pin favourites, never drop languages, guarantee
-        min_keep. No floors, no propagation, no count clamp (count tracks fit, by design).
+        """Selection for the high mode: trust the conversational model's chosen,
+        ordered set and apply guardrails only — force favourites AND pins back,
+        never drop languages, guarantee min_keep. No floors, no propagation, no
+        count clamp (count tracks fit, by design).
 
-        `selected` is an ordered [{id, why}]; entries absent from it are dropped, except as
-        forced back by the guardrails. Surviving entries carry score=None (the rung emits no
-        numeric score) and reason=<why>.
+        `selected` is an ordered [{id, why}]; entries absent from it are dropped,
+        except as forced back by the guardrails. Surviving entries carry
+        score=None (the rung emits no numeric score) and reason=<why>.
         """
         entry_by_id = {e["id"]: e for e in self.entries}
         why_by_id = {s["id"]: s["why"] for s in selected}
@@ -251,14 +299,13 @@ class CVFilter:
             keep = list(chosen_by_section.get(section, []))
             kept_ids = {e["id"] for e in keep}
 
-            # favourites are a user override — pin any the model didn't pick.
             for e in items:
-                if e.get("favourite") and e["id"] not in kept_ids:
+                if (e.get("favourite") or e["id"] in self.pinned) and e[
+                    "id"
+                ] not in kept_ids:
                     keep.append(e)
                     kept_ids.add(e["id"])
 
-            # languages are never dropped; otherwise top up to min_keep from the remainder
-            # (natural order — date / name) without re-ordering the model's picks.
             if min_keep is None:
                 for e in items:
                     if e["id"] not in kept_ids:
@@ -273,6 +320,17 @@ class CVFilter:
                             break
 
             out[section] = [
-                {**e, "score": None, "reason": why_by_id.get(e["id"], "")} for e in keep
+                {
+                    **e,
+                    "score": None,
+                    "reason": why_by_id.get(e["id"], ""),
+                    "pinned": e["id"] in self.pinned,
+                    "warning": (
+                        self._PIN_WARNING
+                        if e["id"] in self.pinned and e["id"] not in why_by_id
+                        else ""
+                    ),
+                }
+                for e in keep
             ]
         return out

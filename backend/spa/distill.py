@@ -20,26 +20,18 @@ class PersonalityDistiller:
         "achievements. No headers, no markdown, no preamble."
     )
 
-    def __init__(
-        self,
-        answers: dict,
-        *,
-        labels: dict | None = None,
-        alias: str = "default",
-        user=None,
-    ):
+    def __init__(self, answers: dict, *, labels: dict | None = None, executor):
         self.answers = answers or {}
         self.labels = (
             labels or {}
         )  # {slug: prompt}; falls back to the slug when missing
-        self.alias = alias
-        self.user = user
+        self.executor = executor
 
     def distill(self) -> str:
         if not any(self.answers.values()):
             return ""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("PersonalityDistiller: LLM call failed")
             return ""

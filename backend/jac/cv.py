@@ -21,6 +21,7 @@ from jac.models import (
     Language,
     Project,
     Skill,
+    normalize_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 class CV:
     PROFICIENCY_ORDER = ["beginner", "intermediate", "advanced", "expert"]
-    FILTER_GRADE = list(Grade.values)  # ["light", "standard", "strong"]
 
     _MIN_PER_SECTION = {
         "skills": 5,
@@ -46,7 +46,6 @@ class CV:
         started: date | None = None,
         ended: date | None = None,
         min_skill_proficiency: str | None = None,
-        filter_grade: str = "light",
     ):
         """Load career entries for `user_pk`.
 
@@ -63,10 +62,6 @@ class CV:
         self.ended = ended
         self.min_skill_proficiency = min_skill_proficiency
         self.entries = self.get_cv_entries()
-        if filter_grade in self.FILTER_GRADE:
-            self.filter_grade = normalize_grade(filter_grade)
-        else:
-            self.filter_grade = "light"
 
     def get_cv_entries(self) -> dict:
         """Return a fresh {section: [model instances]} dict from the DB."""
@@ -277,15 +272,14 @@ class CV:
         return out
 
     # filter
-    def filter_cv(self, job_post_text: str, grade: str | None, alias: str = "default"):
-        cv_filter = CVFilter(
+    def filter_cv(self, job_post_text: str, mode: str | None, executor, pinned=None):
+        return CVFilter(
             job_post_text=job_post_text,
             entries=self._flatten_entries(),
-            grade=normalize_grade(grade),
-            user=self.user,
-            alias=alias,
-        )
-        return cv_filter.output()
+            mode=normalize_mode(mode),
+            executor=executor,
+            pinned=pinned,
+        ).output()
 
     def apply_selection(self, selection: dict) -> None:
         """Prune self.entries to the entries chosen by CVFilter, in ranked order.
@@ -312,5 +306,7 @@ class CV:
                 if obj is None:
                     continue
                 obj.relevance_score = item.get("score")
+                obj.pinned = bool(item.get("pinned"))
+                obj.selection_warning = item.get("warning", "")
                 pruned[section].append(obj)
         self.entries = pruned

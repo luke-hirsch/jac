@@ -46,26 +46,24 @@ class SkillManager(models.Manager):
 
 
 class Mode(models.TextChoices):
-    """How a generation selects — the user-facing axis that replaced model *strength*.
-
-    Three modes: the mode names the selection STRATEGY, the run's alias names the
-    executor, and "automatic" is a trigger property (the SPA auto-runs `instruct` on the
-    free default alias when the tower answers), not a mode. `manual` never enters the
-    pipeline (the user hand-curates; CVFilter's own manual branch keeps even a buggy
-    caller at zero LLM/embed calls). THIS is the canonical list — nothing else hardcodes
-    it.
-    """
+    """How a generation selects/writes — the strategy axis; the run's executor
+    (provider + model) is the machine axis. `standard` = instruct-labelled
+    selection + polish-licence writer, every executor. `high` = holistic
+    conversational selection + compose-licence writer (sees the posting, always
+    audited) — commercial-only; the serializer rejects it on HirschAI. `manual`
+    never enters the pipeline (the user hand-curates; CVFilter's manual branch
+    keeps even a buggy caller at zero LLM/embed calls). THIS is the canonical
+    list — nothing else hardcodes it."""
 
     manual = "manual", _("No AI")
-    instruct = "instruct", _("Instruct")
-    conversational = "conversational", _("Conversational")
+    standard = "standard", _("Standard")
+    high = "high", _("High")
 
 
 def normalize_mode(value: str | None) -> str:
-    """Coerce any input to a valid `Mode` value. Anything unknown — blank, None, a typo,
-    a stale legacy grade — defaults to `instruct` (the AI default; the SPA offers
-    `manual` itself when nothing is reachable). Input tolerance, not a compat bridge."""
-    return str(value) if value in Mode.values else Mode.instruct
+    """Coerce any input to a valid `Mode`. Blank/unknown/legacy -> `standard`
+    (the AI default; the SPA offers `manual` itself when nothing is reachable)."""
+    return str(value) if value in Mode.values else Mode.standard
 
 
 class TransitionError(ValueError):
@@ -652,16 +650,9 @@ class GenerationRun(models.Model):
     job_application = models.ForeignKey(
         JobApplication, on_delete=models.CASCADE, related_name="runs"
     )
-    mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.instruct)
-    alias = models.CharField(max_length=100, default="default")
-    verify_grounding = models.BooleanField(default=True)
-    verifier_alias = models.CharField(max_length=100, blank=True)
-    personal_paragraph = models.BooleanField(default=True)
-    research_alias = models.CharField(max_length=100, blank=True)
-    # "The best three", embedding-ranked — not everything vaguely related (pipeline v2).
-    max_body_snippets = models.PositiveSmallIntegerField(default=3)
-    evaluation = models.TextField(blank=True)
-    score = models.CharField(max_length=50, blank=True)
+    mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.standard)
+    provider = models.CharField(max_length=32, default="ollama")
+    model = models.CharField(max_length=100, blank=True)
 
     # CV scoping (all optional; map onto CV.__init__).
     domains = models.JSONField(default=list, blank=True)  # list[str] domain names

@@ -3,6 +3,7 @@ import math
 import re
 
 from llm_connector import complete, embed
+from llm_connector.executor import Executor
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,8 @@ def _language_name(code: str) -> str:
 
 
 class Embed:
-    # Every prompt class declares the support-pin ROLE it resolves through
-    # (llm_connector.conf.pick_alias): "embed" = the user's pinned embedder,
-    # "instruct" = the pinned cheap support model. When a pin exists for that role the
-    # rung runs there, otherwise on the run's main alias — so a conversational run
-    # keeps its support rungs off the expensive model. None = the rung IS the mode
-    # (writers/selectors): it always runs the run's alias.
+    """hirsch ai exclusive. no executor needed, because pre defined"""
+
     PREFERRED_PIN: str | None = "embed"
 
     DOC_KIND = "cv"
@@ -56,13 +53,10 @@ class Embed:
     )
     _MAX_TOKENS = 30000  # could/should be derived from config/settings
 
-    def __init__(
-        self, job_post_text: str, entries: list[dict], user=None, alias: str = "default"
-    ):
+    def __init__(self, job_post_text: str, entries: list[dict], user=None):
         self.job_post_text = job_post_text
         self.entries = entries
         self.user = user
-        self.alias = alias
         self.flatten_entries = [e.get("text") or "" for e in entries]
 
     def ranked_entries(self) -> list[dict]:
@@ -86,7 +80,6 @@ class Embed:
             self.entries,
             doc=self.DOC_KIND,
             user=self.user,
-            alias=self.alias,
         )
         if stored is not None:
             return stored
@@ -109,8 +102,6 @@ class Embed:
         """Classic path: embed the query + every entry text in one batch."""
         return embed(
             inputs=[self._query_text()] + self.flatten_entries,
-            alias=self.alias,
-            user=self.user,
         )
 
     def _cap_job_post(self) -> str:
@@ -177,18 +168,15 @@ class Conversational:
     # entry ids are  type:pk  (e.g. job:2); anchor on a leading id, the rest of the line is why.
     _PICK_RE = re.compile(r"([a-z]+:\d+)\s*[-—:.)\]]*\s*(.*)")
 
-    def __init__(
-        self, job_post_text: str, entries: list[dict], user=None, alias: str = "default"
-    ):
+    def __init__(self, job_post_text: str, entries: list[dict], executor):
         self.job_post_text = job_post_text
         self.entries = entries
-        self.user = user
-        self.alias = alias
+        self.executor = executor
 
     def selection(self) -> list[dict]:
         """Return an ordered [{id, why}] of chosen entries. [] on any failure."""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("Conversational selector: LLM call failed")
             return []
@@ -274,18 +262,15 @@ class Instruct:
     # per line) keeps parsing robust if a model ignores the format and emits one-line JSON.
     _LABEL_PAIR = re.compile(r"([a-z]+:\d+)\D+?(\d+)")
 
-    def __init__(
-        self, job_post_text: str, entries: list[dict], user=None, alias: str = "default"
-    ):
+    def __init__(self, job_post_text: str, entries: list[dict], executor):
         self.job_post_text = job_post_text
         self.entries = entries
-        self.user = user
-        self.alias = alias
+        self.executor = executor
 
     def ranked_entries(self) -> list[dict]:
         """Return [{id, score, reason}] with score = integer relevance label (0.._LABEL_MAX)."""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("Instruct scorer: LLM call failed")
             return []
@@ -359,15 +344,14 @@ class AddressExtract:
 
     _LINE = re.compile(r"^\s*([a-zA-Z_]+)\s*[:\-]\s*(.+?)\s*$")
 
-    def __init__(self, job_post_text: str, *, alias: str = "default", user=None):
+    def __init__(self, job_post_text: str, executor):
         self.job_post_text = job_post_text
-        self.alias = alias
-        self.user = user
+        self.executor = executor
 
     def extract(self) -> dict:
         """Return {field: value} for the fields the posting states. {} on any failure."""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("AddressExtract: LLM call failed")
             return {}
@@ -415,7 +399,7 @@ class CoverLetterWriter:
     _TARGET_WORDS = (200, 280)
 
     _MODE_CLAUSE = {
-        "instruct": (
+        "standard": (
             "Rework the snippets into a polished, cohesive letter body. This is a full "
             "letter, not a summary: aim for roughly {lo}-{hi} words, keep every concrete "
             "claim, and write one paragraph per theme with real transitions — write the "
@@ -425,7 +409,7 @@ class CoverLetterWriter:
             "call to action and genuine thanks for the consideration. Do not invent "
             "facts the snippets do not state."
         ),
-        "conversational": (
+        "high": (
             "Compose an original, persuasive letter body tailored to THIS job posting. Use the "
             "posting only to choose emphasis, ordering, and tone — the posting is NEVER a "
             "source of facts about the candidate. Every factual claim — skills, employers, "
@@ -447,14 +431,12 @@ class CoverLetterWriter:
 
     def __init__(
         self,
+        executor,
         snippets: list,
-        *,
         candidate_name: str = "",
         title: str = "",
         language: str = "en",
-        mode: str = "instruct",
-        alias: str = "default",
-        user=None,
+        mode: str = "standard",
         posting_text: str = "",
         unsupported_claims: list[str] | None = None,
         revision_notes: list[str] | None = None,
@@ -465,8 +447,7 @@ class CoverLetterWriter:
         self.title = title
         self.language = language
         self.mode = mode
-        self.alias = alias
-        self.user = user
+        self.executor = executor
         self.posting_text = posting_text
         self.unsupported_claims = unsupported_claims or []
         self.revision_notes = revision_notes or []
@@ -477,14 +458,14 @@ class CoverLetterWriter:
         if not self.snippets:
             return ""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("CoverLetterWriter: LLM call failed")
             return ""
         return (raw or "").strip()
 
     def _prompt(self) -> str:
-        clause = self._MODE_CLAUSE.get(self.mode, self._MODE_CLAUSE["instruct"])
+        clause = self._MODE_CLAUSE.get(self.mode, self._MODE_CLAUSE["standard"])
         lo, hi = self._TARGET_WORDS
         clause = clause.format(lo=lo, hi=hi)
         common = self._COMMON.format(language=_language_name(self.language))
@@ -492,7 +473,7 @@ class CoverLetterWriter:
             f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
         )
         posting = ""
-        if self.mode == "conversational" and self.posting_text:
+        if self.mode == "high" and self.posting_text:
             posting = f"JOB POSTING (context only, never a source of facts):\n{self.posting_text}\n\n"
         opening = ""
         if self.opening_paragraph:
@@ -563,11 +544,10 @@ class FaithfulnessCheck:
     # a claim line: an optional bullet / number marker, then the claim text.
     _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
 
-    def __init__(self, body: str, snippets: list, user=None, alias: str = "default"):
+    def __init__(self, body: str, snippets: list, executor: Executor):
         self.body = body
         self.snippets = snippets
-        self.user = user
-        self.alias = alias
+        self.executor = executor
 
     def critique(self) -> dict:
         """Return {'count': int | None, 'claims': [str]}.
@@ -577,7 +557,7 @@ class FaithfulnessCheck:
         count>0     -> that many claims the snippets do not support, worst first.
         """
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("FaithfulnessCheck: LLM call failed")
             return {"count": None, "claims": []}
@@ -634,17 +614,16 @@ class LetterCritic:
     _COUNT_RE = re.compile(r"\bISSUES\s+(\d+)\b", re.IGNORECASE)
     _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
 
-    def __init__(self, body: str, snippets: list, user=None, alias: str = "default"):
+    def __init__(self, body: str, snippets: list, executor: Executor):
         self.body = body
         self.snippets = snippets
-        self.user = user
-        self.alias = alias
+        self.executor = executor
 
     def critique(self) -> dict:
         """Return {'count': int | None, 'claims': [str]}. None = critic unavailable —
         the caller skips the repair, nothing more."""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("LetterCritic: LLM call failed")
             return {"count": None, "claims": []}
@@ -694,28 +673,25 @@ class PersonalParagraphWriter:
 
     def __init__(
         self,
-        *,
+        executor,
         posting_text="",
         title="",
         language="en",
         company_dossier="",
         personality_dossier="",
-        alias="default",
-        user=None,
     ):
         self.posting_text = posting_text
         self.title = title
         self.language = language
         self.company_dossier = company_dossier
         self.personality_dossier = personality_dossier
-        self.alias = alias
-        self.user = user
+        self.executor = executor
 
     def write(self) -> str:
         if not self.company_dossier or not self.personality_dossier:
             return ""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("PersonalParagraphWriter: LLM call failed")
             return ""
@@ -753,22 +729,16 @@ class ParagraphGroundingCheck:
     _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
 
     def __init__(
-        self,
-        paragraph,
-        company_dossier,
-        personality_dossier,
-        user=None,
-        alias="default",
+        self, paragraph, company_dossier, personality_dossier, executor: Executor
     ):
         self.paragraph = paragraph
         self.company_dossier = company_dossier
         self.personality_dossier = personality_dossier
-        self.user = user
-        self.alias = alias
+        self.executor = executor
 
     def critique(self) -> dict:
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("ParagraphGroundingCheck: LLM call failed")
             return {"count": None, "claims": []}
@@ -817,22 +787,19 @@ class LetterChat:
         self,
         body: str,
         transcript: list[dict],
-        *,
+        executor,
         posting_text: str = "",
         language: str = "en",
-        alias: str = "default",
-        user=None,
     ):
         self.body = body
         self.transcript = transcript
         self.posting_text = posting_text
         self.language = language
-        self.alias = alias
-        self.user = user
+        self.executor = executor
 
     def reply(self) -> dict:
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("LetterChat: LLM call failed")
             return {"reply": "", "revision": None}
@@ -878,24 +845,21 @@ class ParagraphRewrite:
     def __init__(
         self,
         passage: str,
-        *,
+        executor,
         instruction: str = "",
         language: str = "en",
-        alias: str = "default",
-        user=None,
     ):
         self.passage = passage
         self.instruction = instruction
         self.language = language
-        self.alias = alias
-        self.user = user
+        self.executor = executor
 
     def rewrite(self) -> str:
         """Return the rewritten passage. '' on blank input or any LLM failure."""
         if not self.passage.strip():
             return ""
         try:
-            raw = complete(prompt=self._prompt(), alias=self.alias, user=self.user)
+            raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
             logger.exception("ParagraphRewrite: LLM call failed")
             return ""

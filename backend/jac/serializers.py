@@ -2,12 +2,12 @@ import logging
 from typing import TypeVar
 
 from django.conf import settings
+from llm_connector.conf import ExecutorError, resolve_executor
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 
 from jac.models import (
-    KNOWN_MODE_INPUTS,
     ApplicationLayout,
     Certification,
     Domain,
@@ -23,7 +23,6 @@ from jac.models import (
     Project,
     ResumeSnippet,
     Skill,
-    mode_to_grade,
     normalize_mode,
 )
 
@@ -487,21 +486,17 @@ class GenerationRunCreateSerializer(
     ScopeRelatedToUserMixin, serializers.ModelSerializer
 ):
     user_scoped_fields = ("job_application",)
-    # Canonical key is `mode`. A legacy `grade` (light/standard/strong) is still accepted and
-    # mapped (the SPA flips to `mode` in the model-first-generate-panel guide). Blank/unknown → `instruct`.
     mode = serializers.CharField(required=False, allow_blank=True, default="")
+    provider = serializers.CharField(required=False, allow_blank=True, default="")
+    model = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = GenerationRun
         fields = [
             "job_application",
             "mode",
-            "alias",
-            "verify_grounding",
-            "verifier_alias",
-            "personal_paragraph",
-            "research_alias",
-            "max_body_snippets",
+            "provider",
+            "model",
             "domains",
             "started",
             "ended",
@@ -509,17 +504,8 @@ class GenerationRunCreateSerializer(
         ]
 
     def validate(self, attrs):
-        # Bridge: prefer an explicit `mode`, else a legacy `grade` key the old SPA still sends.
-        # A blank or unrecognised value coerces to `instruct` (never a 400 — a typo shouldn't
-        # fail the request), warning only when the value was non-blank and genuinely unknown.
-        raw = (attrs.get("mode") or self.initial_data.get("grade") or "").strip()
-        if raw and raw not in KNOWN_MODE_INPUTS:
-            logger.warning("Unrecognised mode %r coerced to %r", raw, Mode.instruct)
-        mode = normalize_mode(raw)
+        mode = normalize_mode((attrs.get("mode") or "").strip())
         if mode == Mode.manual:
-            # "No AI" never enqueues a run — the SPA builds manual applications directly
-            # (manual-no-run-mode guide). This 400 is the server-side guarantee; the UI
-            # guard alone would be bypassable.
             raise serializers.ValidationError(
                 {
                     "mode": [
@@ -527,7 +513,25 @@ class GenerationRunCreateSerializer(
                     ]
                 }
             )
+        try:
+            executor = resolve_executor(
+                self.context["request"].user,
+                attrs.get("provider", ""),
+                attrs.get("model", ""),
+            )
+        except ExecutorError as exc:
+            raise serializers.ValidationError({"provider": [str(exc)]})
+        if mode == Mode.high and executor.is_hirschai:
+            raise serializers.ValidationError(
+                {
+                    "mode": [
+                        "high mode needs a commercial executor — HirschAI runs standard."
+                    ]
+                }
+            )
         attrs["mode"] = mode
+        attrs["provider"] = executor.provider
+        attrs["model"] = executor.model or ""
         return attrs
 
 
@@ -535,11 +539,6 @@ class GenerationRunSerializer(serializers.ModelSerializer):
     posting_title = serializers.CharField(
         source="job_application.posting.title", read_only=True, default=""
     )
-    # Compat: the SPA still reads `grade` until the model-first-generate-panel guide. Derive it from `mode`.
-    grade = serializers.SerializerMethodField()
-
-    def get_grade(self, obj) -> str:
-        return mode_to_grade(obj.mode)
 
     class Meta:
         model = GenerationRun
@@ -551,12 +550,8 @@ class GenerationRunSerializer(serializers.ModelSerializer):
             "error",
             "result",
             "mode",
-            "grade",
-            "alias",
-            "personal_paragraph",
-            "verify_grounding",
-            "evaluation",
-            "score",
+            "provider",
+            "model",
             "posting_title",
             "created_at",
             "updated_at",
@@ -568,14 +563,9 @@ class GenerationRunSummarySerializer(serializers.ModelSerializer):
     """Compact nested shape for `JobApplicationSerializer.runs` — no `result` payload,
     the SPA fetches a run's detail (or subscribes to its socket) separately."""
 
-    grade = serializers.SerializerMethodField()
-
-    def get_grade(self, obj) -> str:
-        return mode_to_grade(obj.mode)
-
     class Meta:
         model = GenerationRun
-        fields = ["id", "status", "stage", "mode", "grade", "alias", "created_at"]
+        fields = ["id", "status", "stage", "mode", "provider", "model", "created_at"]
         read_only_fields = fields
 
 
