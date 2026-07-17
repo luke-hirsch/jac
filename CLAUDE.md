@@ -137,9 +137,12 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > (`llm_connector/catalog.py` — the catalog IS the gate); `GET /api/llm/executors/` is the
 > SPA's single source; auto-run on application create (backend-side, never retro); entry pins
 > force-kept by every rung. **SPA phase = the current `to-do/` stack, in order:**
-> `[frontend]-model-first-generate-panel` → `[frontend]-llm-config-tab-v2` →
-> `[frontend]-manual-no-run-mode` → `[frontend]-entry-pins-ui` → `[fullstack]-model-knobs` →
-> `[fullstack]-chat-assistant-rework` (all rewritten 2026-07-17 against the landed backend).
+> `[frontend]-model-first-generate-panel` (activated 2026-07-17: full contracts + red vitest
+> files on disk) → `[fullstack]-llm-config-tab-v2` (was `[frontend]`; now also carries the
+> backend repairs the rework missed — the user-facing `LLMConfigSerializer`/request-log
+> serializer still list dead columns and crash, and the spa dossier-rebuild view calls the
+> old `ensure_dossier(alias=…)` signature) → `[frontend]-manual-no-run-mode` →
+> `[frontend]-entry-pins-ui` → `[fullstack]-model-knobs` → `[fullstack]-chat-assistant-rework`.
 > The SPA is knowingly broken until the first two land. The "current state" bullets above
 > still describe the alias/grade era for llm_connector + pipeline — next `/wrap-up` refreshes
 > them; the `done/` rework guides are the accurate spec meanwhile.

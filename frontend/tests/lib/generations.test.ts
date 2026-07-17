@@ -16,33 +16,72 @@ import {
 /**
  * Unit tests for the pure helpers behind the application detail page.
  * No DOM, no network, no WebSocket — just the form→payload, badge, and
- * WS-event→state contracts the page relies on. Application-centric: a run
- * is created against a JobApplication pk, not raw posting text.
+ * WS-event→state contracts the page relies on. Executor era
+ * ([frontend]-model-first-generate-panel): a run is `{mode, provider, model}`
+ * against a JobApplication pk; grade/alias are dead vocabulary.
  */
 
 function form(over: Partial<GenerationForm> = {}): GenerationForm {
   return {
     job_application: 7,
-    grade: "",
-    alias: "default",
-    verify_grounding: false,
-    personal_paragraph: false,
+    mode: "",
+    provider: "",
+    model: "",
     ...over,
   };
 }
 
 const EMPTY: RunState = { status: "pending", stage: "", result: null, error: "" };
-const RESULT = { meta: { grade: "light", alias: "default" }, cv: {}, cover_letter: {} } as unknown as TailoredResult;
+const RESULT = {
+  meta: { mode: "standard", provider: "ollama", model: "" },
+  cv: {},
+  cover_letter: {},
+} as unknown as TailoredResult;
 
 describe("toPayload", () => {
-  it("passes the application pk and omits grade when blank (server auto-detects)", () => {
-    const p = toPayload(form());
-    expect(p.job_application).toBe(7);
-    expect("grade" in p).toBe(false);
+  it("sends only the application pk when everything is blank — the server owns every default", () => {
+    expect(toPayload(form())).toEqual({ job_application: 7 });
   });
 
-  it("includes grade when set", () => {
-    expect(toPayload(form({ grade: "strong" })).grade).toBe("strong");
+  it("passes an explicit executor pick through verbatim", () => {
+    expect(
+      toPayload(
+        form({ mode: "high", provider: "anthropic", model: "claude-sonnet-5" }),
+      ),
+    ).toEqual({
+      job_application: 7,
+      mode: "high",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+    });
+  });
+
+  it("omits a blank model (HirschAI pick — the tower model is server-fixed)", () => {
+    const p = toPayload(form({ mode: "standard", provider: "ollama" }));
+    expect(p).toEqual({ job_application: 7, mode: "standard", provider: "ollama" });
+    expect("model" in p).toBe(false);
+  });
+});
+
+describe("result meta / cv row shapes (compile-time contract)", () => {
+  it("meta speaks mode/provider/model; cv rows may carry pinned + warning", () => {
+    const r: TailoredResult = {
+      meta: { mode: "high", provider: "anthropic", model: "claude-sonnet-5" },
+      cv: {
+        jobs: [
+          {
+            id: "job:1",
+            label: "x",
+            relevance_score: null,
+            pinned: true,
+            warning: "pinned but filtered by scope",
+          },
+        ],
+      },
+      cover_letter: RESULT.cover_letter,
+    };
+    expect(r.cv.jobs[0].pinned).toBe(true);
+    expect(r.cv.jobs[0].warning).toContain("pinned");
   });
 });
 
@@ -70,7 +109,7 @@ describe("groundingBadge", () => {
     expect(groundingBadge({ count: 1, claims: ["a"] }).label).toBe("1 claim");
     expect(groundingBadge({ count: 3, claims: ["a", "b", "c"] }).label).toBe("3 claims");
   });
-  it("marks a repaired-clean strong letter", () => {
+  it("marks a repaired-clean letter", () => {
     const b = groundingBadge({ count: 0, claims: [], repaired: true });
     expect(b.tone).toBe("green");
     expect(b.label).toBe("grounded · repaired");

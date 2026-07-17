@@ -1,27 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
   PROVIDER_SPECS,
-  addressSearchOptions,
-  aliasesForGrade,
   buildStructuredExtra,
   checkResultLabel,
-  isFreeProvider,
   parseExtraJson,
-  pinnedAliasFor,
   toPayload,
   rowToState,
   switchProvider,
-  type AliasInfo,
   type ConfigFormState,
-  type GradePins,
   type LLMConfigRow,
   type Provider,
 } from "@/lib/queries/llm";
 
 /**
- * Red-first unit tests for the pure form<->payload helpers in `llm.ts`.
- * They drive the provider-mask logic the LLM-config tab relies on; no DOM,
- * no network — just the assembly/validation contract.
+ * Unit tests for the pure form<->payload helpers in `llm.ts` — the provider-mask
+ * logic the (alias-era) LLM-config tab relies on. This whole block is frozen with
+ * llm.ts zone B until [fullstack]-llm-config-tab-v2 rewrites tab + tests against
+ * the five-field config API. The alias/pins/address-search describes died with
+ * [frontend]-model-first-generate-panel; the executors section is covered by
+ * tests/lib/executors.test.ts.
  */
 
 const PROVIDERS: Provider[] = ["anthropic", "openai", "google", "custom", "ollama"];
@@ -204,159 +201,7 @@ describe("switchProvider", () => {
   });
 });
 
-describe("aliasesForGrade (grade ↔ model coupling)", () => {
-  const infos: AliasInfo[] = [
-    {
-      alias: "default",
-      provider: "ollama",
-      model: "llama3.2:1b",
-      strength: "light",
-      supports_embed: true,
-      supports_web_search: false,
-    },
-    {
-      alias: "opus",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      strength: "strong",
-      supports_embed: false,
-      supports_web_search: true,
-    },
-    {
-      alias: "mid",
-      provider: "custom",
-      model: "qwen3:8b",
-      strength: "standard",
-      supports_embed: false,
-      supports_web_search: false,
-    },
-  ];
-
-  it("light offers only embed-capable aliases", () => {
-    expect(aliasesForGrade(infos, "light").map((a) => a.alias)).toEqual([
-      "default",
-    ]);
-  });
-
-  it("light drops paid providers even when they can embed", () => {
-    const paidEmbedder: AliasInfo = {
-      alias: "paid-embed",
-      provider: "openai",
-      model: "text-embedding-3-small",
-      strength: "light",
-      supports_embed: true,
-      supports_web_search: false,
-    };
-    expect(
-      aliasesForGrade([...infos, paidEmbedder], "light").map((a) => a.alias),
-    ).toEqual(["default"]);
-  });
-
-  it("standard drops light-only aliases (the server default)", () => {
-    expect(aliasesForGrade(infos, "standard").map((a) => a.alias)).toEqual([
-      "opus",
-      "mid",
-    ]);
-  });
-
-  it("strong offers only strong aliases", () => {
-    expect(aliasesForGrade(infos, "strong").map((a) => a.alias)).toEqual([
-      "opus",
-    ]);
-  });
-
-  it("auto (blank grade) offers everything", () => {
-    expect(aliasesForGrade(infos, "")).toEqual(infos);
-  });
-});
-
-describe("isFreeProvider", () => {
-  it("counts ollama and custom as free, the commercial trio as paid", () => {
-    expect(isFreeProvider("ollama")).toBe(true);
-    expect(isFreeProvider("custom")).toBe(true);
-    expect(isFreeProvider("anthropic")).toBe(false);
-    expect(isFreeProvider("openai")).toBe(false);
-    expect(isFreeProvider("google")).toBe(false);
-    expect(isFreeProvider("")).toBe(false);
-  });
-});
-
-describe("pinnedAliasFor (grade → pinned model default)", () => {
-  const allowed: AliasInfo[] = [
-    {
-      alias: "opus",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      strength: "strong",
-      supports_embed: false,
-      supports_web_search: true,
-    },
-  ];
-  const pins: GradePins = { light: null, standard: "mid", strong: "opus" };
-
-  it("returns the pin when it is offerable for the grade", () => {
-    expect(pinnedAliasFor("strong", pins, allowed)).toBe("opus");
-  });
-
-  it("ignores a pin the grade cannot offer (not in allowed)", () => {
-    expect(pinnedAliasFor("standard", pins, allowed)).toBeNull();
-  });
-
-  it("returns null for auto grade, unset pin, or pins not loaded", () => {
-    expect(pinnedAliasFor("", pins, allowed)).toBeNull();
-    expect(pinnedAliasFor("light", pins, allowed)).toBeNull();
-    expect(pinnedAliasFor("strong", undefined, allowed)).toBeNull();
-  });
-});
-
-describe("addressSearchOptions (recipient web-search buttons)", () => {
-  const base: Omit<AliasInfo, "alias" | "provider" | "supports_web_search"> = {
-    model: "m",
-    strength: "strong",
-    supports_embed: false,
-  };
-
-  it("offers one branded button per web-search-capable provider", () => {
-    const options = addressSearchOptions([
-      { ...base, alias: "default", provider: "ollama", supports_web_search: false },
-      { ...base, alias: "opus", provider: "anthropic", supports_web_search: true },
-      { ...base, alias: "gpt", provider: "openai", supports_web_search: true },
-    ]);
-    expect(options).toEqual([
-      { alias: "opus", label: "Search with Claude" },
-      { alias: "gpt", label: "Search with GPT" },
-    ]);
-  });
-
-  it("dedupes by brand — first alias of a provider wins", () => {
-    const options = addressSearchOptions([
-      { ...base, alias: "opus", provider: "anthropic", supports_web_search: true },
-      { ...base, alias: "haiku", provider: "anthropic", supports_web_search: true },
-    ]);
-    expect(options).toEqual([{ alias: "opus", label: "Search with Claude" }]);
-  });
-
-  it("is empty when nothing capable is configured (no button at all)", () => {
-    expect(
-      addressSearchOptions([
-        { ...base, alias: "default", provider: "ollama", supports_web_search: false },
-      ]),
-    ).toEqual([]);
-  });
-
-  it("falls back to the alias name for unbranded providers", () => {
-    const options = addressSearchOptions([
-      { ...base, alias: "my-searcher", provider: "custom", supports_web_search: true },
-    ]);
-    expect(options).toEqual([
-      { alias: "my-searcher", label: "Search with my-searcher" },
-    ]);
-  });
-});
-
 describe("checkResultLabel (per-row connectivity check)", () => {
-  // NOTE: this import makes the whole file red until checkResultLabel exists
-  // in llm.ts — implement the lib side first and the file recovers.
   it("renders success as OK + latency", () => {
     expect(checkResultLabel({ ok: true, latency_ms: 812 })).toBe("OK · 812 ms");
   });
