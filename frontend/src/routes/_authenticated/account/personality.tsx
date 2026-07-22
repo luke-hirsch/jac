@@ -5,16 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { useLLMAliases } from "@/lib/queries/llm";
 import {
   MAX_ANSWER_LEN,
   answeredCount,
@@ -42,7 +34,6 @@ const STATE_LABEL = {
 
 function PersonalityPage() {
   const personality = usePersonality();
-  const aliases = useLLMAliases();
   const update = useUpdateAnswers();
   const rebuild = useRebuildDossier();
   const createQuestion = useCreateQuestion();
@@ -50,7 +41,6 @@ function PersonalityPage() {
   // Seeded from the server once; refetches must not clobber edits (adjust-state-
   // during-render, same pattern as the content card's server re-seed).
   const [draft, setDraft] = useState<Record<string, string> | null>(null);
-  const [alias, setAlias] = useState("default");
   const [newQuestion, setNewQuestion] = useState("");
   if (personality.data && draft === null) setDraft(personality.data.answers);
 
@@ -72,7 +62,7 @@ function PersonalityPage() {
   }
 
   function onRebuild() {
-    rebuild.mutate(alias, {
+    rebuild.mutate(undefined, {
       onSuccess: () => toast.success("Dossier rebuilt"),
       onError: () => toast.error("Could not rebuild the dossier"),
     });
@@ -194,22 +184,6 @@ function PersonalityPage() {
           <h3 className="text-sm font-medium">Dossier</h3>
           <Badge variant="outline">{STATE_LABEL[state]}</Badge>
           <div className="ml-auto flex items-center gap-2">
-            <Select value={alias} onValueChange={setAlias}>
-              <SelectTrigger className="w-56">
-                <SelectValue
-                  placeholder={
-                    aliases.isLoading ? "Loading models…" : "Pick a model"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {(aliases.data ?? []).map((a) => (
-                  <SelectItem key={a.alias} value={a.alias}>
-                    {a.alias} — {a.model} ({a.strength})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <Button
               size="sm"
               variant="outline"

@@ -1,8 +1,22 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-export type Grade = "light" | "standard" | "strong";
+import type { Mode } from "./llm"; // single definition; no cycle
+
 export type RunStatus = "pending" | "running" | "done" | "failed";
+
+export type RunMeta = { mode: string; provider: string; model: string };
+
+export type CvEntry = {
+  id: string;
+  label: string;
+  relevance_score: number | null;
+  deselected?: boolean;
+  /** Entry pin: force-kept by every rung; survives applying a new run. */
+  pinned?: boolean;
+  /** Selection warning from the run — rendered by [frontend]-entry-pins-ui. */
+  warning?: string;
+};
 
 export type Grounding = {
   count: number | null;
@@ -42,21 +56,11 @@ export type CoverLetterResult = {
   text: string;
 };
 
-export type CvEntry = {
-  id: string;
-  label: string;
-  relevance_score: number | null;
-  deselected?: boolean;
-  /** User-pinned: survives applying a new generation run (merged back in). */
-  pinned?: boolean;
-};
-
 export type TailoredResult = {
-  meta: { grade: string; alias: string };
+  meta: RunMeta;
   cv: Record<string, CvEntry[]>;
   cover_letter: CoverLetterResult;
 };
-
 export type GenerationRun = {
   id: number;
   job_application: number;
@@ -64,12 +68,9 @@ export type GenerationRun = {
   stage: string;
   error: string;
   result: TailoredResult | null;
-  grade: string;
-  alias: string;
-  personal_paragraph: boolean;
-  verify_grounding: boolean;
-  evaluation: string;
-  score: string;
+  mode: string;
+  provider: string;
+  model: string;
   posting_title: string;
   created_at: string;
   updated_at: string;
@@ -77,68 +78,22 @@ export type GenerationRun = {
 
 export type GenerationForm = {
   job_application: number;
-  grade: Grade | ""; // "" => the task auto-detects from the alias strength
-  alias: string;
-  verify_grounding: boolean;
-  personal_paragraph: boolean;
+  mode: Exclude<Mode, ""> | "manual"; // "" = server default (standard)
+  provider: string; // "" = the user's default executor
+  model: string; // "" = catalog default
+  params?: GenerationParams;
 };
 
 export type GenerationPayload = {
   job_application: number;
-  alias: string;
-  verify_grounding: boolean;
-  personal_paragraph: boolean;
-  grade?: Grade;
+  mode?: string;
+  provider?: string;
+  model?: string;
+  params?: GenerationParams;
 };
+export type GenerationParams = Record<string, string | number>;
 
-const URL = "/api/jac/generations/";
-
-/* ---------- pure helpers (unit-tested) ---------- */
-
-export function toPayload(f: GenerationForm): GenerationPayload {
-  const p: GenerationPayload = {
-    job_application: f.job_application,
-    alias: f.alias,
-    verify_grounding: f.verify_grounding,
-    personal_paragraph: f.personal_paragraph,
-  };
-  if (f.grade) p.grade = f.grade; // omit when "" so the server auto-detects
-  return p;
-}
-
-export type Badge = { tone: "green" | "amber" | "muted"; label: string };
-
-export function aiShareBadge(share: number): Badge {
-  const pct = Math.round(share * 100);
-  // Low AI share = mostly the candidate's own words; high = heavily machine-written.
-  return { tone: pct <= 25 ? "green" : "amber", label: `${pct}% AI` };
-}
-
-export function groundingBadge(g: Grounding): Badge {
-  if (g.count === null) return { tone: "muted", label: "not checked" };
-  // repaired=true says a strong repair pass replaced the body — worth surfacing both
-  // when it cleaned the letter and when claims survived it.
-  const suffix = g.repaired ? " · repaired" : "";
-  if (g.count === 0) return { tone: "green", label: `grounded${suffix}` };
-  return {
-    tone: "amber",
-    label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
-  };
-}
-
-export function qualityBadge(c: Critique | undefined): Badge | null {
-  // Advisory rung: when the critic didn't run (light grade, old runs, critic down)
-  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
-  if (!c || c.count === null) return null;
-  const suffix = c.repaired ? " · repaired" : "";
-  if (c.count === 0) return { tone: "green", label: "quality ok" };
-  return {
-    tone: "amber",
-    label: `${c.count} issue${c.count === 1 ? "" : "s"}${suffix}`,
-  };
-}
-
-/** Fold a WS event (or a REST snapshot reshaped as one) into run state. */
+// Webseocket event
 export type WsEvent =
   | {
       event: "snapshot";
@@ -158,6 +113,46 @@ export type RunState = {
   error: string;
 };
 
+/* ---------- query hooks ---------- */
+const URL = "/api/jac/generations/";
+export function useCreateGeneration() {
+  return useMutation({
+    mutationFn: (form: GenerationForm) =>
+      api<GenerationRun>(URL, {
+        method: "POST",
+        body: JSON.stringify(toPayload(form)),
+      }),
+  });
+}
+
+export function useGeneration(id: number | null) {
+  return useQuery({
+    queryKey: ["jac", "generations", id],
+    queryFn: () => api<GenerationRun>(`${URL}${id}/`),
+    enabled: id != null,
+  });
+}
+
+export function useCancelGeneration() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<GenerationRun>(`${URL}${id}/cancel/`, { method: "POST" }),
+  });
+}
+
+/* ---------- pure helpers (unit-tested) ---------- */
+
+export function toPayload(f: GenerationForm): GenerationPayload {
+  const p: GenerationPayload = { job_application: f.job_application };
+  if (f.mode) p.mode = f.mode;
+  if (f.provider) p.provider = f.provider;
+  if (f.model) p.model = f.model;
+  // params is optional (the auto-run path and no-knob picks omit it) — guard
+  // before Object.keys, and only send a non-empty object.
+  if (f.params && Object.keys(f.params).length) p.params = f.params;
+  return p;
+}
+
 /** A run still `pending` after this long was never picked up — the worker is
  *  probably down (the enqueued task itself expires server-side after 15 min). */
 export const STALE_PENDING_AFTER_S = 30;
@@ -167,7 +162,6 @@ export function pendingAgeSeconds(createdAt: string, now: Date): number {
   if (Number.isNaN(created)) return 0;
   return Math.max(0, Math.floor((now.getTime() - created) / 1000));
 }
-
 export function isStalePending(
   status: RunStatus,
   createdAt: string,
@@ -198,30 +192,43 @@ export function runReducer(state: RunState, e: WsEvent): RunState {
       return state;
   }
 }
+export function knobParams(input: {
+  effort?: string;
+  temperature?: string;
+}): GenerationParams {
+  const p: GenerationParams = {};
+  if (input.effort) p.effort = input.effort;
+  const t = (input.temperature ?? "").trim();
+  if (t !== "" && !Number.isNaN(Number(t))) p.temperature = Number(t);
+  return p;
+}
+/* ---------- Badges---------- */
 
-/* ---------- query hooks ---------- */
+export type Badge = { tone: "green" | "amber" | "muted"; label: string };
 
-export function useCreateGeneration() {
-  return useMutation({
-    mutationFn: (form: GenerationForm) =>
-      api<GenerationRun>(URL, {
-        method: "POST",
-        body: JSON.stringify(toPayload(form)),
-      }),
-  });
+export function aiShareBadge(share: number): Badge {
+  const pct = Math.round(share * 100);
+  return { tone: pct <= 25 ? "green" : "amber", label: `${pct}% AI` };
 }
 
-export function useGeneration(id: number | null) {
-  return useQuery({
-    queryKey: ["jac", "generations", id],
-    queryFn: () => api<GenerationRun>(`${URL}${id}/`),
-    enabled: id != null,
-  });
+export function groundingBadge(g: Grounding): Badge {
+  if (g.count === null) return { tone: "muted", label: "not checked" };
+  const suffix = g.repaired ? " · repaired" : "";
+  if (g.count === 0) return { tone: "green", label: `grounded${suffix}` };
+  return {
+    tone: "amber",
+    label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
+  };
 }
 
-export function useCancelGeneration() {
-  return useMutation({
-    mutationFn: (id: number) =>
-      api<GenerationRun>(`${URL}${id}/cancel/`, { method: "POST" }),
-  });
+export function qualityBadge(c: Critique | undefined): Badge | null {
+  // TODO: when the critic didn't run (light grade, old runs, critic down)
+  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
+  if (!c || c.count === null) return null;
+  const suffix = c.repaired ? " · repaired" : "";
+  if (c.count === 0) return { tone: "green", label: "quality ok" };
+  return {
+    tone: "amber",
+    label: `${c.count} issue${c.count === 1 ? "" : "s"}${suffix}`,
+  };
 }

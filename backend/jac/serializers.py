@@ -3,6 +3,7 @@ import re
 from typing import TypeVar
 
 from django.conf import settings
+from llm_connector.catalog import validate_params
 from llm_connector.conf import ExecutorError, resolve_executor
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
@@ -490,6 +491,7 @@ class GenerationRunCreateSerializer(
     mode = serializers.CharField(required=False, allow_blank=True, default="")
     provider = serializers.CharField(required=False, allow_blank=True, default="")
     model = serializers.CharField(required=False, allow_blank=True, default="")
+    params = serializers.JSONField(required=False, default=dict)
 
     class Meta:
         model = GenerationRun
@@ -498,6 +500,7 @@ class GenerationRunCreateSerializer(
             "mode",
             "provider",
             "model",
+            "params",
             "domains",
             "started",
             "ended",
@@ -522,6 +525,9 @@ class GenerationRunCreateSerializer(
             )
         except ExecutorError as exc:
             raise serializers.ValidationError({"provider": [str(exc)]})
+        problems = validate_params(executor.provider, attrs.get("params") or {})
+        if problems:
+            raise serializers.ValidationError({"params": problems})
         if mode == Mode.high and executor.is_hirschai:
             raise serializers.ValidationError(
                 {
@@ -553,6 +559,7 @@ class GenerationRunSerializer(serializers.ModelSerializer):
             "mode",
             "provider",
             "model",
+            "params",
             "posting_title",
             "created_at",
             "updated_at",

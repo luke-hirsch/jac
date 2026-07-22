@@ -654,6 +654,7 @@ class GenerationRun(models.Model):
     mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.standard)
     provider = models.CharField(max_length=32, default="ollama")
     model = models.CharField(max_length=100, blank=True)
+    params = models.JSONField(default=dict, blank=True)
 
     # CV scoping (all optional; map onto CV.__init__).
     domains = models.JSONField(default=list, blank=True)  # list[str] domain names

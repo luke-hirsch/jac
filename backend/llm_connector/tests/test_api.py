@@ -4,6 +4,7 @@
 Target API = `[backend]-executor-connector`.
 """
 
+import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -228,3 +229,25 @@ class LLMRequestLogApiTests(APITestCase):
         other = LLMRequestLog.objects.get(user=self.bob)
         r = self.client.get(f"/api/llm/request-logs/{other.pk}/")
         self.assertEqual(r.status_code, 404)
+
+
+@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
+@override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class ExecutorKnobAdvertisingTests(APITestCase):
+    """[fullstack]-model-knobs: the executors endpoint advertises each provider's
+    knob spec so the generate panel renders controls from data, never hardcoded."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("alice", password="pw")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_commercial_rows_carry_the_knob_spec_hirschai_none(self):
+        with patch("llm_connector.views.hirschai_reachable", return_value=True):
+            rows = {r["provider"]: r for r in self.client.get("/api/llm/executors/").data}
+        self.assertEqual(rows["ollama"]["knobs"], {})
+        self.assertIn("effort", rows["anthropic"]["knobs"])
+        self.assertIn("choices", rows["anthropic"]["knobs"]["effort"])
+        self.assertIn("temperature", rows["openai"]["knobs"])

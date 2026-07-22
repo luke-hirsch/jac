@@ -231,3 +231,25 @@ describe("contactLine (CV contact header)", () => {
     expect(contactLine({ email: "a@b.c" }, { socials: true })).toBe("a@b.c");
   });
 });
+
+/**
+ * [frontend]-manual-no-run-mode — unskip as that guide's step 0. A hand-curated
+ * application has no run to bring furniture, so the fallback language must come
+ * from the POSTING, not blanket "en". Red once unskipped: today the extra
+ * argument is silently ignored.
+ */
+describe.skip("manual-mode letter furniture ([frontend]-manual-no-run-mode)", () => {
+  it("emptyLetterMeta takes the posting language", () => {
+    expect(emptyLetterMeta("de").language).toBe("de");
+    expect(emptyLetterMeta().language).toBe("en");
+  });
+
+  it("normalizeLetterMeta falls back to the posting language", () => {
+    expect(normalizeLetterMeta({}, "de").language).toBe("de");
+    expect(normalizeLetterMeta(undefined, "de").language).toBe("de");
+  });
+
+  it("a stored language always wins over the fallback", () => {
+    expect(normalizeLetterMeta({ language: "en" }, "de").language).toBe("en");
+  });
+});

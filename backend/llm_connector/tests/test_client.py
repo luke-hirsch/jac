@@ -5,6 +5,7 @@ Adapter wire formats live in test_adapters; resolution rules in test_config.
 Target API = `[backend]-executor-connector`.
 """
 
+import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -260,3 +261,45 @@ class LLMCheckCommandTests(TestCase):
             call_command("llm_check", user=alice.pk, stdout=out)
         self.assertIn("fake", out.getvalue())
         self.assertNotIn("FAILED", out.getvalue())
+
+
+class KnobbyFake(FakeAdapter):
+    """[fullstack]-model-knobs: a fake that understands one knob — proves the
+    client maps params through `map_params` instead of forwarding them raw."""
+
+    def map_params(self, params: dict) -> dict:
+        return {"temperature": params.get("temperature", 0.7)}
+
+
+register("fakeknobs")(KnobbyFake)
+
+
+@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
+@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
+class ClientParamsSeamTests(TestCase):
+    """Per-run knobs travel as one `params` kwarg to the client, which pops it and
+    hands the ADAPTER only what its `map_params` returns — a raw `params` blob must
+    never reach an adapter (ollama would put it on the wire)."""
+
+    def test_params_are_popped_and_mapped(self):
+        client = client_for({"provider": "fakeknobs", "model": "m"})
+        client.complete("hi", params={"temperature": 0.2})
+        _, kwargs = KnobbyFake.instances[-1].complete_calls[-1]
+        self.assertNotIn("params", kwargs)
+        self.assertEqual(kwargs["temperature"], 0.2)
+
+    def test_no_params_means_no_extra_kwargs(self):
+        client = client_for({"provider": "fake", "model": "m"})
+        client.complete("hi")
+        _, kwargs = FakeAdapter.instances[-1].complete_calls[-1]
+        self.assertEqual(kwargs, {})
+
+    def test_executor_carries_its_params_into_every_call(self):
+        from llm_connector.executor import Executor
+
+        user = User.objects.create_user("knobs", password="pw")
+        fake_row(user, provider="fakeknobs", model="m")
+        FakeAdapter.instances.clear()
+        Executor("fakeknobs", "m", user, {"temperature": 0.1}).complete("hi")
+        _, kwargs = KnobbyFake.instances[-1].complete_calls[-1]
+        self.assertEqual(kwargs["temperature"], 0.1)

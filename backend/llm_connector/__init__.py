@@ -9,16 +9,37 @@ def get_client(
 
 
 def complete(
-    prompt=None, *, messages=None, provider=None, model=None, user=None, **kwargs
+    prompt=None,
+    *,
+    messages=None,
+    executor=None,
+    provider=None,
+    model=None,
+    user=None,
+    **kwargs,
 ) -> str:
+    """`executor` is the pipeline path — the run's Executor carries provider+model+
+    user as one value (the single-executor invariant). The loose provider/model/user
+    kwargs stay for callers outside a run (llm_check, the config check endpoint)."""
+    if executor is not None:
+        return executor.complete(prompt=prompt, messages=messages, **kwargs)
     return get_client(provider, user=user, model=model).complete(
         prompt=prompt, messages=messages, **kwargs
     )
 
 
 def stream(
-    prompt=None, *, messages=None, provider=None, model=None, user=None, **kwargs
+    prompt=None,
+    *,
+    messages=None,
+    executor=None,
+    provider=None,
+    model=None,
+    user=None,
+    **kwargs,
 ):
+    if executor is not None:
+        return executor.stream(prompt=prompt, messages=messages, **kwargs)
     return get_client(provider, user=user, model=model).stream(
         prompt=prompt, messages=messages, **kwargs
     )

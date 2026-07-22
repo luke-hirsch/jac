@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from llm_connector.catalog import CATALOG, models_for
+from llm_connector.catalog import CATALOG, knobs_for, models_for
 from llm_connector.client import LLMClient
 from llm_connector.conf import HIRSCHAI_PROVIDER
 from llm_connector.models import LLMConfig, LLMRequestLog, Provider
@@ -73,6 +73,7 @@ class ExecutorListView(APIView):
                 "default": not commercial_default,
                 "models": [],
                 "modes": ["standard"],
+                "knobs": {},
             }
         ]
         for provider in CATALOG:
@@ -87,6 +88,7 @@ class ExecutorListView(APIView):
                     "default": bool(row and row.default and row.has_api_key),
                     "models": models_for(provider),
                     "modes": ["standard", "high"],
+                    "knobs": knobs_for(provider),
                 }
             )
         return Response(rows)

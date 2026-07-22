@@ -136,29 +136,32 @@ class EnsureDossierTests(TestCase):
         self.prof.answers_updated_at = timezone.now()
         self.prof.save()
 
+    # ensure_dossier takes the run's executor since the single-executor rework;
+    # `spa.distill.complete` is patched, so a sentinel object suffices here.
+
     def test_builds_and_caches(self):
         with patch("spa.distill.complete", return_value="Dossier text.") as m:
-            d1 = self.prof.ensure_dossier()
-            d2 = self.prof.ensure_dossier()
+            d1 = self.prof.ensure_dossier(object())
+            d2 = self.prof.ensure_dossier(object())
         self.assertEqual(d1, "Dossier text.")
         self.assertEqual(d2, "Dossier text.")
         m.assert_called_once()  # second call serves the cache
 
     def test_rebuilds_when_answers_change(self):
         with patch("spa.distill.complete", return_value="v1"):
-            self.prof.ensure_dossier()
+            self.prof.ensure_dossier(object())
         self.prof.answers = {"values": "craftsmanship"}
         self.prof.answers_updated_at = timezone.now() + timezone.timedelta(seconds=1)
         self.prof.save()
         with patch("spa.distill.complete", return_value="v2") as m:
-            d = self.prof.ensure_dossier()
+            d = self.prof.ensure_dossier(object())
         self.assertEqual(d, "v2")
         m.assert_called_once()
 
     def test_no_answers_returns_empty_without_call(self):
         prof = PersonalityProfile.objects.get(user=User.objects.create_user("noans"))
         with patch("spa.distill.complete") as m:
-            self.assertEqual(prof.ensure_dossier(), "")
+            self.assertEqual(prof.ensure_dossier(object()), "")
         m.assert_not_called()
 
     def test_feeds_db_resolved_labels_into_the_prompt(self):
@@ -170,7 +173,7 @@ class EnsureDossierTests(TestCase):
         prof.answers_updated_at = timezone.now()
         prof.save()
         with patch("spa.distill.complete", return_value="D") as m:
-            prof.ensure_dossier(user=prof.user)
+            prof.ensure_dossier(object())
         prompt = m.call_args.kwargs["prompt"]
         self.assertIn(_PROMPTS["flow"], prompt)
         self.assertIn("writing code", prompt)
@@ -182,26 +185,37 @@ class EnsureDossierTests(TestCase):
 
 
 class PersonalityDistillerTests(TestCase):
+    # The distiller takes the run's executor since the single-executor rework;
+    # `spa.distill.complete` is patched, so a sentinel object suffices here.
+
     def test_empty_answers_skips_llm(self):
         with patch("spa.distill.complete") as m:
-            self.assertEqual(PersonalityDistiller({}).distill(), "")
-            self.assertEqual(PersonalityDistiller({"values": ""}).distill(), "")
+            self.assertEqual(PersonalityDistiller({}, executor=object()).distill(), "")
+            self.assertEqual(
+                PersonalityDistiller({"values": ""}, executor=object()).distill(), ""
+            )
         m.assert_not_called()
 
     def test_returns_stripped_prose(self):
         with patch("spa.distill.complete", return_value="  A sketch.  ") as m:
-            out = PersonalityDistiller({"values": "openness"}).distill()
+            out = PersonalityDistiller(
+                {"values": "openness"}, executor=object()
+            ).distill()
         self.assertEqual(out, "A sketch.")
         m.assert_called_once()
 
     def test_failure_returns_empty(self):
         with _muted(), patch("spa.distill.complete", side_effect=RuntimeError("x")):
-            self.assertEqual(PersonalityDistiller({"values": "openness"}).distill(), "")
+            self.assertEqual(
+                PersonalityDistiller({"values": "openness"}, executor=object()).distill(),
+                "",
+            )
 
     def test_labels_resolve_the_prompt(self):
         with patch("spa.distill.complete", return_value="D") as m:
             PersonalityDistiller(
-                {"q1": "an answer"}, labels={"q1": "A real question?"}
+                {"q1": "an answer"}, labels={"q1": "A real question?"},
+                executor=object(),
             ).distill()
         prompt = m.call_args.kwargs["prompt"]
         self.assertIn("A real question?", prompt)
@@ -209,7 +223,9 @@ class PersonalityDistillerTests(TestCase):
 
     def test_missing_label_falls_back_to_slug(self):
         with patch("spa.distill.complete", return_value="D") as m:
-            PersonalityDistiller({"orphan": "an answer"}, labels={}).distill()
+            PersonalityDistiller(
+                {"orphan": "an answer"}, labels={}, executor=object()
+            ).distill()
         self.assertIn("orphan", m.call_args.kwargs["prompt"])
 
 
@@ -265,15 +281,33 @@ class PersonalityAPITests(APITestCase):
         prof = PersonalityProfile.objects.get(user=self.user)
         self.assertNotEqual(prof.dossier, "hacked")
 
+    # The rebuild view resolves an executor from optional body {provider, model}
+    # ([fullstack]-llm-config-rework repair 3); `spa.views.resolve_executor` is the
+    # patch target — red until the view imports it.
+
     def test_rebuild_endpoint_force_distils(self):
         prof = PersonalityProfile.objects.get(user=self.user)
         prof.answers = {"values": "x"}
         prof.answers_updated_at = timezone.now()
         prof.save()
-        with patch("spa.distill.complete", return_value="Fresh dossier."):
+        with (
+            patch("spa.views.resolve_executor", return_value=object()),
+            patch("spa.distill.complete", return_value="Fresh dossier."),
+        ):
             r = self.client.post("/api/spa/personality/rebuild/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["dossier"], "Fresh dossier.")
+
+    def test_rebuild_maps_executor_error_to_400(self):
+        from llm_connector.conf import ExecutorError
+
+        with patch(
+            "spa.views.resolve_executor",
+            side_effect=ExecutorError("No executor available."),
+        ):
+            r = self.client.post("/api/spa/personality/rebuild/")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("provider", r.data)
 
 
 # ===========================================================================

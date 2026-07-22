@@ -1,12 +1,3 @@
-/**
- * Pure editing logic for the application's tailored-CV JSON (`cv_content`).
- *
- * Shape: `{section: [{id, label, relevance_score, deselected?}]}` — plural section keys
- * ("jobs"), ids "<singular>:<pk>" ("job:12"), entries in ranked order (the order IS the rank;
- * backend jac/generation_result.py). Display joins the ids against the live career DB
- * (`/api/jac/cv/entries/`); the stored label is the fallback for rows since deleted there.
- * All operations are immutable — they return a new CvContent.
- */
 import type { CvEntry } from "@/lib/queries/generations";
 import type {
   CertificationRow,
@@ -86,11 +77,6 @@ export function dateRange(
   return `${started ?? "?"}–${ended ?? "present"}`;
 }
 
-/**
- * One-line label per entry — mirrors the backend labelers (jac/generation_result.py) so a
- * manually built CV reads like a generated one. Divergence: the skill label omits the
- * "| domains: …" suffix (the API row carries domain pks, not names — not worth a lookup here).
- */
 export function labelFor(section: SectionKey, row: AnyRow): string {
   switch (section) {
     case "skills": {
@@ -193,14 +179,16 @@ export function togglePin(
   );
   return { ...content, [section]: next };
 }
+export function pinnedIds(content: CvContent): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(content)) {
+    for (const e of list) {
+      if (e.pinned && !out.includes(e.id)) out.push(e.id);
+    }
+  }
+  return out;
+}
 
-/**
- * Carry the user's pins from the current content into a fresh generation result.
- * Entries the new run also selected keep the run's rank/score and gain `pinned`;
- * pinned entries the run dropped are re-appended at the section tail (the run's
- * order is the new rank — an unselected pin has no rank claim). Sections the run
- * returned nothing for keep their pinned entries too.
- */
 export function mergePinned(current: CvContent, next: CvContent): CvContent {
   const out: CvContent = {};
   for (const [section, list] of Object.entries(next)) out[section] = [...list];
@@ -211,7 +199,10 @@ export function mergePinned(current: CvContent, next: CvContent): CvContent {
     for (const pin of pinned) {
       const i = target.findIndex((e) => e.id === pin.id);
       if (i >= 0) target[i] = { ...target[i], pinned: true };
-      else target.push({ ...pin });
+      else {
+        const { warning: _stale, ...keep } = pin;
+        target.push({ ...keep });
+      }
     }
     out[section] = target;
   }
@@ -249,11 +240,17 @@ export function addEntry(
   const list = content[section] ?? [];
   const id = entryId(section, row.id);
   if (list.some((e) => e.id === id)) return content;
+
   return {
     ...content,
     [section]: [
       ...list,
-      { id, label: labelFor(section, row), relevance_score: null },
+      {
+        id,
+        label: labelFor(section, row),
+        relevance_score: null,
+        pinned: true,
+      },
     ],
   };
 }

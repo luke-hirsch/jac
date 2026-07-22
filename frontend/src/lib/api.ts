@@ -3,6 +3,14 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null;
 }
 
+/** Same CSRF discipline `api()` applies to unsafe methods, for callers that need a
+ *  raw `fetch` instead of `api()` — e.g. reading a streamed response body directly
+ *  (the chat SSE endpoint). A raw fetch missing this header 403s on session auth. */
+export function csrfHeaders(): Record<string, string> {
+  const token = readCookie("csrftoken");
+  return token ? { "X-CSRFToken": token } : {};
+}
+
 export class ApiError extends Error {
   status: number;
   data: unknown;

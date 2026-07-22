@@ -6,6 +6,7 @@ LLMConfig is user+provider+key+default, unique per (user, provider); the tower i
 a system-owned row; models are per-run picks validated against the catalog.
 """
 
+import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -446,3 +447,60 @@ class LLMConfigAdminFormTests(TestCase):
         form = LLMConfigAdminForm(self._form_data(api_key="sk-new"), instance=cfg)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.save().api_key, "sk-new")
+
+
+@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
+class KnobSpecTests(TestCase):
+    """[fullstack]-model-knobs: the knob spec is DATA in the catalog — bounds,
+    choices, and exclusions validated once (`validate_params`), mapped mechanically
+    by the adapters, advertised by the executors endpoint."""
+
+    def _validate(self, provider, params):
+        from llm_connector.catalog import validate_params
+
+        return validate_params(provider, params)
+
+    def test_every_catalog_provider_has_a_knob_spec(self):
+        from llm_connector.catalog import CATALOG, KNOBS
+
+        self.assertEqual(set(KNOBS), set(CATALOG))
+        for spec in KNOBS.values():
+            self.assertIn("effort", spec)
+            self.assertTrue(spec["effort"]["choices"])
+        # temperature is provider-specific: anthropic takes it, the OpenAI catalog is
+        # reasoning-only (gpt-5.6-* reject a custom temperature) so it has none.
+        self.assertIn("temperature", KNOBS["anthropic"])
+        self.assertNotIn("temperature", KNOBS["openai"])
+        self.assertLess(
+            KNOBS["anthropic"]["temperature"]["min"],
+            KNOBS["anthropic"]["temperature"]["max"],
+        )
+
+    def test_empty_params_are_always_valid(self):
+        self.assertEqual(self._validate("anthropic", {}), [])
+        self.assertEqual(self._validate("ollama", {}), [])
+
+    def test_valid_values_pass(self):
+        self.assertEqual(self._validate("anthropic", {"effort": "high"}), [])
+        self.assertEqual(self._validate("anthropic", {"temperature": 0.5}), [])
+        self.assertEqual(self._validate("openai", {"effort": "low"}), [])
+
+    def test_unknown_knob_and_bad_values_are_caught(self):
+        self.assertTrue(self._validate("anthropic", {"top_k": 5}))
+        self.assertTrue(self._validate("anthropic", {"effort": "max"}))
+        self.assertTrue(self._validate("anthropic", {"temperature": 9}))
+        self.assertTrue(self._validate("anthropic", {"temperature": True}))  # bool ≠ number
+        # OpenAI is reasoning-only — temperature is not a knob it offers.
+        self.assertTrue(self._validate("openai", {"temperature": 0.5}))
+
+    def test_exclusions_come_from_the_spec(self):
+        problems = self._validate(
+            "anthropic", {"effort": "high", "temperature": 0.3}
+        )
+        self.assertTrue(any("cannot be combined" in p for p in problems))
+
+    def test_no_knob_providers_reject_any_params(self):
+        self.assertTrue(self._validate("ollama", {"effort": "high"}))
+
+    def test_non_dict_params_are_caught(self):
+        self.assertTrue(self._validate("anthropic", "effort=high"))

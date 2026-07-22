@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { toast } from "sonner";
+import { ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -13,12 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+
 import {
-  aliasesForGrade,
-  pinnedAliasFor,
-  useGradePins,
-  useLLMAliases,
+  useExecutors,
+  type Mode,
+  defaultExecutorRow,
+  executorDisabledReason,
+  defaultModeFor,
+  defaultModelFor,
+  providerLabel,
 } from "@/lib/queries/llm";
+
 import {
   runToApplicationPatch,
   useUpdateApplication,
@@ -28,10 +34,10 @@ import {
   aiShareBadge,
   groundingBadge,
   isStalePending,
+  knobParams,
   pendingAgeSeconds,
   qualityBadge,
   useCreateGeneration,
-  type Grade,
   type RunState,
 } from "@/lib/queries/generations";
 import { type SocketStatus } from "@/lib/ws";
@@ -44,6 +50,19 @@ function toneClass(tone: "green" | "amber" | "muted") {
       ? "bg-amber-100 text-amber-900"
       : "bg-muted text-muted-foreground";
 }
+
+// Radix Select forbids an empty-string item value; this sentinel = "no knob,
+// let the model default decide". Mapped back to "" before it enters the pick.
+const KNOB_DEFAULT = "__default__";
+
+// knobs: generic per-knob values keyed by the spec name (effort/temperature);
+// "" means unset. Reset to {} on every executor pick.
+type Pick = {
+  provider: string;
+  model: string;
+  mode: Mode;
+  knobs: Record<string, string>;
+};
 
 export function GeneratePanel({
   app,
@@ -70,30 +89,38 @@ export function GeneratePanel({
   applied: boolean;
   onApplied: () => void;
 }) {
-  const aliases = useLLMAliases();
-  const pins = useGradePins();
+  const executors = useExecutors();
+  const rows = executors.data ?? [];
+  const [picked, setPicked] = useState<Pick | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const create = useCreateGeneration();
   const update = useUpdateApplication();
-  const [grade, setGrade] = useState<Grade | "">("");
-  const [alias, setAlias] = useState("default");
-  const [verifyGrounding, setVerifyGrounding] = useState(false);
-  const [personalParagraph, setPersonalParagraph] = useState(false);
 
-  // Only aliases that can actually run the chosen grade are offered (adjust-state-
-  // during-render, same pattern as the content card's server re-seed): picking a
-  // grade snaps the model to the user's pin for it when one fits; a pick that a
-  // grade change invalidated is snapped to the first fitting one.
-  const allowed = aliasesForGrade(aliases.data ?? [], grade);
-  const aliasFits = allowed.some((a) => a.alias === alias);
-  const pinned = pinnedAliasFor(grade, pins.data, allowed);
-  const [prevGrade, setPrevGrade] = useState(grade);
-  if (grade !== prevGrade) {
-    setPrevGrade(grade);
-    if (pinned && pinned !== alias) setAlias(pinned);
-  } else if (aliases.data && !aliasFits && allowed.length > 0) {
-    setAlias(pinned ?? allowed[0].alias);
+  // Preselect the backend default once rows arrive; never overwrite an explicit pick.
+  if (picked === null && rows.length > 0) {
+    const def = defaultExecutorRow(rows);
+    if (def)
+      setPicked({
+        provider: def.provider,
+        model: defaultModelFor(def),
+        mode: defaultModeFor(def),
+        knobs: {},
+      });
   }
-  const selected = aliases.data?.find((a) => a.alias === alias);
+
+  const pickedRow = rows.find((r) => r.provider === picked?.provider) ?? null;
+  // Never yank: a refetch that disables the picked row keeps the selection and
+  // surfaces the reason on the Generate button instead.
+  const pickedReason = pickedRow ? executorDisabledReason(pickedRow) : null;
+  const noExecutors =
+    executors.data != null &&
+    rows.every((r) => executorDisabledReason(r) !== null);
+
+  // A real personal paragraph is possible ⇔ a commercial (web-search-capable) pick.
+  const capable = pickedRow != null && !pickedRow.self_hosted;
+  const personality = usePersonality(capable);
+  const hint = personalityHint(capable, personality.data);
 
   const running =
     activeRunId != null &&
@@ -104,20 +131,34 @@ export function GeneratePanel({
     runCreatedAt != null &&
     isStalePending(runState.status, runCreatedAt, now);
 
-  const personality = usePersonality(personalParagraph);
-  const hint = personalityHint(personalParagraph, personality.data);
-
   async function onGenerate() {
+    if (!picked) return;
     try {
       const run = await create.mutateAsync({
         job_application: app.id,
-        grade,
-        alias,
-        verify_grounding: verifyGrounding,
-        personal_paragraph: personalParagraph,
+        // The toggle only ever offers a row's modes (standard/high); manual never
+        // reaches here. Narrow for GenerationForm's non-manual mode type.
+        mode: picked.mode === "manual" ? "standard" : picked.mode,
+        provider: picked.provider,
+        model: picked.model, // "" for HirschAI → omitted by toPayload
+        params: knobParams(picked.knobs), // blanks omitted; {} → omitted by toPayload
       });
       onRunSelected(run.id);
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 400) {
+        const data = e.data as {
+          mode?: string[];
+          provider?: string[];
+          params?: string[];
+        };
+        const msg = data.mode?.[0] ?? data.provider?.[0] ?? data.params?.[0];
+        if (msg) {
+          toast.error(msg);
+          // The panel falls into its own offline state on the next rows read.
+          if (msg.startsWith("No executor available")) executors.refetch();
+          return;
+        }
+      }
       toast.error("Could not start generation");
     }
   }
@@ -126,7 +167,10 @@ export function GeneratePanel({
     if (!runState.result) return;
     onApplied(); // arm the fresh-highlight before the refetched content lands
     update.mutate(
-      { id: app.id, body: runToApplicationPatch(runState.result, app.cv_content) },
+      {
+        id: app.id,
+        body: runToApplicationPatch(runState.result, app.cv_content),
+      },
       {
         onSuccess: () => toast.success("Run applied to the application"),
         onError: () => toast.error("Could not apply the run"),
@@ -147,89 +191,235 @@ export function GeneratePanel({
         <CardTitle>Generate</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-1">
-            <Label>Grade</Label>
-            <Select
-              value={grade || "auto"}
-              onValueChange={(v) => setGrade(v === "auto" ? "" : (v as Grade))}
+        {noExecutors ? (
+          <p className="text-sm text-muted-foreground">
+            No AI is available right now — HirschAI is offline and no commercial
+            key is configured. Build the application by hand below: the content
+            card{" "}
+            <a
+              href="#curate"
+              className="underline hover:no-underline"
+              onClick={(e) => {
+                e.preventDefault();
+                document
+                  .getElementById("curate")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
             >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Auto (model strength)</SelectItem>
-                <SelectItem value="light">Light</SelectItem>
-                <SelectItem value="standard">Standard</SelectItem>
-                <SelectItem value="strong">Strong</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label>Model</Label>
-            <Select
-              value={aliasFits ? alias : ""}
-              onValueChange={setAlias}
-              disabled={allowed.length === 0}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue
-                  placeholder={
-                    aliases.isLoading ? "Loading models…" : "No fitting model"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {allowed.map((a) => (
-                  <SelectItem key={a.alias} value={a.alias}>
-                    {a.alias} — {a.model} ({a.strength})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <label className="flex items-center gap-2 pb-2 text-sm">
-            <Checkbox
-              checked={verifyGrounding}
-              onCheckedChange={(v) => setVerifyGrounding(v === true)}
-            />
-            Verify grounding
-          </label>
-          <label className="flex items-center gap-2 pb-2 text-sm">
-            <Checkbox
-              checked={personalParagraph}
-              onCheckedChange={(v) => setPersonalParagraph(v === true)}
-            />
-            Personal paragraph
-          </label>
-          <Button
-            onClick={onGenerate}
-            disabled={running || create.isPending || !aliasFits}
-          >
-            {running
-              ? `Generating… ${runState.stage || "queued"} · ${ageSeconds}s`
-              : "Generate"}
-          </Button>
-          {running && (
-            <Button variant="outline" onClick={onAbort} disabled={aborting}>
-              {aborting ? "Aborting…" : "Abort"}
-            </Button>
-          )}
-        </div>
+              starts you from your full career DB
+            </a>
+            .
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1">
+              <Label>AI</Label>
+              <Select
+                value={picked?.provider ?? ""}
+                onValueChange={(provider) => {
+                  const row = rows.find((r) => r.provider === provider);
+                  if (row)
+                    setPicked({
+                      provider: row.provider,
+                      model: defaultModelFor(row),
+                      mode: defaultModeFor(row),
+                      knobs: {}, // reset knobs on every executor pick
+                    });
+                }}
+              >
+                <SelectTrigger className="w-64">
+                  <SelectValue placeholder="Pick an executor" />
+                </SelectTrigger>
+                <SelectContent>
+                  {rows.map((r) => {
+                    const reason = executorDisabledReason(r);
+                    return (
+                      <SelectItem
+                        key={r.provider}
+                        value={r.provider}
+                        disabled={reason !== null}
+                      >
+                        {r.label}
+                        {r.default ? " · default" : ""}
+                        {reason ? ` · ${reason}` : ""}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
 
-        {grade && allowed.length === 0 && aliases.data && (
-          <p className="text-sm text-amber-700">
-            {grade === "light"
-              ? "No configured model can embed — the light rung needs an embedding-capable (Ollama) config."
-              : `No configured model is ${grade} enough for this grade — add one under Account → LLM.`}
-          </p>
+            {pickedRow && !pickedRow.self_hosted && (
+              <>
+                <div className="space-y-1">
+                  <Label>Model</Label>
+                  <Select
+                    value={picked?.model ?? ""}
+                    onValueChange={(model) =>
+                      setPicked((p) => (p ? { ...p, model } : p))
+                    }
+                  >
+                    <SelectTrigger className="w-56">
+                      <SelectValue placeholder="Model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pickedRow.models.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Mode</Label>
+                  <div className="flex gap-1">
+                    {pickedRow.modes.map((m) => (
+                      <Button
+                        key={m}
+                        type="button"
+                        size="sm"
+                        variant={picked?.mode === m ? "default" : "outline"}
+                        onClick={() =>
+                          setPicked((p) => (p ? { ...p, mode: m } : p))
+                        }
+                      >
+                        {m}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                {Object.keys(pickedRow.knobs).length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="self-end pb-2 text-sm text-muted-foreground hover:text-primary"
+                      onClick={() => setShowAdvanced((s) => !s)}
+                    >
+                      {showAdvanced ? "Hide advanced" : "Advanced settings"}
+                    </button>
+                    {showAdvanced &&
+                      Object.entries(pickedRow.knobs).map(([name, spec]) => {
+                        const value = picked?.knobs[name] ?? "";
+                        const setKnob = (v: string) =>
+                          setPicked((p) => {
+                            if (!p) return p;
+                            const next = { ...p.knobs, [name]: v };
+                            // Setting a knob clears any mutually-exclusive one
+                            // (excludes is declared one-directionally) so a
+                            // disabled control never submits a stale value the
+                            // server would 400 on.
+                            if (v)
+                              for (const [other, os] of Object.entries(
+                                pickedRow.knobs,
+                              ))
+                                if (
+                                  other !== name &&
+                                  ((spec.excludes ?? []).includes(other) ||
+                                    (os.excludes ?? []).includes(name))
+                                )
+                                  next[other] = "";
+                            return { ...p, knobs: next };
+                          });
+                        // A choices knob (effort) → a Select with a "model
+                        // default" blank; a bounded knob (temperature) → a
+                        // numeric input, disabled while any excluding knob is set.
+                        if (spec.choices)
+                          return (
+                            <div key={name} className="space-y-1">
+                              <Label className="capitalize">{name}</Label>
+                              <Select
+                                value={value || KNOB_DEFAULT}
+                                onValueChange={(v) =>
+                                  setKnob(v === KNOB_DEFAULT ? "" : v)
+                                }
+                              >
+                                <SelectTrigger className="w-40">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={KNOB_DEFAULT}>
+                                    model default
+                                  </SelectItem>
+                                  {spec.choices.map((c) => (
+                                    <SelectItem
+                                      key={c}
+                                      value={c}
+                                      className="capitalize"
+                                    >
+                                      {c}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          );
+                        const blockedBy = (spec.excludes ?? []).filter(
+                          (other) => (picked?.knobs[other] ?? "") !== "",
+                        );
+                        const disabled = blockedBy.length > 0;
+                        return (
+                          <div key={name} className="space-y-1">
+                            <Label className="capitalize">{name}</Label>
+                            <Input
+                              type="number"
+                              className="w-28"
+                              min={spec.min}
+                              max={spec.max}
+                              step={0.1}
+                              placeholder={
+                                spec.min != null
+                                  ? `${spec.min}–${spec.max}`
+                                  : undefined
+                              }
+                              value={value}
+                              disabled={disabled}
+                              onChange={(e) => setKnob(e.target.value)}
+                            />
+                            {disabled && (
+                              <p className="text-xs text-muted-foreground">
+                                unset {blockedBy.join(", ")} to use
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </>
+                )}
+              </>
+            )}
+
+            <Button
+              onClick={onGenerate}
+              disabled={
+                running || create.isPending || !picked || pickedReason != null
+              }
+            >
+              {running
+                ? `Generating… ${runState.stage || "queued"} · ${ageSeconds}s`
+                : "Generate"}
+            </Button>
+            {!running && pickedReason && (
+              <span className="text-sm text-amber-700">
+                {providerLabel(rows, picked!.provider)} is {pickedReason}.
+              </span>
+            )}
+
+            {running && (
+              <Button variant="outline" onClick={onAbort} disabled={aborting}>
+                {aborting ? "Aborting…" : "Abort"}
+              </Button>
+            )}
+          </div>
         )}
-        {personalParagraph && selected && !selected.supports_web_search && (
+
+        {pickedRow && !pickedRow.self_hosted && (
           <p className="text-xs text-muted-foreground">
-            {selected.alias} cannot web-search — the personal paragraph will
-            come out as a stub to replace by hand.
+            High mode selects holistically and sees the posting under an
+            always-on audit; standard is the lighter, label-driven rung.
           </p>
         )}
+
         {hint && <p className="text-xs text-amber-700">{hint}</p>}
 
         {staleQueue && (
@@ -259,9 +449,13 @@ export function GeneratePanel({
 
         {result && ai && grounding && (
           <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/40 p-2 text-sm">
-            <Badge variant="outline">
-              {result.meta.grade} · {result.meta.alias}
-            </Badge>
+            <span
+              className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+              title="How this run was produced."
+            >
+              {result.meta.mode} · {providerLabel(rows, result.meta.provider)}
+              {result.meta.model ? ` · ${result.meta.model}` : ""}
+            </span>
             <span
               className={`rounded px-2 py-0.5 text-xs ${toneClass(ai.tone)}`}
             >
@@ -297,7 +491,7 @@ export function GeneratePanel({
             <span className="text-xs text-muted-foreground">
               {applied
                 ? "Result is in the application below."
-                : "Apply to load this result into the application below."}
+                : "Apply replaces the unpinned content below — pinned entries survive."}
             </span>
             <Button
               size="sm"
@@ -326,8 +520,8 @@ export function GeneratePanel({
                       }`}
                     >
                       <Badge variant="outline">{r.status}</Badge>
-                      <span>
-                        {r.grade || "auto"} · {r.alias}
+                      <span className="text-xs text-muted-foreground">
+                        {r.mode} · {providerLabel(rows, r.provider)}
                       </span>
                       <span className="ml-auto text-xs text-muted-foreground">
                         {new Date(r.created_at).toLocaleString()}

@@ -148,7 +148,9 @@ def generate_run(run_id: int) -> None:
             application = run.job_application
             user = application.user
             jp = application.posting
-            executor = Executor(run.provider or "ollama", run.model or None, user)
+            executor = Executor(
+                run.provider or "ollama", run.model or None, user, run.params or None
+            )
             mode = run.mode or Mode.standard
 
             # 1. Tailor the CV.
@@ -195,6 +197,7 @@ def generate_run(run_id: int) -> None:
             },
             "cv": serialize_cv_selection(cv),
             "cover_letter": letter,
+            "params": run.params or {},
         }
 
         # Terminal write, conditional on still running: a cancel that landed mid-pipeline

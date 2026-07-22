@@ -19,11 +19,14 @@ class Executor:
     provider: str
     model: str | None = None
     user: object = None
+    params: dict | None = None
 
     def _client(self) -> LLMClient:
         return LLMClient(self.provider, user=self.user, model=self.model)
 
     def complete(self, prompt=None, *, messages=None, **kwargs) -> str:
+        if self.params:
+            kwargs.setdefault("params", self.params)
         return self._client().complete(prompt=prompt, messages=messages, **kwargs)
 
     def stream(self, prompt=None, *, messages=None, **kwargs):

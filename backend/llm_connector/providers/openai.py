@@ -1,4 +1,3 @@
-import re
 from collections.abc import Generator
 
 from django.core.exceptions import ImproperlyConfigured
@@ -6,16 +5,10 @@ from django.core.exceptions import ImproperlyConfigured
 from ..base import LLMAdapter
 from ..registry import register
 
-_REASONING_MODEL_RE = re.compile(r"^o\d")
-
 
 @register("openai")
 class OpenAIAdapter(LLMAdapter):
-    """Adapter for the OpenAI Chat Completions API.
-
-    Handles reasoning models (o1, o3, …) transparently: uses max_completion_tokens
-    instead of max_tokens and forwards reasoning_effort when configured.
-    """
+    """Adapter for the OpenAI Chat Completions API."""
 
     supports_web_search = True
 
@@ -35,22 +28,20 @@ class OpenAIAdapter(LLMAdapter):
             )
         base_url = config.get("url")
         self._client = _openai.OpenAI(api_key=api_key, base_url=base_url)
-        self._model = config.get("model", "gpt-4o")
+        self._model = config.get("model", "gpt-5.6-luna")
         self._max_tokens = config.get("max_tokens")
         self._reasoning_effort = config.get("reasoning_effort")
 
-    def _is_reasoning_model(self) -> bool:
-        """True when the configured model name matches the o1/o3/… naming pattern."""
-        return bool(_REASONING_MODEL_RE.match(self._model))
+    def map_params(self, params: dict) -> dict:
+        out = {}
+        if params.get("effort"):
+            out["reasoning_effort"] = params["effort"]
+        return out
 
     def _apply_model_params(self, params: dict) -> None:
-        """Inject token-limit and reasoning-effort params appropriate for the model family."""
         if self._max_tokens:
-            key = (
-                "max_completion_tokens" if self._is_reasoning_model() else "max_tokens"
-            )
-            params.setdefault(key, self._max_tokens)
-        if self._reasoning_effort and self._is_reasoning_model():
+            params.setdefault("max_completion_tokens", self._max_tokens)
+        if self._reasoning_effort:
             params.setdefault("reasoning_effort", self._reasoning_effort)
 
     def complete(self, messages: list[dict], **kwargs) -> str:
@@ -82,7 +73,9 @@ class OpenAIAdapter(LLMAdapter):
         gpt-5 with 'minimal' reasoning is unsupported).
         """
         effort = kwargs.pop("reasoning_effort", self._reasoning_effort)
-        kwargs.pop("max_uses", None)  # Anthropic-only search cap; not a Responses-API param
+        kwargs.pop(
+            "max_uses", None
+        )  # Anthropic-only search cap; not a Responses-API param
         params: dict = dict(
             model=self._model,
             input=messages,  # Responses API takes `input`, not `messages`

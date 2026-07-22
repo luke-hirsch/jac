@@ -91,13 +91,15 @@ export function dossierState(
   return "fresh";
 }
 
-/** Generate-panel nag: ticking "Personal paragraph" with zero personality answers
- *  guarantees a stub — say so before the run, not after. Silent while loading. */
+/** Generate-panel nag: a capable (commercial) executor that could write a real
+ *  personal paragraph, but zero personality answers, guarantees a stub — say so
+ *  before the run, not after. Silent while loading or when the pick can't produce a
+ *  real paragraph anyway (HirschAI always stubs; its own muted line covers that). */
 export function personalityHint(
-  personalParagraph: boolean,
+  capable: boolean,
   row: PersonalityRow | undefined,
 ): string | null {
-  if (!personalParagraph || !row) return null;
+  if (!capable || !row) return null;
   if (answeredCount(row.answers) > 0) return null;
   return (
     "No personality answers yet — the personal paragraph will come out as a stub. " +
@@ -131,13 +133,10 @@ export function useUpdateAnswers() {
 export function useRebuildDossier() {
   const qc = useQueryClient();
   return useMutation({
-    // The distiller runs on whatever alias the user picked (any model can distil —
-    // no grade gate, unlike generation). Defaults to the settings "default" alias.
-    mutationFn: (alias: string = "default") =>
-      api<{ dossier: string }>(
-        `${URL}rebuild/?alias=${encodeURIComponent(alias)}`,
-        { method: "POST" },
-      ),
+    // Any executor can distil — no grade gate, unlike generation. Blank body =
+    // the user's default executor ([fullstack]-chat-assistant-rework can add a pick).
+    mutationFn: () =>
+      api<{ dossier: string }>(`${URL}rebuild/`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }

@@ -1,16 +1,12 @@
-from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from llm_connector.models import LLMConfig, LLMRequestLog
-from llm_connector.validators import validate_safe_llm_url
+from llm_connector.models import LLMConfig, LLMRequestLog, Provider
 
 
 class LLMConfigSerializer(serializers.ModelSerializer):
-    """Per-user LLM alias config. `api_key` is write-only — submitting a value
-    encrypts and replaces the stored key; omitting it (or sending blank) leaves
-    the existing key untouched, mirroring the admin form's UX so the SPA can
-    PATCH metadata without having to re-enter the secret.
-    """
+    """One credential per commercial provider. `api_key` is write-only; omitting it
+    on PATCH keeps the stored key. The tower is not configurable here — it is the
+    operator's system row."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     api_key = serializers.CharField(
@@ -26,12 +22,8 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "user",
-            "alias",
             "provider",
-            "model",
-            "url",
-            "max_tokens",
-            "extra",
+            "default",
             "api_key",
             "has_api_key",
             "created_at",
@@ -40,10 +32,16 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "has_api_key", "created_at", "updated_at")
         validators = [
             serializers.UniqueTogetherValidator(
-                queryset=LLMConfig.objects.all(),
-                fields=("user", "alias"),
+                queryset=LLMConfig.objects.all(), fields=("user", "provider")
             )
         ]
+
+    def validate_provider(self, value):
+        if value == Provider.ollama:
+            raise serializers.ValidationError(
+                "HirschAI is built in — configure commercial providers only."
+            )
+        return value
 
     def create(self, validated_data):
         api_key = validated_data.pop("api_key", "")
@@ -62,20 +60,6 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
-
-    # providers whose adapter POSTs to a user-supplied url (SSRF surface)
-    _URL_PROVIDERS = {"custom", "ollama"}
-
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-        provider = attrs.get("provider") or getattr(self.instance, "provider", None)
-        url = attrs.get("url", getattr(self.instance, "url", ""))
-        if provider in self._URL_PROVIDERS and url:
-            try:
-                validate_safe_llm_url(url)
-            except DjangoValidationError as exc:
-                raise serializers.ValidationError({"url": list(exc.messages)})
-        return attrs
 
 
 class LLMRequestLogSerializer(serializers.ModelSerializer):

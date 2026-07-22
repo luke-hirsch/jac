@@ -234,6 +234,9 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # A streaming LLM endpoint is the cheapest thing on the site to abuse — token
+    # budgets wait for open signup, this scoped rate is the backstop today.
+    "DEFAULT_THROTTLE_RATES": {"llm-chat": "20/min"},
 }
 
 SPECTACULAR_SETTINGS = {

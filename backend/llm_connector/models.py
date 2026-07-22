@@ -88,6 +88,13 @@ class LLMConfig(models.Model):
                 self.url
             )  # raises ValidationError on an internal host
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.default:
+            LLMConfig.objects.filter(user=self.user, default=True).exclude(
+                pk=self.pk
+            ).update(default=False)
+
 
 class LLMRequestLog(models.Model):
     user = models.ForeignKey(

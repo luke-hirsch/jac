@@ -1,11 +1,10 @@
 /**
  * Pure helpers behind the letter refinement UI ([fullstack]-letter-refine-chat):
- * the selection popover's preset rewrite styles, the standard+ alias gate for the
- * ephemeral chat, and the request/seed builders. Everything DOM-free and unit-tested;
- * the components stay thin.
+ * the selection popover's preset rewrite styles and the request/seed builders.
+ * Chat-assistant-rework: the endpoint streams SSE deltas and the request carries
+ * an explicit executor pick again (blank = the user's default executor). Everything
+ * DOM-free and unit-tested; the components stay thin.
  */
-import type { RunSummary } from "@/lib/queries/applications";
-import type { AliasInfo } from "@/lib/queries/llm";
 
 export type ChatRole = "user" | "assistant";
 export type ChatMessage = { role: ChatRole; content: string };
@@ -36,29 +35,6 @@ export const REWRITE_STYLES: RewriteStyle[] = [
   },
 ];
 
-/** Aliases capable of refinement chat — a light (1B) model can't chat usefully. */
-export function chatAliases(aliases: AliasInfo[]): AliasInfo[] {
-  return aliases.filter((a) => a.strength !== "light");
-}
-
-/**
- * Which model refinement defaults to: the latest DONE run's alias when it is configured
- * and standard+ (that's the model that wrote the letter — the old rewrite button silently
- * used "default" instead, which was the bug), else the first standard+ alias, else null
- * (chat hidden; the popover falls back to "default").
- */
-export function preferredRefineAlias(
-  aliases: AliasInfo[],
-  runs: RunSummary[],
-): string | null {
-  const capable = chatAliases(aliases);
-  for (const r of runs) {
-    if (r.status !== "done") continue;
-    if (capable.some((a) => a.alias === r.alias)) return r.alias;
-  }
-  return capable[0]?.alias ?? null;
-}
-
 /** Opening user message when a highlighted passage is handed to the chat. */
 export function seedDiscussion(selection: string): ChatMessage {
   return {
@@ -68,17 +44,49 @@ export function seedDiscussion(selection: string): ChatMessage {
 }
 
 export type ChatPayload = {
-  alias: string;
   body: string;
   messages: ChatMessage[];
+  provider?: string;
+  model?: string;
 };
 
 /** POST body for /applications/<pk>/chat/ — the draft body travels along so the model
- *  sees unsaved edits; nothing is persisted server-side. */
+ *  sees unsaved edits; nothing is persisted server-side. An explicit executor pick is
+ *  optional — omitted (or blank) means the server resolves the user's default. */
 export function chatPayload(
-  alias: string,
   body: string,
   messages: ChatMessage[],
+  pick: { provider: string; model: string } | null = null,
 ): ChatPayload {
-  return { alias, body, messages };
+  const p: ChatPayload = { body, messages };
+  if (pick?.provider) p.provider = pick.provider;
+  if (pick?.model) p.model = pick.model;
+  return p;
+}
+
+export type SseEvent = { delta?: string; done?: boolean; error?: string };
+
+/** One SSE line → event. Non-data lines (blank keepalives, comments) and broken
+ *  JSON both come back null so the caller can just skip them. */
+export function parseSseLine(line: string): SseEvent | null {
+  if (!line.startsWith("data:")) return null;
+  try {
+    return JSON.parse(line.slice("data:".length).trim()) as SseEvent;
+  } catch {
+    return null;
+  }
+}
+
+/** Client-side twin of the old server split: line-anchored 'REVISED BODY:', with
+ *  same-line content accepted. A mid-line mention (not at line start) never splits. */
+export function splitRevision(text: string): {
+  reply: string;
+  revision: string | null;
+} {
+  const m = /^[ \t]*REVISED BODY:[ \t]*\n?/m.exec(text);
+  if (!m) return { reply: text.trim(), revision: null };
+  return {
+    reply: text.slice(0, m.index).trim(),
+    revision: text.slice(m.index + m[0].length).trim() || null,
+  };
 }

@@ -136,14 +136,24 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > (`high` commercial-only); per-run model validated against the curated catalog
 > (`llm_connector/catalog.py` — the catalog IS the gate); `GET /api/llm/executors/` is the
 > SPA's single source; auto-run on application create (backend-side, never retro); entry pins
-> force-kept by every rung. **SPA phase = the current `to-do/` stack, in order:**
-> `[frontend]-model-first-generate-panel` (activated 2026-07-17: full contracts + red vitest
-> files on disk) → `[fullstack]-llm-config-tab-v2` (was `[frontend]`; now also carries the
-> backend repairs the rework missed — the user-facing `LLMConfigSerializer`/request-log
-> serializer still list dead columns and crash, and the spa dossier-rebuild view calls the
-> old `ensure_dossier(alias=…)` signature) → `[frontend]-manual-no-run-mode` →
+> force-kept by every rung. **SPA phase = the current `to-do/` stack, in order — ALL guides
+> activated (full contracts + tests on disk; 3–6 activated 2026-07-18):**
+> `[fullstack]-llm-config-rework` (the former generate-panel + config-tab guides, **merged
+> 2026-07-17** — one break, one branch, no frozen zones; step 1 carries every backend repair
+> the rework missed, now seven: dead-column config/request-log serializers (also break
+> `/api/schema/`), the module `complete()` helper silently **dropping the `executor=` kwarg**
+> all eleven pipeline/distill call sites pass (mis-routes every rung to the default executor +
+> crashes ollama's payload), chat passing `job_posting=` to a `posting_text=` class,
+> `_ai_share`'s eager `_REWRITE_TAX["instruct"]` fallback KeyError-ing every letter,
+> `LLMConfig.save()` never enforcing default exclusivity, and the spa dossier-rebuild view's
+> old `ensure_dossier(alias=…)` call) → `[frontend]-manual-no-run-mode` →
 > `[frontend]-entry-pins-ui` → `[fullstack]-model-knobs` → `[fullstack]-chat-assistant-rework`.
-> The SPA is knowingly broken until the first two land. The "current state" bullets above
+> Guides 3–6 shrank honestly at activation (pins UI/merge + manual seed already typed in the
+> cv-editor era — the guides spec only the real deltas); their acceptance tests are on disk
+> **skip-marked** with the guide slug (each guide's step 0 = unskip) so the active guide's
+> red set stays unambiguous: backend 16 red = exactly the step-1 repairs, frontend 6 red =
+> guide-2 libs, 31 backend + 18 frontend skips = guides 3–6.
+> The SPA is knowingly broken until the first guide lands. The "current state" bullets above
 > still describe the alias/grade era for llm_connector + pipeline — next `/wrap-up` refreshes
 > them; the `done/` rework guides are the accurate spec meanwhile.
 

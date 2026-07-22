@@ -3,6 +3,7 @@ import {
   toPayload,
   aiShareBadge,
   groundingBadge,
+  knobParams,
   qualityBadge,
   isStalePending,
   pendingAgeSeconds,
@@ -208,5 +209,36 @@ describe("isStalePending", () => {
     expect(isStalePending("running", oldEnough, now)).toBe(false);
     expect(isStalePending("done", oldEnough, now)).toBe(false);
     expect(isStalePending("failed", oldEnough, now)).toBe(false);
+  });
+});
+
+/**
+ * [fullstack]-model-knobs — per-run knobs (effort/temperature) travel as a
+ * `params` object; blanks never travel.
+ */
+describe("model knobs ([fullstack]-model-knobs)", () => {
+  it("builds params from the panel's knob state, omitting blanks", () => {
+    expect(knobParams({})).toEqual({});
+    expect(knobParams({ effort: "high" })).toEqual({ effort: "high" });
+    expect(knobParams({ temperature: "0.3" })).toEqual({ temperature: 0.3 });
+  });
+
+  it("drops garbage temperature input — the server owns validation, not NaN", () => {
+    expect(knobParams({ temperature: "warm" })).toEqual({});
+    expect(knobParams({ temperature: "  " })).toEqual({});
+  });
+
+  it("toPayload carries non-empty params and omits empty ones", () => {
+    const withKnobs = toPayload({
+      ...form({ mode: "high", provider: "anthropic", model: "claude-sonnet-5" }),
+      params: { effort: "high" },
+    } as unknown as GenerationForm);
+    expect((withKnobs as { params?: object }).params).toEqual({ effort: "high" });
+
+    const bare = toPayload({
+      ...form(),
+      params: {},
+    } as unknown as GenerationForm);
+    expect("params" in bare).toBe(false);
   });
 });

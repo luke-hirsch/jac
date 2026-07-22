@@ -15,12 +15,15 @@ The `user` FK on writes is injected by the serializers via
 `HiddenField(default=CurrentUserDefault())`, so we don't need to set it here.
 """
 
+import json
 import logging
+import time
 from datetime import date
 
 from celery import current_app as celery_current_app
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
+from django.http import StreamingHttpResponse
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
@@ -28,6 +31,8 @@ from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.settings import api_settings as drf_api_settings
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from jac.cv import CV
@@ -353,6 +358,17 @@ class ApplicationLayoutViewSet(viewsets.ModelViewSet):
         return ApplicationLayout.objects.filter(user=self.request.user)
 
 
+class _LiveScopedRateThrottle(ScopedRateThrottle):
+    """`ScopedRateThrottle.THROTTLE_RATES` is bound to `api_settings.DEFAULT_
+    THROTTLE_RATES` once, at import time of `rest_framework.throttling` — a later
+    `override_settings(REST_FRAMEWORK=...)` (tests, or any future ops override)
+    updates `api_settings` but never that stale class attribute. Read it live."""
+
+    @property
+    def THROTTLE_RATES(self):
+        return drf_api_settings.DEFAULT_THROTTLE_RATES
+
+
 class JobApplicationViewSet(viewsets.ModelViewSet):
     """The user-facing applications. Create binds (or inline-creates) the posting; the
     tailored content (`cv_content`/`cover_letter`) stays editable via PATCH — that's also
@@ -362,6 +378,10 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
     filterset_fields = ["status"]
     ordering_fields = ["created_at", "updated_at", "status"]
+    # Base attribute so @action(..., throttle_scope=...) on `chat` is a legal
+    # per-action initkwarg (APIView.as_view requires hasattr(cls, key)); every
+    # other action is untouched since ScopedRateThrottle isn't in DEFAULT_THROTTLE_CLASSES.
+    throttle_scope = None
 
     def get_queryset(self):
         return (
@@ -448,15 +468,21 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
                 "model": serializers.CharField(required=False),
             },
         ),
-        responses=OpenApiResponse(description="{'reply': str, 'revision': str | None}"),
+        responses=OpenApiResponse(
+            description="text/event-stream: data: {delta|done|error}"
+        ),
     )
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True,
+        methods=["post"],
+        throttle_classes=[_LiveScopedRateThrottle],
+        throttle_scope="llm-chat",
+    )
     def chat(self, request, pk=None):
-        """Ephemeral letter-refinement chat. The client sends its current draft body plus
-        the transcript so far; only the model's reply (and an optional proposed revision)
-        travels back — nothing is persisted. Standard+ aliases only: the UI filters, the
-        strength probe here is the backstop. Sync like `rewrite` — one completion per
-        turn."""
+        """Job-hunting assistant, streamed. The client sends its current draft body
+        plus the transcript so far; the reply streams back as SSE deltas — nothing
+        is persisted server-side. Any resolvable executor chats; a scoped throttle
+        (`llm-chat`) bounds abuse of a streaming LLM endpoint on an authed surface."""
         application = self.get_object()
 
         body = request.data.get("body") or ""
@@ -474,19 +500,44 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         problem = self._chat_problem(body, messages)
         if problem:
             return Response(problem, status=status.HTTP_400_BAD_REQUEST)
-        out = LetterChat(
+
+        chat = LetterChat(
             body=body,
             transcript=messages,
             executor=executor,
-            job_posting=str(application.posting.posting_text),
+            posting_text=str(application.posting.posting_text),
+            cv_content=application.cv_content,
             language=str(application.posting.language),
-        ).reply()
-        if not out["reply"] and not out["revision"]:
-            return Response(
-                {"detail": "The language model returned nothing — try again."},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        return Response(out)
+        )
+        # Call now, synchronously — `stream()` itself only ever builds a generator
+        # (no LLM call happens yet), so this costs nothing, but it resolves
+        # `chat.stream` as a bound method *now* rather than when `events()` first
+        # iterates, which is well after the request has returned control to WSGI.
+        deltas = chat.stream()
+
+        def events():
+            deadline = time.monotonic() + self.CHAT_WALL_CLOCK_S
+            try:
+                for delta in deltas:
+                    if time.monotonic() > deadline:
+                        yield (
+                            'data: {"error": "The reply took too long — '
+                            'try again."}\n\n'
+                        )
+                        return
+                    yield f"data: {json.dumps({'delta': delta})}\n\n"
+                yield 'data: {"done": true}\n\n'
+            except Exception as exc:  # noqa: BLE001 — surface as a terminal event
+                logger.exception("letter chat stream failed")
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+        response = StreamingHttpResponse(events(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"  # nginx: don't buffer the stream
+        return response
+
+    # A hung model must not pin an ASGI threadpool worker.
+    CHAT_WALL_CLOCK_S = 120
 
     @staticmethod
     def _chat_problem(body, messages) -> dict | None:

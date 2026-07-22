@@ -14,9 +14,9 @@ export type LetterMeta = {
   recipient: Record<string, string>;
 };
 
-export function emptyLetterMeta(): LetterMeta {
+export function emptyLetterMeta(language = "en"): LetterMeta {
   return {
-    language: "en",
+    language,
     subject: "",
     salutation: "",
     date: new Date().toISOString().slice(0, 10),
@@ -27,10 +27,10 @@ export function emptyLetterMeta(): LetterMeta {
 }
 
 /** Stored letter_meta may be `{}` (pre-guide-1 rows, manual mode) or partial — fill gaps. */
-export function normalizeLetterMeta(raw: unknown): LetterMeta {
+export function normalizeLetterMeta(raw: unknown, language = "en"): LetterMeta {
   const r = (raw ?? {}) as Partial<LetterMeta>;
   return {
-    ...emptyLetterMeta(),
+    ...emptyLetterMeta(language),
     ...r,
     sender: { ...(r.sender ?? {}) },
     recipient: { ...(r.recipient ?? {}) },

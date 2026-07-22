@@ -1,6 +1,7 @@
 """Provider adapters — Ollama behaviour + web-search capability (base flag, Anthropic, OpenAI)."""
 
 import json
+import unittest
 from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ImproperlyConfigured
@@ -272,3 +273,131 @@ class AnthropicCompleteTests(TestCase):
         self.assertEqual(
             adapter.complete([{"role": "user", "content": "hi"}]), "Final answer."
         )
+
+
+# ---------------------------------------------------------------------------
+# [fullstack]-model-knobs — per-run knob mapping (skip-marked until that guide)
+# ---------------------------------------------------------------------------
+
+
+@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
+class AdapterKnobMappingTests(TestCase):
+    """Generic per-run knobs ({effort, temperature}) → provider-native kwargs via
+    `map_params`. Base = {} so a provider without knobs (ollama — whose payload
+    builder forwards EVERY kwarg onto the wire) can never leak them."""
+
+    def test_base_adapter_ignores_params(self):
+        class Dummy(LLMAdapter):
+            def complete(self, messages, **kw):
+                return ""
+
+            def stream(self, messages, **kw):
+                yield ""
+
+        self.assertEqual(Dummy({}).map_params({"effort": "high"}), {})
+
+    def test_ollama_has_no_mapping_override(self):
+        from llm_connector.providers.ollama import OllamaAdapter
+
+        adapter = OllamaAdapter({"url": "http://localhost:11434", "model": "m"})
+        self.assertEqual(adapter.map_params({"effort": "high"}), {})
+
+    def test_anthropic_effort_becomes_a_thinking_block_below_max_tokens(self):
+        adapter = AnthropicAdapter(
+            {"api_key": "test", "model": "claude-sonnet-5", "max_tokens": 4096}
+        )
+        out = adapter.map_params({"effort": "high"})
+        self.assertEqual(out["thinking"]["type"], "enabled")
+        self.assertLess(out["thinking"]["budget_tokens"], out["max_tokens"])
+
+    def test_anthropic_temperature_alone_passes_through(self):
+        adapter = AnthropicAdapter({"api_key": "test", "model": "claude-sonnet-5"})
+        self.assertEqual(adapter.map_params({"temperature": 0.3}), {"temperature": 0.3})
+
+    def test_anthropic_mapped_kwargs_override_instead_of_colliding(self):
+        # complete() must build params then update(kwargs) — dict(..., **kwargs)
+        # raises a duplicate-keyword TypeError on max_tokens.
+        adapter = AnthropicAdapter(
+            {"api_key": "test", "model": "claude-sonnet-5", "max_tokens": 4096}
+        )
+        adapter._client = MagicMock()
+        adapter._client.messages.create.return_value = _Block(
+            content=[_Block(type="text", text="ok")]
+        )
+        adapter.complete(
+            [{"role": "user", "content": "hi"}], **adapter.map_params({"effort": "low"})
+        )
+        kwargs = adapter._client.messages.create.call_args.kwargs
+        self.assertIn("thinking", kwargs)
+        self.assertGreater(kwargs["max_tokens"], 4096)
+
+    def test_openai_assumes_reasoning_semantics(self):
+        # The catalog is reasoning-only (gpt-5.6-*), so the adapter deletes the old
+        # ^o\d gate and always uses max_completion_tokens (never max_tokens).
+        adapter = OpenAIAdapter(
+            {"api_key": "test", "model": "gpt-5.6-terra", "max_tokens": 4096}
+        )
+        params: dict = {}
+        adapter._apply_model_params(params)
+        self.assertEqual(params.get("max_completion_tokens"), 4096)
+        self.assertNotIn("max_tokens", params)
+
+    def test_openai_effort_maps_to_reasoning_effort(self):
+        adapter = OpenAIAdapter({"api_key": "test", "model": "gpt-5.6-terra"})
+        self.assertEqual(
+            adapter.map_params({"effort": "high"}), {"reasoning_effort": "high"}
+        )
+
+    def test_openai_ignores_temperature(self):
+        # OpenAI is reasoning-only: temperature is not a knob, so even if one slipped
+        # past validation it never reaches the wire (map_params drops it).
+        adapter = OpenAIAdapter({"api_key": "test", "model": "gpt-5.6-terra"})
+        self.assertEqual(adapter.map_params({"temperature": 0.7}), {})
+
+
+class OllamaMultiTurnStreamTests(TestCase):
+    """[fullstack]-chat-assistant-rework leans on multi-turn `stream(messages=…)` —
+    pinned here (live, expected green) BEFORE that guide starts, so a regression
+    surfaces now and not mid-rework."""
+
+    def _adapter(self):
+        from llm_connector.providers.ollama import OllamaAdapter
+
+        return OllamaAdapter({"url": "http://localhost:11434", "model": "m"})
+
+    def test_stream_passes_multi_turn_messages_and_yields_chunks(self):
+        import llm_connector.providers.ollama as mod
+
+        msgs = [
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "tighten my letter"},
+        ]
+        lines = [
+            json.dumps({"message": {"content": "Su"}}),
+            json.dumps({"message": {"content": "re."}}),
+            json.dumps({"done": True}),
+        ]
+        captured = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def __iter__(self):
+                return iter(line.encode("utf-8") + b"\n" for line in lines)
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResp()
+
+        with patch.object(mod.request, "urlopen", fake_urlopen):
+            out = list(self._adapter().stream(msgs))
+
+        self.assertEqual(out, ["Su", "re."])
+        self.assertEqual(captured["payload"]["messages"], msgs)  # roles intact
+        self.assertIs(captured["payload"]["stream"], True)

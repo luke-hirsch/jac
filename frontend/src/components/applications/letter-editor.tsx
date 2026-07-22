@@ -12,21 +12,13 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  useFindAddress,
   useRewriteParagraph,
   type RunSummary,
 } from "@/lib/queries/applications";
 import { useFullList, type ResumeSnippetRow } from "@/lib/queries/jac";
-import { addressSearchOptions, useLLMAliases } from "@/lib/queries/llm";
-import {
-  chatAliases,
-  preferredRefineAlias,
-  seedDiscussion,
-  type ChatMessage,
-} from "@/lib/letter-chat";
+import { seedDiscussion, type ChatMessage } from "@/lib/letter-chat";
 import {
   appendParagraph,
-  fillBlanks,
   hasStub,
   replaceRange,
   replaceStub,
@@ -88,8 +80,6 @@ export function LetterEditor({
 }) {
   const snippets = useFullList<ResumeSnippetRow>("snippets");
   const rewrite = useRewriteParagraph();
-  const aliases = useLLMAliases();
-  const findAddress = useFindAddress();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [stubDraft, setStubDraft] = useState("");
   const [snippetId, setSnippetId] = useState("");
@@ -103,16 +93,7 @@ export function LetterEditor({
     left: number;
     flip: boolean;
   } | null>(null);
-  const [pickedAlias, setPickedAlias] = useState<string | null>(null);
   const [chatSeed, setChatSeed] = useState<ChatMessage | null>(null);
-
-  // The rewrite model defaults to whatever wrote the letter (the latest done run) —
-  // the old bar silently used the "default" 1B alias. The user can still switch.
-  const rewriteAlias =
-    pickedAlias ??
-    preferredRefineAlias(aliases.data ?? [], runs) ??
-    "default";
-  const canDiscuss = chatAliases(aliases.data ?? []).length > 0;
 
   function onBodySelect() {
     const el = bodyRef.current;
@@ -129,33 +110,11 @@ export function LetterEditor({
     setAnchor({ ...pos, flip: pos.top - el.offsetTop > el.clientHeight / 2 });
   }
 
-  // Empty recipient + a web-search-capable model configured → offer to find the
-  // employer's address online. The result lands in the draft only (Save persists).
+  // The recipient block auto-opens while empty. Address web-search is gone — the
+  // pipeline extracts the address from the posting text now.
   const recipientEmpty = RECIPIENT_FIELDS.every(
     ([field]) => !(meta.recipient[field] ?? "").trim(),
   );
-  const searchOptions = addressSearchOptions(aliases.data ?? []);
-
-  function onFindAddress(alias: string) {
-    findAddress.mutate(
-      { id: applicationId, alias },
-      {
-        onSuccess: (r) => {
-          onMeta({
-            ...meta,
-            recipient: fillBlanks(meta.recipient, r.address),
-          });
-          toast.success(
-            r.sources.length
-              ? `Address found (${r.sources[0]}) — verify before sending.`
-              : "Address found — verify before sending.",
-          );
-        },
-        onError: () =>
-          toast.error("No address found — fill the recipient in by hand."),
-      },
-    );
-  }
 
   const setField = (field: keyof LetterMeta) => (v: string) =>
     onMeta({ ...meta, [field]: v });
@@ -178,7 +137,6 @@ export function LetterEditor({
         id: applicationId,
         text: body.slice(start, end),
         instruction,
-        alias: rewriteAlias,
       },
       {
         onSuccess: (r) => {
@@ -233,24 +191,6 @@ export function LetterEditor({
         <summary className="cursor-pointer text-sm font-medium">
           Recipient
         </summary>
-        {recipientEmpty && searchOptions.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              No recipient yet —
-            </span>
-            {searchOptions.map((o) => (
-              <Button
-                key={o.alias}
-                size="sm"
-                variant="outline"
-                disabled={findAddress.isPending}
-                onClick={() => onFindAddress(o.alias)}
-              >
-                {findAddress.isPending ? "Searching…" : o.label}
-              </Button>
-            ))}
-          </div>
-        )}
         <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
           {RECIPIENT_FIELDS.map(([field, label]) => (
             <MetaField
@@ -298,11 +238,7 @@ export function LetterEditor({
         {sel && anchor && (
           <RewritePopover
             anchor={anchor}
-            aliases={aliases.data ?? []}
-            alias={rewriteAlias}
-            onAlias={setPickedAlias}
             pending={rewrite.isPending}
-            canDiscuss={canDiscuss}
             onRewrite={onRewrite}
             onDiscuss={onDiscuss}
             onClose={() => setSel(null)}

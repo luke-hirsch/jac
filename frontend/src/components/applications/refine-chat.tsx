@@ -1,9 +1,14 @@
 /**
- * Ephemeral letter-refinement chat ([fullstack]-letter-refine-chat): client-held
- * transcript + one sync completion per turn; gone on reload by design. Offered only
- * when a standard+ alias is configured — a 1B model can't chat usefully. A reply may
- * carry a proposed replacement body (`revision`); applying it routes through `onBody`,
- * so the normal Save flow still gates persistence.
+ * Application assistant ([fullstack]-chat-assistant-rework): a streamed, real
+ * multi-turn job-hunting assistant scoped to this application — posting, letter,
+ * tailored CV, interview prep, career strategy. Client-held transcript; gone on
+ * reload by design, nothing persisted server-side. A reply may end with a proposed
+ * replacement body (split client-side from the `REVISED BODY:` marker); applying it
+ * routes through `onBody`, so the normal Save flow still gates persistence.
+ *
+ * Transport is SSE over a raw `fetch` (not the `api()` helper, which buffers the
+ * whole body) — CSRF discipline still applies, so unsafe methods carry the same
+ * `X-CSRFToken` header `api()` sets, via `csrfHeaders()`.
  */
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -16,19 +21,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { csrfHeaders } from "@/lib/api";
 import {
-  chatAliases,
   chatPayload,
-  preferredRefineAlias,
+  parseSseLine,
+  splitRevision,
   type ChatMessage,
 } from "@/lib/letter-chat";
-import { useLetterChat, type RunSummary } from "@/lib/queries/applications";
-import { useLLMAliases } from "@/lib/queries/llm";
+import {
+  defaultExecutorRow,
+  executorDisabledReason,
+  useExecutors,
+} from "@/lib/queries/llm";
+import { type RunSummary } from "@/lib/queries/applications";
 
-type Entry = ChatMessage & { revision?: string | null };
+type Entry = ChatMessage & { revision?: string | null; streaming?: boolean };
 
 const toApi = (entries: Entry[]): ChatMessage[] =>
   entries.map(({ role, content }) => ({ role, content }));
+
+const CHAT_URL = (id: number) => `/api/jac/applications/${id}/chat/`;
 
 export function RefineChat({
   applicationId,
@@ -41,44 +53,115 @@ export function RefineChat({
   applicationId: number;
   body: string;
   onBody: (b: string) => void;
+  /** This application's runs — only used for the "local model is busy" hint. */
   runs: RunSummary[];
   /** A popover hand-off ("discuss this passage") — appended and sent once. */
   seed: ChatMessage | null;
   onSeedConsumed: () => void;
 }) {
-  const aliases = useLLMAliases();
-  const chat = useLetterChat();
+  const executors = useExecutors();
+  const rows = executors.data ?? [];
+  const [picked, setPicked] = useState<{ provider: string; model: string } | null>(
+    null,
+  );
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState("");
-  const [pickedAlias, setPickedAlias] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const detailsRef = useRef<HTMLDetailsElement>(null);
 
-  const capable = chatAliases(aliases.data ?? []);
-  const alias =
-    pickedAlias ?? preferredRefineAlias(aliases.data ?? [], runs) ?? "";
+  // Preselect the backend default once rows arrive; never overwrite an explicit pick.
+  if (picked === null && rows.length > 0) {
+    const def = defaultExecutorRow(rows);
+    if (def) setPicked({ provider: def.provider, model: def.models[0]?.id ?? "" });
+  }
 
-  function send(content: string) {
+  const pickedRow = rows.find((r) => r.provider === picked?.provider) ?? null;
+  const pickedReason = pickedRow ? executorDisabledReason(pickedRow) : null;
+  const busyTower =
+    pickedRow?.self_hosted === true &&
+    runs.some((r) => r.status === "pending" || r.status === "running");
+
+  async function send(content: string) {
     const text = content.trim();
-    if (!text || !alias || chat.isPending) return;
+    if (!text || pending) return;
     const next: Entry[] = [...entries, { role: "user", content: text }];
     setEntries(next);
     setInput("");
-    chat.mutate(
-      { id: applicationId, payload: chatPayload(alias, body, toApi(next)) },
-      {
-        onSuccess: (r) =>
-          setEntries([
-            ...next,
-            {
-              role: "assistant",
-              content: r.reply || "Here is a proposed revision:",
-              revision: r.revision,
-            },
-          ]),
-        onError: () =>
-          toast.error("Chat failed — is the model server running?"),
-      },
-    );
+    setPending(true);
+
+    let streamed = "";
+    const bubbleIndex = next.length;
+    const setBubble = (partial: string, done = false) =>
+      setEntries((cur) => {
+        const copy = cur.slice(0, bubbleIndex);
+        return [
+          ...copy,
+          { role: "assistant", content: partial, streaming: !done },
+        ];
+      });
+    setBubble("", false);
+
+    try {
+      const res = await fetch(CHAT_URL(applicationId), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...csrfHeaders() },
+        body: JSON.stringify(
+          chatPayload(
+            body,
+            toApi(next),
+            picked?.provider ? picked : null,
+          ),
+        ),
+      });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => null);
+        const msg =
+          (data?.messages?.[0] as string | undefined) ??
+          (data?.provider?.[0] as string | undefined) ??
+          (res.status === 429
+            ? "Too many messages — wait a moment and try again."
+            : "Chat failed — is the model server running?");
+        toast.error(msg);
+        setEntries(next); // drop the empty streaming bubble
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let failed = false;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const e = parseSseLine(line);
+          if (!e) continue;
+          if (e.delta) {
+            streamed += e.delta;
+            setBubble(streamed, false);
+          } else if (e.error) {
+            toast.error(e.error);
+            failed = true;
+          } else if (e.done) {
+            const { reply, revision } = splitRevision(streamed);
+            setEntries((cur) => [
+              ...cur.slice(0, bubbleIndex),
+              { role: "assistant", content: reply, revision },
+            ]);
+          }
+        }
+      }
+      if (failed) setEntries(next); // terminal error — drop the partial bubble
+    } catch {
+      toast.error("Chat failed — is the model server running?");
+      setEntries(next);
+    } finally {
+      setPending(false);
+    }
   }
 
   // The popover's "Discuss in chat": open the panel, append the seeded message, send.
@@ -91,17 +174,67 @@ export function RefineChat({
     onSeedConsumed();
   }, [seed, onSeedConsumed]);
 
-  if (aliases.data && capable.length === 0) return null;
-
   return (
     <details ref={detailsRef} className="rounded border p-3">
       <summary className="cursor-pointer text-sm font-medium">
-        Refine with AI (chat)
+        Application assistant
         <span className="ml-2 text-xs font-normal text-muted-foreground">
-          not saved — gone on reload
+          job-hunting help, letter &amp; CV edits — not saved, gone on reload
         </span>
       </summary>
       <div className="mt-2 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={picked?.provider ?? ""}
+            onValueChange={(provider) => {
+              const row = rows.find((r) => r.provider === provider);
+              if (row)
+                setPicked({ provider: row.provider, model: row.models[0]?.id ?? "" });
+            }}
+          >
+            <SelectTrigger className="h-8 w-56 text-xs">
+              <SelectValue placeholder="Pick an AI" />
+            </SelectTrigger>
+            <SelectContent>
+              {rows.map((r) => {
+                const reason = executorDisabledReason(r);
+                return (
+                  <SelectItem key={r.provider} value={r.provider} disabled={reason !== null}>
+                    {r.label}
+                    {r.default ? " · default" : ""}
+                    {reason ? ` · ${reason}` : ""}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+          {pickedRow && !pickedRow.self_hosted && pickedRow.models.length > 1 && (
+            <Select
+              value={picked?.model ?? ""}
+              onValueChange={(model) =>
+                setPicked((p) => (p ? { ...p, model } : p))
+              }
+            >
+              <SelectTrigger className="h-8 w-48 text-xs">
+                <SelectValue placeholder="Model" />
+              </SelectTrigger>
+              <SelectContent>
+                {pickedRow.models.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        {busyTower && (
+          <p className="text-xs text-amber-700">
+            The local model is busy generating — replies may wait.
+          </p>
+        )}
+
         <div className="space-y-2">
           {entries.map((m, i) => (
             <div
@@ -112,7 +245,10 @@ export function RefineChat({
                   : "bg-muted"
               }`}
             >
-              <p className="whitespace-pre-wrap">{m.content}</p>
+              <p className="whitespace-pre-wrap">
+                {m.content}
+                {m.streaming && "…"}
+              </p>
               {m.revision && (
                 <div className="mt-2 space-y-1 rounded border bg-background p-2">
                   <p className="whitespace-pre-wrap text-xs text-muted-foreground">
@@ -134,9 +270,6 @@ export function RefineChat({
               )}
             </div>
           ))}
-          {chat.isPending && (
-            <p className="text-xs text-muted-foreground">Thinking…</p>
-          )}
         </div>
         <div className="flex items-end gap-2">
           <Textarea
@@ -150,30 +283,15 @@ export function RefineChat({
                 send(input);
               }
             }}
-            placeholder="Ask about the letter — e.g. 'is the opening too generic?'"
+            placeholder="Ask about the posting, the letter, the CV, interview prep…"
           />
-          <div className="space-y-1">
-            <Select value={alias} onValueChange={setPickedAlias}>
-              <SelectTrigger className="h-8 w-36 text-xs">
-                <SelectValue placeholder="Model" />
-              </SelectTrigger>
-              <SelectContent>
-                {capable.map((a) => (
-                  <SelectItem key={a.alias} value={a.alias}>
-                    {a.alias} ({a.strength})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              className="w-full"
-              disabled={!input.trim() || chat.isPending || !alias}
-              onClick={() => send(input)}
-            >
-              Send
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            disabled={!input.trim() || pending || pickedReason != null}
+            onClick={() => send(input)}
+          >
+            Send
+          </Button>
         </div>
       </div>
     </details>

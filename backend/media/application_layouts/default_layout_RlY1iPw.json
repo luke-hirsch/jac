@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "page": { "size": "A4", "margin": [56, 48] },
+  "font": { "family": "Helvetica", "base_pt": 9 },
+  "colors": { "accent": "#1a5fb4", "text": "#1c1c1c", "muted": "#6b6b6b" },
+  "cv": {
+    "pages": 1,
+    "sections": ["jobs", "educations", "projects", "certifications"],
+    "sidebar": ["skills", "languages"],
+    "max_entries": {
+      "jobs": 4,
+      "educations": 2,
+      "projects": 3,
+      "certifications": 3,
+      "skills": 14,
+      "languages": 6
+    }
+  },
+  "cover_letter": { "din5008": true }
+}

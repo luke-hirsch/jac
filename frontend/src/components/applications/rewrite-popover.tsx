@@ -1,22 +1,15 @@
 /**
  * Apple-Pages-style writing-tools popover for the letter body: appears at the textarea
- * selection with three preset rewrite styles, a free instruction, a model picker, and a
- * hand-off into the refinement chat. Pure view — the caller owns the selection range,
- * runs the mutation, and splices the result back.
+ * selection with three preset rewrite styles, a free instruction, and a hand-off into
+ * the refinement chat. Rewrite rides the user's default executor (the alias picker died
+ * with the rework). Pure view — the caller owns the selection range, runs the mutation,
+ * and splices the result back.
  */
 import { useState } from "react";
 import { MessageSquare, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { REWRITE_STYLES } from "@/lib/letter-chat";
-import type { AliasInfo } from "@/lib/queries/llm";
 
 /**
  * Where the selection end sits inside the textarea, relative to its offset parent:
@@ -69,21 +62,13 @@ export function caretOffset(
 
 export function RewritePopover({
   anchor,
-  aliases,
-  alias,
-  onAlias,
   pending,
-  canDiscuss,
   onRewrite,
   onDiscuss,
   onClose,
 }: {
   anchor: { top: number; left: number; flip?: boolean };
-  aliases: AliasInfo[];
-  alias: string;
-  onAlias: (a: string) => void;
   pending: boolean;
-  canDiscuss: boolean;
   onRewrite: (instruction: string) => void;
   onDiscuss: () => void;
   onClose: () => void;
@@ -105,22 +90,10 @@ export function RewritePopover({
         <span className="text-xs font-medium">
           {pending ? "Rewriting…" : "Rewrite selection"}
         </span>
-        <Select value={alias} onValueChange={onAlias}>
-          <SelectTrigger className="ml-auto h-7 w-36 text-xs">
-            <SelectValue placeholder="Model" />
-          </SelectTrigger>
-          <SelectContent>
-            {aliases.map((a) => (
-              <SelectItem key={a.alias} value={a.alias}>
-                {a.alias} ({a.strength})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
+          className="ml-auto h-7 w-7"
           aria-label="Close"
           onClick={onClose}
         >
@@ -160,16 +133,14 @@ export function RewritePopover({
           Go
         </Button>
       </div>
-      {canDiscuss && (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="w-full justify-start"
-          onClick={onDiscuss}
-        >
-          <MessageSquare className="mr-1 h-4 w-4" /> Discuss in chat
-        </Button>
-      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={onDiscuss}
+      >
+        <MessageSquare className="mr-1 h-4 w-4" /> Discuss in chat
+      </Button>
     </div>
   );
 }

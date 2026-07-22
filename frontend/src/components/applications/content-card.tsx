@@ -21,6 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { ApiError } from "@/lib/api";
+import { drfFieldError } from "@/lib/field-save";
 import {
   STATUS_LABELS,
   useUpdateApplication,
@@ -37,6 +39,7 @@ import {
   labelFor,
   missingEntries,
   moveEntry,
+  pinnedIds,
   removeEntry,
   toggleDeselect,
   togglePin,
@@ -77,9 +80,11 @@ export function ApplicationContentCard({
   const [coverLetter, setCoverLetter] = useState(app.cover_letter);
   const [status, setStatus] = useState<ApplicationStatus>(app.status);
   const [cvDraft, setCvDraft] = useState<CvContent>(app.cv_content ?? {});
-  const serverMeta = JSON.stringify(normalizeLetterMeta(app.letter_meta));
+  const serverMeta = JSON.stringify(
+    normalizeLetterMeta(app.letter_meta, app.posting_detail.language),
+  );
   const [letterMeta, setLetterMeta] = useState<LetterMeta>(() =>
-    normalizeLetterMeta(app.letter_meta),
+    normalizeLetterMeta(app.letter_meta, app.posting_detail.language),
   );
 
   // "Adjusting state during render" (React docs, same pattern as usePagedList):
@@ -108,7 +113,9 @@ export function ApplicationContentCard({
     setCoverLetter(app.cover_letter);
     setStatus(app.status);
     setCvDraft(app.cv_content ?? {});
-    setLetterMeta(normalizeLetterMeta(app.letter_meta));
+    setLetterMeta(
+      normalizeLetterMeta(app.letter_meta, app.posting_detail.language),
+    );
   }
 
   // Sender defaults come from the user profile (same source the pipeline's
@@ -146,11 +153,22 @@ export function ApplicationContentCard({
           cover_letter: coverLetter,
           cv_content: cvDraft,
           letter_meta: letterMeta,
+          pinned_entries: pinnedIds(cvDraft),
         },
       },
       {
         onSuccess: () => toast.success("Application saved"),
-        onError: () => toast.error("Could not save the application"),
+        onError: (e) => {
+          const pinMsg =
+            e instanceof ApiError &&
+            e.status === 400 &&
+            (e.data as Record<string, unknown>)?.pinned_entries;
+          toast.error(
+            pinMsg
+              ? drfFieldError(e, "pinned_entries")
+              : "Could not save the application",
+          );
+        },
       },
     );
   }
@@ -170,7 +188,7 @@ export function ApplicationContentCard({
   const overCap = overCapIds(cvDraft, maxEntries);
 
   return (
-    <Card>
+    <Card id="curate">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>Application content</CardTitle>
         <div className="flex items-center gap-2">
@@ -325,6 +343,11 @@ function CvEditorSection({
               {e.pinned && (
                 <span title="Pinned — survives applying a new generation run.">
                   <Pin className="h-3.5 w-3.5 shrink-0 text-sky-600" />
+                  {e.warning && (
+                    <span title={e.warning}>
+                      <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    </span>
+                  )}
                 </span>
               )}
               <span className={`flex-1 ${e.deselected ? "line-through" : ""}`}>

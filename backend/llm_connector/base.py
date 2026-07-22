@@ -57,3 +57,9 @@ class LLMAdapter(ABC):
         embed()); the flag is the clean pre-check, this is the backstop.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support web search.")
+
+    def map_params(self, params: dict) -> dict:
+        """Translate generic per-run knobs into this provider's native kwargs.
+        Base: no knobs — unknown-provider safety (ollama must NEVER see knob
+        kwargs; its payload builder forwards every kwarg onto the wire)."""
+        return {}

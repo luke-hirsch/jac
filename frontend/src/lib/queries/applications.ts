@@ -7,8 +7,7 @@ import {
   letterMetaFromResult,
   type LetterMeta,
 } from "@/lib/letter-doc";
-import { mergePinned, type CvContent } from "@/lib/cv-doc";
-import type { ChatPayload } from "@/lib/letter-chat";
+import { mergePinned, pinnedIds, type CvContent } from "@/lib/cv-doc";
 
 export type ApplicationStatus =
   | "draft"
@@ -36,8 +35,9 @@ export type RunSummary = {
   id: number;
   status: RunStatus;
   stage: string;
-  grade: string;
-  alias: string;
+  mode: string;
+  provider: string;
+  model: string;
   created_at: string;
 };
 
@@ -61,6 +61,7 @@ export type ApplicationRow = {
   runs: RunSummary[];
   created_at: string;
   updated_at: string;
+  pinned_entries: string[];
 };
 
 export type ApplicationPatch = Partial<{
@@ -70,6 +71,7 @@ export type ApplicationPatch = Partial<{
   letter_meta: LetterMeta;
   deadline: string | null;
   notes: string;
+  pinned_entries?: string[];
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */
@@ -88,10 +90,12 @@ export function runToApplicationPatch(
   result: TailoredResult,
   currentCv?: CvContent,
 ): ApplicationPatch {
+  const cv = currentCv ? mergePinned(currentCv, result.cv) : result.cv;
   return {
-    cv_content: currentCv ? mergePinned(currentCv, result.cv) : result.cv,
+    cv_content: cv,
     cover_letter: editableBody(result.cover_letter),
     letter_meta: letterMetaFromResult(result.cover_letter),
+    pinned_entries: pinnedIds(cv),
   };
 }
 
@@ -169,19 +173,16 @@ export function useRewriteParagraph() {
       id,
       text,
       instruction,
-      alias,
     }: {
       id: number;
       text: string;
       instruction?: string;
-      alias?: string;
     }) =>
       api<{ text: string }>(`${URL}${id}/rewrite/`, {
         method: "POST",
         body: JSON.stringify({
           text,
           instruction: instruction ?? "",
-          alias: alias ?? "default",
         }),
       }),
   });
@@ -208,33 +209,6 @@ export function useTransitionApplication() {
   });
 }
 
-export type ChatReply = { reply: string; revision: string | null };
-
-/** One turn of the ephemeral letter-refinement chat (sync, like rewrite) — the client
- *  holds the transcript; nothing is persisted server-side. */
-export function useLetterChat() {
-  return useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: ChatPayload }) =>
-      api<ChatReply>(`${URL}${id}/chat/`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }),
-  });
-}
-
-export type FoundAddress = {
-  address: Record<string, string>;
-  sources: string[];
-};
-
-/** Web-search the employer's postal address (sync, like rewrite) — the caller
- *  merges the fields into its letter_meta draft; nothing is persisted here. */
-export function useFindAddress() {
-  return useMutation({
-    mutationFn: ({ id, alias }: { id: number; alias: string }) =>
-      api<FoundAddress>(`${URL}${id}/find_address/`, {
-        method: "POST",
-        body: JSON.stringify({ alias }),
-      }),
-  });
-}
+// Chat is streamed SSE now ([fullstack]-chat-assistant-rework) — RefineChat talks to
+// /applications/<pk>/chat/ directly via a raw fetch (api() buffers the whole body,
+// which defeats a stream), so there is no query-layer mutation for it here.

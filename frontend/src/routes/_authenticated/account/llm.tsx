@@ -3,45 +3,23 @@ import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import {
-  PROVIDER_SPECS,
-  aliasesForGrade,
   checkResultLabel,
-  rowToState,
-  switchProvider,
-  toPayload,
+  configPayload,
   useCheckConfig,
   useCreateConfig,
   useDeleteConfig,
-  useGradePins,
-  useLLMAliases,
+  useExecutors,
   useLLMConfigs,
-  useSetGradePin,
   useUpdateConfig,
-  type AliasStrength,
   type CheckResult,
-  type ConfigFormState,
+  type ExecutorRow,
   type LLMConfigRow,
-  type Provider,
 } from "@/lib/queries/llm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 export const Route = createFileRoute("/_authenticated/account/llm")({
   component: LLMConfigPage,
@@ -61,402 +39,186 @@ function apiMessage(err: unknown): string {
 }
 
 function LLMConfigPage() {
+  const executors = useExecutors();
   const configsQ = useLLMConfigs();
-  const [editing, setEditing] = useState<LLMConfigRow | "new" | null>(null);
-  const del = useDeleteConfig();
+  const rows = executors.data ?? [];
+  const configs = configsQ.data ?? [];
 
-  const check = useCheckConfig();
-  const [checks, setChecks] = useState<Record<number, CheckResult>>({});
+  const hirsch = rows.find((r) => r.self_hosted) ?? null;
+  const commercial = rows.filter((r) => !r.self_hosted);
+  const configFor = (provider: string) =>
+    configs.find((c) => c.provider === provider) ?? null;
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-medium">LLM providers</h2>
-          <p className="text-sm text-muted-foreground">
-            Map an alias (e.g. <code>reasoning</code>, <code>writer</code>) to a
-            provider, model and key. The JAC pipeline resolves through these;
-            with none set it falls back to the zero-cost Ollama default.
-          </p>
-        </div>
-        <Button onClick={() => setEditing("new")}>Add config</Button>
-      </div>
-
-      {configsQ.isLoading && <p className="text-sm">loading…</p>}
-      {configsQ.data?.length === 0 && (
-        <p className="text-sm text-muted-foreground">No configs yet.</p>
-      )}
-
-      <ul className="divide-y rounded-md border">
-        {configsQ.data?.map((c) => (
-          <li
-            key={c.id}
-            className="flex items-center justify-between gap-3 px-4 py-3"
-          >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{c.alias}</span>
-                <Badge variant="secondary">
-                  {PROVIDER_SPECS[c.provider].label}
-                </Badge>
-                {c.has_api_key ? (
-                  <Badge variant="outline">key stored ✓</Badge>
-                ) : (
-                  PROVIDER_SPECS[c.provider].apiKey === "required" && (
-                    <Badge variant="destructive">no key</Badge>
-                  )
-                )}
-              </div>
-              <p className="truncate text-sm text-muted-foreground">
-                {c.model}
-              </p>
-              {checks[c.id] && (
-                <p
-                  className={`truncate text-xs ${
-                    checks[c.id].ok
-                      ? "text-muted-foreground"
-                      : "text-destructive"
-                  }`}
-                >
-                  {checkResultLabel(checks[c.id])}
-                </p>
-              )}
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={check.isPending}
-                onClick={() => {
-                  setChecks(({ [c.id]: _stale, ...rest }) => rest);
-                  check.mutate(c.id, {
-                    onSuccess: (r) => setChecks((s) => ({ ...s, [c.id]: r })),
-                    onError: () => toast.error("Check failed"),
-                  });
-                }}
-              >
-                {check.isPending && check.variables === c.id
-                  ? "Checking…"
-                  : "Check"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setEditing(c)}>
-                Edit
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (!confirm(`Delete config "${c.alias}"?`)) return;
-                  del.mutate(c.id, {
-                    onSuccess: () => toast.success("Deleted"),
-                    onError: () => toast.error("Delete failed"),
-                  });
-                }}
-              >
-                Delete
-              </Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      <GradePinsCard />
-
-      {editing && (
-        <ConfigDialog
-          row={editing === "new" ? undefined : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-const PIN_GRADES: { grade: AliasStrength; label: string; help: string }[] = [
-  {
-    grade: "light",
-    label: "Light",
-    help: "Embedding rungs (CV ranking, snippet pick). Free models only.",
-  },
-  {
-    grade: "standard",
-    label: "Standard",
-    help: "Support rungs: address extraction, grounding audit, prose critic.",
-  },
-  {
-    grade: "strong",
-    label: "Strong",
-    help: "Default model when you pick the strong grade.",
-  },
-];
-
-// Radix Select items must have a non-empty value; this stands in for "no pin".
-const NO_PIN = "__none__";
-
-function GradePinsCard() {
-  const aliases = useLLMAliases();
-  const pins = useGradePins();
-  const setPin = useSetGradePin();
-
-  return (
-    <div className="space-y-3">
       <div>
-        <h3 className="text-base font-medium">Pinned models</h3>
+        <h2 className="text-lg font-medium">LLM providers</h2>
         <p className="text-sm text-muted-foreground">
-          Your favourite model per grade. The pipeline runs each step on the pin
-          of the tier that step prefers — e.g. a strong run keeps its checks on
-          your standard pin — and falls back to the run&apos;s model when a tier
-          has no pin. Light runs never route onto paid providers.
+          A generation runs on exactly one executor. HirschAI is built in and
+          free; add a commercial key below to unlock high mode and the researched
+          personal paragraph. Keys are write-only — stored encrypted, never shown
+          again.
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        {PIN_GRADES.map(({ grade, label, help }) => {
-          const options = aliasesForGrade(aliases.data ?? [], grade);
-          const current = pins.data?.[grade] ?? null;
-          return (
-            <div key={grade} className="space-y-1">
-              <Label>{label}</Label>
-              <Select
-                value={current ?? NO_PIN}
-                disabled={!aliases.data || !pins.data}
-                onValueChange={(v) =>
-                  setPin.mutate(
-                    { strength: grade, alias: v === NO_PIN ? "" : v },
-                    { onError: () => toast.error("Could not save the pin") },
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="No pin" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_PIN}>No pin</SelectItem>
-                  {options.map((a) => (
-                    <SelectItem key={a.alias} value={a.alias}>
-                      {a.alias} — {a.model} ({a.strength})
-                    </SelectItem>
-                  ))}
-                  {/* a stale pin (config deleted) still needs to render as selected */}
-                  {current && !options.some((a) => a.alias === current) && (
-                    <SelectItem value={current}>{current} (stale)</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">{help}</p>
-            </div>
-          );
-        })}
+
+      {hirsch && (
+        <div className="flex items-center gap-2 rounded-md border px-4 py-3">
+          <span className="font-medium">{hirsch.label}</span>
+          <Badge variant="secondary">built in · runs standard</Badge>
+          {hirsch.reachable === false ? (
+            <Badge variant="destructive">offline</Badge>
+          ) : hirsch.reachable ? (
+            <Badge variant="outline">online</Badge>
+          ) : (
+            <Badge variant="outline">checking…</Badge>
+          )}
+        </div>
+      )}
+
+      {executors.isLoading && <p className="text-sm">loading…</p>}
+
+      <div className="space-y-3">
+        {commercial.map((row) => (
+          <ProviderCard
+            key={row.provider}
+            row={row}
+            config={configFor(row.provider)}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-function ConfigDialog({
+function ProviderCard({
   row,
-  onClose,
+  config,
 }: {
-  row?: LLMConfigRow;
-  onClose: () => void;
+  row: ExecutorRow;
+  config: LLMConfigRow | null;
 }) {
-  const [state, setState] = useState<ConfigFormState>(() => rowToState(row));
   const create = useCreateConfig();
   const update = useUpdateConfig();
-  const spec = PROVIDER_SPECS[state.provider];
+  const del = useDeleteConfig();
+  const check = useCheckConfig();
+  const [apiKey, setApiKey] = useState("");
+  const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
   const busy = create.isPending || update.isPending;
 
-  const set = (patch: Partial<ConfigFormState>) =>
-    setState((s) => ({ ...s, ...patch }));
+  const saveOpts = {
+    onSuccess: () => {
+      toast.success(`${row.label} saved`);
+      setApiKey("");
+    },
+    onError: (e: unknown) => toast.error(apiMessage(e)),
+  };
 
-  function save() {
-    let payload;
-    try {
-      payload = toPayload(state); // throws on bad JSON
-    } catch (e) {
-      return toast.error((e as Error).message);
-    }
-    if (!payload.alias) return toast.error("Alias is required.");
-    if (!payload.model) return toast.error("Model is required.");
-    if (spec.url === "required" && !payload.url)
-      return toast.error("URL is required for this provider.");
-    if (spec.apiKey === "required" && !row?.has_api_key && !payload.api_key)
-      return toast.error("API key is required.");
+  function onSaveKey() {
+    const body = configPayload({ provider: row.provider, apiKey });
+    if (!config && !body.api_key)
+      return toast.error("Enter an API key first.");
+    if (config) update.mutate({ id: config.id, body }, saveOpts);
+    else create.mutate(body, saveOpts);
+  }
 
-    const done = {
-      onSuccess: () => {
-        toast.success("Saved");
-        onClose();
+  function onMakeDefault() {
+    if (!config) return;
+    update.mutate(
+      {
+        id: config.id,
+        body: configPayload({ provider: row.provider, makeDefault: true }),
       },
-      onError: (e: unknown) => toast.error(apiMessage(e)),
-    };
-    if (row) update.mutate({ id: row.id, body: payload }, done);
-    else create.mutate(payload, done);
+      {
+        onSuccess: () => toast.success(`${row.label} is now the default`),
+        onError: (e) => toast.error(apiMessage(e)),
+      },
+    );
+  }
+
+  function onCheck() {
+    if (!config) return;
+    setCheckResult(null);
+    check.mutate(config.id, {
+      onSuccess: (r) => setCheckResult(r),
+      onError: () => toast.error("Check failed"),
+    });
+  }
+
+  function onDelete() {
+    if (!config) return;
+    if (!confirm(`Remove the ${row.label} key?`)) return;
+    del.mutate(config.id, {
+      onSuccess: () => toast.success(`${row.label} key removed`),
+      onError: () => toast.error("Delete failed"),
+    });
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>
-            {row ? `Edit ${row.alias}` : "New LLM config"}
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <Field label="Alias">
-            <Input
-              value={state.alias}
-              placeholder="reasoning"
-              onChange={(e) => set({ alias: e.target.value })}
-            />
-          </Field>
-
-          <Field label="Provider">
-            <Select
-              value={state.provider}
-              onValueChange={(v) =>
-                setState((s) => switchProvider(s, v as Provider))
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(PROVIDER_SPECS) as Provider[]).map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {PROVIDER_SPECS[p].label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-
-          <Field label="Model">
-            <Input
-              value={state.model}
-              placeholder={spec.modelPlaceholder}
-              onChange={(e) => set({ model: e.target.value })}
-            />
-          </Field>
-
-          {spec.url !== "hidden" && (
-            <Field
-              label={spec.url === "required" ? "URL" : "Base URL (optional)"}
-            >
-              <Input
-                value={state.url}
-                placeholder="http://localhost:11434"
-                onChange={(e) => set({ url: e.target.value })}
-              />
-            </Field>
-          )}
-
-          <Field label="Max tokens (optional)">
-            <Input
-              type="number"
-              value={state.max_tokens}
-              onChange={(e) => set({ max_tokens: e.target.value })}
-            />
-          </Field>
-
-          {/* structured providers: discrete extra inputs */}
-          {spec.extra === "structured" &&
-            spec.extraFields.map((f) => (
-              <Field key={f.key} label={f.label} help={f.help}>
-                {f.kind === "select" ? (
-                  <Select
-                    value={state.extraFields[f.key] ?? ""}
-                    onValueChange={(v) =>
-                      set({ extraFields: { ...state.extraFields, [f.key]: v } })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="default" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {f.options.map((o) => (
-                        <SelectItem key={o || "__default__"} value={o}>
-                          {o || "default"}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    type="number"
-                    value={state.extraFields[f.key] ?? ""}
-                    onChange={(e) =>
-                      set({
-                        extraFields: {
-                          ...state.extraFields,
-                          [f.key]: e.target.value,
-                        },
-                      })
-                    }
-                  />
-                )}
-              </Field>
-            ))}
-
-          {/* custom / ollama: raw JSON extras */}
-          {spec.extra === "json" && (
-            <Field label="Extra config (JSON)" help={spec.jsonHint}>
-              <Textarea
-                rows={5}
-                className="font-mono text-xs"
-                value={state.extraJson}
-                placeholder="{}"
-                onChange={(e) => set({ extraJson: e.target.value })}
-              />
-            </Field>
-          )}
-
-          <Field
-            label="API key"
-            help={
-              row?.has_api_key
-                ? "A key is stored. Leave blank to keep it, or enter a new one to replace."
-                : spec.apiKey === "required"
-                  ? "Required for this provider."
-                  : "Optional for this provider."
-            }
-          >
+    <Card>
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0">
+        <CardTitle className="text-base">{row.label}</CardTitle>
+        {config?.has_api_key ? (
+          <Badge variant="outline">key set</Badge>
+        ) : (
+          <Badge variant="secondary">no key</Badge>
+        )}
+        {config?.default && <Badge>default</Badge>}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-end gap-2">
+          <div className="flex-1 space-y-1">
+            <Label>{config?.has_api_key ? "Replace API key" : "API key"}</Label>
             <Input
               type="password"
               autoComplete="new-password"
-              value={state.api_key}
-              placeholder={row?.has_api_key ? "••••••••" : ""}
-              onChange={(e) => set({ api_key: e.target.value })}
+              value={apiKey}
+              placeholder={config?.has_api_key ? "••••••••" : ""}
+              onChange={(e) => setApiKey(e.target.value)}
             />
-          </Field>
+          </div>
+          <Button onClick={onSaveKey} disabled={busy || !apiKey.trim()}>
+            {busy ? "Saving…" : config?.has_api_key ? "Replace" : "Save key"}
+          </Button>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={busy}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Field({
-  label,
-  help,
-  children,
-}: {
-  label: string;
-  help?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-1">
-      <Label>{label}</Label>
-      {children}
-      {help && <p className="text-xs text-muted-foreground">{help}</p>}
-    </div>
+        {config && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!config.has_api_key || config.default || update.isPending}
+              onClick={onMakeDefault}
+            >
+              {config.default ? "Default executor" : "Make default"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!config.has_api_key || check.isPending}
+              onClick={onCheck}
+            >
+              {check.isPending ? "Checking…" : "Check"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={del.isPending}
+              onClick={onDelete}
+            >
+              Delete
+            </Button>
+            {checkResult && (
+              <span
+                className={`text-xs ${
+                  checkResult.ok ? "text-muted-foreground" : "text-destructive"
+                }`}
+              >
+                {checkResultLabel(checkResult)}
+              </span>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

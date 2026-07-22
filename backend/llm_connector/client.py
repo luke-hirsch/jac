@@ -90,7 +90,9 @@ class LLMClient:
         error_text = ""
         response_text = ""
         prompt_tokens = completion_tokens = None
-
+        params = kwargs.pop("params", None)
+        if params:
+            kwargs.update(self._adapter.map_params(params))
         try:
             response_text = self._with_retry(
                 "completion", lambda: self._adapter.complete(msgs, **kwargs)
@@ -123,6 +125,9 @@ class LLMClient:
         start = time.monotonic()
         error_text = ""
         collected: list[str] = []
+        params = kwargs.pop("params", None)
+        if params:
+            kwargs.update(self._adapter.map_params(params))
 
         try:
             for chunk in self._adapter.stream(msgs, **kwargs):
@@ -186,6 +191,9 @@ class LLMClient:
         start = time.monotonic()
         error_text = ""
         result: dict = {"text": "", "sources": []}
+        params = kwargs.pop("params", None)
+        if params:
+            kwargs.update(self._adapter.map_params(params))
         try:
             result = self._adapter.web_search(msgs, **kwargs)
             return result

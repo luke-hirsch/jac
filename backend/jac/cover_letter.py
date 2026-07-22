@@ -455,7 +455,7 @@ class CoverLetter:
         """
         if ai_fallback or not snippets:
             return 1.0
-        tax = self._REWRITE_TAX.get(self.mode, self._REWRITE_TAX["instruct"])
+        tax = self._REWRITE_TAX.get(self.mode, self._REWRITE_TAX["standard"])
         native_w = sum(
             len(s.content.split()) for s in snippets if s.language == language
         )
@@ -488,7 +488,7 @@ class CoverLetter:
             return {"count": None, "claims": []}
         critique = LetterCritic(body, snippets, executor=self.executor).critique()
         backstops = []
-        if self.mode == "instruct" and self._shrunk(body, snippets):
+        if self.mode == "standard" and self._shrunk(body, snippets):
             backstops.append(self._SHRINKAGE_NOTE)
         if self._overlong(body):
             backstops.append(
@@ -519,7 +519,7 @@ class CoverLetter:
         `grounding.repaired` keeps its v2 contract on conversational: True only when a rewrite
         actually replaced the body. `opening` travels along so the rewrite keeps the
         same arc context as draft one."""
-        conversational = self.mode == "conversational"
+        conversational = self.mode == "high"
         claims = (grounding.get("claims") or []) if conversational else []
         notes = critique.get("claims") or []
         if not claims and not notes:

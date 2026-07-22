@@ -2,6 +2,7 @@
 
 from allauth.account.internal.flows.reauthentication import did_recently_authenticate
 from django.contrib.auth import logout
+from llm_connector.conf import ExecutorError, resolve_executor
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -60,17 +61,25 @@ class PersonalityProfileView(generics.RetrieveUpdateAPIView):
 
 
 class PersonalityDossierRebuildView(APIView):
-    """POST: force-rebuild + return the dossier (preview the distilled text). ?alias= (default)."""
+    """POST: force-rebuild + return the dossier (preview the distilled text).
+    Optional body {provider, model}; blank = the user's default executor."""
 
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        try:
+            executor = resolve_executor(
+                request.user,
+                request.data.get("provider", ""),
+                request.data.get("model", ""),
+            )
+        except ExecutorError as exc:
+            return Response(
+                {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
+            )
         prof = PersonalityProfile.objects.get(user=request.user)
-        prof.dossier_built_at = None  # force stale -> always re-distils
-        text = prof.ensure_dossier(
-            alias=request.query_params.get("alias", "default"), user=request.user
-        )
-        return Response({"dossier": text})
+        prof.dossier_built_at = None
+        return Response({"dossier": prof.ensure_dossier(executor)})
 
 
 class PersonalityQuestionListCreateView(generics.ListCreateAPIView):

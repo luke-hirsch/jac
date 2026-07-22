@@ -35,6 +35,21 @@ class AnthropicAdapter(LLMAdapter):
         self._model = config.get("model", "claude-sonnet-4-6")
         self._max_tokens = config.get("max_tokens", 4096)
 
+    _THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384}
+
+    def map_params(self, params: dict) -> dict:
+        out = {}
+        effort = params.get("effort")
+        if effort:
+            budget = self._THINKING_BUDGET.get(effort, 8192)
+            out["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # The API requires budget_tokens < max_tokens; reserve the full budget
+            # ON TOP of the configured output room.
+            out["max_tokens"] = budget + self._max_tokens
+        elif "temperature" in params:
+            out["temperature"] = params["temperature"]
+        return out
+
     @staticmethod
     def _text_from(response) -> str:
         """Join all text blocks, skipping tool_use / thinking / web_search blocks. Anthropic can
@@ -59,9 +74,8 @@ class AnthropicAdapter(LLMAdapter):
         system, api_msgs = self._split_system(
             messages, kwargs.pop("system", self.config.get("system"))
         )
-        params = dict(
-            model=self._model, max_tokens=self._max_tokens, messages=api_msgs, **kwargs
-        )
+        params = dict(model=self._model, max_tokens=self._max_tokens, messages=api_msgs)
+        params.update(kwargs)
         if system:
             params["system"] = system
         response = self._client.messages.create(**params)
@@ -72,8 +86,11 @@ class AnthropicAdapter(LLMAdapter):
             messages, kwargs.pop("system", self.config.get("system"))
         )
         params = dict(
-            model=self._model, max_tokens=self._max_tokens, messages=api_msgs, **kwargs
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=api_msgs,
         )
+        params.update(kwargs)
         if system:
             params["system"] = system
         with self._client.messages.stream(**params) as s:
@@ -99,8 +116,8 @@ class AnthropicAdapter(LLMAdapter):
             max_tokens=self._max_tokens,
             messages=api_msgs,
             tools=tools,
-            **kwargs,
         )
+        params.update(kwargs)
         if system:
             params["system"] = system
         response = self._client.messages.create(**params)

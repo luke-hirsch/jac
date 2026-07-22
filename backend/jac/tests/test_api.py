@@ -6,11 +6,16 @@ Celery is always mocked (apply_async must return a STRING id — a Mock poisons
 the task_id CharField); the tower probe is mocked wherever resolution consults it.
 """
 
+import json
+import unittest
 from unittest.mock import patch
 
+from django.conf import settings as dj_settings
+from django.core.cache import cache
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
+from jac.llm_prompts import LetterChat
 from jac.models import GenerationRun, Mode, Skill
 from llm_connector.catalog import default_model
 from llm_connector.executor import Executor
@@ -20,6 +25,12 @@ from ._helpers import TEST_HIRSCHAI, make_application, make_user
 
 RUNS_URL = "/api/jac/generations/"
 APPS_URL = "/api/jac/applications/"
+
+# The chat throttle test's REST_FRAMEWORK: the live dict + a tiny llm-chat rate.
+THROTTLED_RF = {
+    **dj_settings.REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {"llm-chat": "2/min"},
+}
 
 
 def _mock_enqueue(mock_task):
@@ -258,21 +269,6 @@ class LetterChatViewTests(APITestCase):
         }
         return self.client.post(self.url, payload, format="json")
 
-    def test_any_executor_chats(self):
-        # No strength gate anymore — HirschAI chats too; the pick is the user's.
-        with (
-            patch("jac.views.resolve_executor", return_value=Executor("ollama")),
-            patch("jac.views.LetterChat") as chat_cls,
-        ):
-            chat_cls.return_value.reply.return_value = {
-                "reply": "warmer it is", "revision": None,
-            }
-            chat_cls._MAX_TRANSCRIPT_CHARS = 6000
-            chat_cls._MAX_BODY_CHARS = 8000
-            r = self._chat(provider="ollama")
-        self.assertEqual(r.status_code, 200, r.data)
-        self.assertEqual(r.data["reply"], "warmer it is")
-
     def test_executor_error_is_a_400(self):
         from llm_connector.conf import ExecutorError
 
@@ -348,3 +344,126 @@ class PinnedEntriesApiTests(APITestCase):
     def test_the_pin_cap_is_enforced(self):
         pins = [f"skill:{self.skill.pk}"] * 51
         self.assertEqual(self._patch_pins(pins).status_code, 400)
+
+
+@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
+@override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class GenerationRunParamsTests(APITestCase):
+    """[fullstack]-model-knobs: per-run effort/temperature (`params`), validated
+    against the catalog knob spec; HirschAI has no knobs. At unskip time also add
+    "params" to the exact-shape set in
+    GenerationRunReadTests.test_detail_shape_names_the_executor."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        row = LLMConfig(user=self.user, provider="anthropic")
+        row.api_key = "sk-a"
+        row.save()
+
+    def _post(self, **body):
+        payload = {"job_application": self.application.pk, **body}
+        with patch("jac.views.generate_run") as task:
+            _mock_enqueue(task)
+            return self.client.post(RUNS_URL, payload, format="json")
+
+    def test_valid_params_persist_and_echo(self):
+        r = self._post(provider="anthropic", mode="high", params={"effort": "high"})
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["params"], {"effort": "high"})
+        run = GenerationRun.objects.get(pk=r.data["id"])
+        self.assertEqual(run.params, {"effort": "high"})
+
+    def test_temperature_alone_is_valid(self):
+        r = self._post(provider="anthropic", params={"temperature": 0.3})
+        self.assertEqual(r.status_code, 201, r.data)
+
+    def test_out_of_range_temperature_is_rejected(self):
+        r = self._post(provider="anthropic", params={"temperature": 9})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("params", r.data)
+
+    def test_unknown_knob_is_rejected(self):
+        r = self._post(provider="anthropic", params={"top_k": 5})
+        self.assertEqual(r.status_code, 400)
+
+    def test_effort_and_temperature_cannot_combine(self):
+        # The exclusion is spec data (catalog KNOBS), enforced here once.
+        r = self._post(
+            provider="anthropic", params={"effort": "high", "temperature": 0.3}
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_knobs_on_hirschai_are_rejected(self):
+        r = self._post(provider="ollama", params={"effort": "high"})
+        self.assertEqual(r.status_code, 400)
+
+
+class LetterChatStreamTests(APITestCase):
+    """[fullstack]-chat-assistant-rework: the chat action becomes an SSE stream
+    (`text/event-stream`, `data: {"delta"|"done"|"error"}` lines) behind an
+    `llm-chat` scoped throttle. At unskip time DELETE the JSON-era tests in
+    LetterChatViewTests (test_any_executor_chats +
+    test_chat_round_trip_without_patching_letterchat); the 400 guards there stay."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/chat/"
+        cache.clear()  # scoped-throttle history lives in the default cache
+
+    def _chat(self, **body):
+        payload = {
+            "body": "Dear team.",
+            "messages": [{"role": "user", "content": "hi"}],
+            **body,
+        }
+        return self.client.post(self.url, payload, format="json")
+
+    def test_chat_streams_sse_deltas_and_done(self):
+        with (
+            patch(
+                "jac.views.resolve_executor",
+                return_value=Executor("fake", "fake-1", self.user),
+            ),
+            patch.object(LetterChat, "stream", return_value=iter(["Hel", "lo"])),
+        ):
+            r = self._chat()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "text/event-stream")
+        self.assertEqual(r["X-Accel-Buffering"], "no")
+        body = b"".join(r.streaming_content).decode()
+        events = [
+            json.loads(line[len("data:"):])
+            for line in body.splitlines()
+            if line.startswith("data:")
+        ]
+        self.assertEqual(events, [{"delta": "Hel"}, {"delta": "lo"}, {"done": True}])
+
+    def test_shape_problems_400_as_json_before_any_stream(self):
+        with patch(
+            "jac.views.resolve_executor",
+            return_value=Executor("fake", "fake-1", self.user),
+        ):
+            r = self._chat(messages=[])
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("messages", r.data)
+
+    @override_settings(REST_FRAMEWORK=THROTTLED_RF)
+    def test_chat_is_rate_limited(self):
+        # Throttling runs before validation, so cheap shape-400s count turns.
+        with patch(
+            "jac.views.resolve_executor",
+            return_value=Executor("fake", "fake-1", self.user),
+        ):
+            self.assertEqual(self._chat(messages=[]).status_code, 400)
+            self.assertEqual(self._chat(messages=[]).status_code, 400)
+            self.assertEqual(self._chat(messages=[]).status_code, 429)

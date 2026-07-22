@@ -25,6 +25,7 @@ function hirschai(over: Partial<ExecutorRow> = {}): ExecutorRow {
     default: true,
     models: [],
     modes: ["standard"],
+    knobs: {},
     ...over,
   };
 }
@@ -42,6 +43,7 @@ function anthropic(over: Partial<ExecutorRow> = {}): ExecutorRow {
       { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
     ],
     modes: ["standard", "high"],
+    knobs: {},
     ...over,
   };
 }
@@ -65,24 +67,25 @@ describe("executorDisabledReason", () => {
   });
 
   it("a commercial row is never 'offline' — reachable stays null, unprobed", () => {
-    expect(
-      executorDisabledReason(anthropic({ reachable: null })),
-    ).toBeNull();
+    expect(executorDisabledReason(anthropic({ reachable: null }))).toBeNull();
   });
 });
 
 describe("defaultExecutorRow (picker preselect)", () => {
   it("prefers the backend's default row when usable", () => {
     const commercial = anthropic({ default: true });
-    expect(
-      defaultExecutorRow([hirschai({ default: false }), commercial]),
-    ).toBe(commercial);
+    expect(defaultExecutorRow([hirschai({ default: false }), commercial])).toBe(
+      commercial,
+    );
   });
 
   it("skips a disabled default and falls to the first usable row", () => {
     const tower = hirschai({ default: false });
     expect(
-      defaultExecutorRow([tower, anthropic({ default: true, configured: false })]),
+      defaultExecutorRow([
+        tower,
+        anthropic({ default: true, configured: false }),
+      ]),
     ).toBe(tower);
   });
 

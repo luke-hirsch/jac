@@ -1,203 +1,61 @@
 import { describe, it, expect } from "vitest";
 import {
-  PROVIDER_SPECS,
-  buildStructuredExtra,
+  configPayload,
   checkResultLabel,
-  parseExtraJson,
-  toPayload,
-  rowToState,
-  switchProvider,
-  type ConfigFormState,
   type LLMConfigRow,
-  type Provider,
 } from "@/lib/queries/llm";
 
 /**
- * Unit tests for the pure form<->payload helpers in `llm.ts` — the provider-mask
- * logic the (alias-era) LLM-config tab relies on. This whole block is frozen with
- * llm.ts zone B until [fullstack]-llm-config-tab-v2 rewrites tab + tests against
- * the five-field config API. The alias/pins/address-search describes died with
- * [frontend]-model-first-generate-panel; the executors section is covered by
- * tests/lib/executors.test.ts.
+ * Red-first tests for the five-field config era ([fullstack]-llm-config-rework):
+ * one credential per commercial provider, `api_key` write-only. The whole
+ * alias-era mask vocabulary (PROVIDER_SPECS, buildStructuredExtra,
+ * parseExtraJson, rowToState, switchProvider) is deleted, not tested.
+ * The executors section is covered by tests/lib/executors.test.ts.
  */
 
-const PROVIDERS: Provider[] = ["anthropic", "openai", "google", "custom", "ollama"];
-
-function baseState(over: Partial<ConfigFormState> = {}): ConfigFormState {
-  return {
-    alias: "reasoning",
-    provider: "anthropic",
-    model: "claude-opus-4-8",
-    url: "",
-    max_tokens: "",
-    api_key: "",
-    extraJson: "",
-    extraFields: {},
-    ...over,
-  };
-}
-
-describe("PROVIDER_SPECS", () => {
-  it("covers exactly the five backend providers", () => {
-    expect(Object.keys(PROVIDER_SPECS).sort()).toEqual([...PROVIDERS].sort());
-  });
-
-  it("marks custom/ollama as json+required-url, commercial as structured", () => {
-    expect(PROVIDER_SPECS.custom.extra).toBe("json");
-    expect(PROVIDER_SPECS.ollama.extra).toBe("json");
-    expect(PROVIDER_SPECS.custom.url).toBe("required");
-    expect(PROVIDER_SPECS.ollama.url).toBe("required");
-    expect(PROVIDER_SPECS.anthropic.extra).toBe("structured");
-    expect(PROVIDER_SPECS.openai.extra).toBe("structured");
-    expect(PROVIDER_SPECS.google.extra).toBe("structured");
-  });
-
-  it("requires an api key for the commercial providers only", () => {
-    expect(PROVIDER_SPECS.anthropic.apiKey).toBe("required");
-    expect(PROVIDER_SPECS.openai.apiKey).toBe("required");
-    expect(PROVIDER_SPECS.google.apiKey).toBe("required");
-    expect(PROVIDER_SPECS.custom.apiKey).toBe("optional");
-    expect(PROVIDER_SPECS.ollama.apiKey).toBe("optional");
-  });
-});
-
-describe("buildStructuredExtra", () => {
-  it("drops empty values and coerces number fields", () => {
-    const extra = buildStructuredExtra(PROVIDER_SPECS.anthropic, { max_uses: "3" });
-    expect(extra).toEqual({ max_uses: 3 });
-  });
-
-  it("omits a field left blank", () => {
-    expect(buildStructuredExtra(PROVIDER_SPECS.anthropic, { max_uses: "" })).toEqual({});
-    expect(buildStructuredExtra(PROVIDER_SPECS.openai, { reasoning_effort: "" })).toEqual({});
-  });
-
-  it("keeps select values as strings", () => {
-    expect(
-      buildStructuredExtra(PROVIDER_SPECS.openai, { reasoning_effort: "high" }),
-    ).toEqual({ reasoning_effort: "high" });
-  });
-});
-
-describe("parseExtraJson", () => {
-  it("treats blank as an empty object", () => {
-    expect(parseExtraJson("")).toEqual({});
-    expect(parseExtraJson("   ")).toEqual({});
-  });
-
-  it("parses a JSON object", () => {
-    expect(parseExtraJson('{"think": false, "timeout": 120}')).toEqual({
-      think: false,
-      timeout: 120,
+describe("configPayload", () => {
+  it("create: provider + trimmed key", () => {
+    expect(configPayload({ provider: "anthropic", apiKey: "  sk-123  " })).toEqual({
+      provider: "anthropic",
+      api_key: "sk-123",
     });
   });
 
-  it("throws on invalid JSON", () => {
-    expect(() => parseExtraJson("{bad")).toThrow(/valid JSON/i);
+  it("omits a blank key — a PATCH without api_key keeps the stored key", () => {
+    expect(configPayload({ provider: "anthropic" })).toEqual({
+      provider: "anthropic",
+    });
+    expect(configPayload({ provider: "anthropic", apiKey: "   " })).toEqual({
+      provider: "anthropic",
+    });
   });
 
-  it("throws on non-object JSON (array / null / primitive)", () => {
-    expect(() => parseExtraJson("[1,2]")).toThrow(/object/i);
-    expect(() => parseExtraJson("null")).toThrow(/object/i);
-    expect(() => parseExtraJson("42")).toThrow(/object/i);
-  });
-});
-
-describe("toPayload", () => {
-  it("builds extra from structured fields and blanks a hidden url", () => {
-    const p = toPayload(
-      baseState({ provider: "anthropic", url: "ignored", extraFields: { max_uses: "5" } }),
-    );
-    expect(p.url).toBe(""); // anthropic url is hidden
-    expect(p.extra).toEqual({ max_uses: 5 });
-  });
-
-  it("parses the JSON textarea for json providers", () => {
-    const p = toPayload(
-      baseState({
-        provider: "ollama",
-        model: "llama3.2:1b",
-        url: "http://localhost:11434",
-        extraJson: '{"think": false}',
-      }),
-    );
-    expect(p.url).toBe("http://localhost:11434");
-    expect(p.extra).toEqual({ think: false });
-  });
-
-  it("parses max_tokens or leaves it null", () => {
-    expect(toPayload(baseState({ max_tokens: "4096" })).max_tokens).toBe(4096);
-    expect(toPayload(baseState({ max_tokens: "" })).max_tokens).toBeNull();
-  });
-
-  it("includes api_key only when entered", () => {
-    expect(toPayload(baseState({ api_key: "" }))).not.toHaveProperty("api_key");
-    expect(toPayload(baseState({ api_key: "  " }))).not.toHaveProperty("api_key");
-    expect(toPayload(baseState({ api_key: "sk-123" })).api_key).toBe("sk-123");
-  });
-
-  it("propagates a JSON parse error", () => {
-    expect(() => toPayload(baseState({ provider: "custom", extraJson: "{oops" }))).toThrow();
-  });
-});
-
-describe("rowToState", () => {
-  const row: LLMConfigRow = {
-    id: 1,
-    alias: "writer",
-    provider: "ollama",
-    model: "llama3.2:1b",
-    url: "http://localhost:11434",
-    max_tokens: 512,
-    extra: { think: false, embed_model: "qwen3-embedding:0.6b" },
-    has_api_key: true,
-    created_at: "",
-    updated_at: "",
-  };
-
-  it("pretty-prints json-provider extra into the textarea", () => {
-    const s = rowToState(row);
-    expect(JSON.parse(s.extraJson)).toEqual(row.extra);
-    expect(s.max_tokens).toBe("512");
-    expect(s.api_key).toBe(""); // never seeded — write-only
-  });
-
-  it("seeds structured extra fields by key", () => {
-    const s = rowToState({
-      ...row,
+  it("default toggle travels without touching the key", () => {
+    expect(configPayload({ provider: "openai", makeDefault: true })).toEqual({
       provider: "openai",
-      extra: { reasoning_effort: "high" },
+      default: true,
     });
-    expect(s.extraFields.reasoning_effort).toBe("high");
-    expect(s.extraJson).toBe("");
-  });
-
-  it("gives empty defaults with no row", () => {
-    const s = rowToState();
-    expect(s.alias).toBe("");
-    expect(s.provider).toBe("anthropic");
-    expect(s.max_tokens).toBe("");
+    expect(configPayload({ provider: "openai", makeDefault: false })).toEqual({
+      provider: "openai",
+      default: false,
+    });
   });
 });
 
-describe("switchProvider", () => {
-  it("clears the previous provider's extra inputs and hides url when appropriate", () => {
-    const start = baseState({
-      provider: "ollama",
-      url: "http://localhost:11434",
-      extraJson: '{"think": false}',
-    });
-    const next = switchProvider(start, "anthropic");
-    expect(next.provider).toBe("anthropic");
-    expect(next.extraJson).toBe("");
-    expect(next.url).toBe(""); // anthropic hides url
-    expect(next.alias).toBe(start.alias); // common fields preserved
-    expect(next.model).toBe(start.model);
-  });
-
-  it("seeds empty structured field keys for the new provider", () => {
-    const next = switchProvider(baseState(), "openai");
-    expect(next.extraFields).toEqual({ reasoning_effort: "" });
+describe("LLMConfigRow (five-field shape)", () => {
+  it("compiles with exactly the server's fields — no alias/model/url/extra", () => {
+    const row: LLMConfigRow = {
+      id: 1,
+      provider: "anthropic",
+      default: true,
+      has_api_key: true,
+      created_at: "",
+      updated_at: "",
+    };
+    expect(row.has_api_key).toBe(true);
+    expect("alias" in row).toBe(false);
+    expect("model" in row).toBe(false);
+    expect("extra" in row).toBe(false);
   });
 });
 

@@ -11,7 +11,6 @@ import {
   useCreateApplication,
   useDeleteApplication,
 } from "@/lib/queries/applications";
-import { useCreateGeneration } from "@/lib/queries/generations";
 
 export const Route = createFileRoute("/_authenticated/applications/")({
   component: ApplicationsPage,
@@ -21,7 +20,6 @@ function ApplicationsPage() {
   const navigate = useNavigate();
   const apps = useApplications();
   const create = useCreateApplication();
-  const createRun = useCreateGeneration();
   const destroy = useDeleteApplication();
   const [postingText, setPostingText] = useState("");
 
@@ -34,22 +32,9 @@ function ApplicationsPage() {
       toast.error("Could not create the application");
       return;
     }
-    // Kick off the zero-cost default run right away — it fills the still-empty
-    // application (task-side fill-if-empty), so the detail page opens with a
-    // draft already generating instead of an empty shell.
-    try {
-      await createRun.mutateAsync({
-        job_application: app.id,
-        grade: "light",
-        alias: "default",
-        verify_grounding: false,
-        personal_paragraph: false,
-      });
-    } catch {
-      toast.warning(
-        "Could not start the automatic light run — generate manually.",
-      );
-    }
+    // The backend auto-runs a standard generation on the user's default executor
+    // when one is available (perform_create) — the SPA no longer POSTs a run here.
+    // The detail page seeds from runs[0] and streams it.
     navigate({
       to: "/applications/$applicationId",
       params: { applicationId: String(app.id) },
