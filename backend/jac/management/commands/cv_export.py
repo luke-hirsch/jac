@@ -29,7 +29,6 @@ from jac.models import (
     Language,
     Location,
     Project,
-    ResumeSnippet,
     Skill,
 )
 
@@ -70,7 +69,6 @@ class Command(BaseCommand):
             "projects": self._projects(user),
             "educations": self._educations(user),
             "languages": self._languages(user),
-            "resume_snippets": self._snippets(user),
         }
 
         # default=str renders date objects as ISO "YYYY-MM-DD".
@@ -79,9 +77,7 @@ class Command(BaseCommand):
         if options["file"]:
             Path(options["file"]).write_text(payload + "\n")
             self.stderr.write(
-                self.style.SUCCESS(
-                    f"Exported {user.username!r} → {options['file']}"
-                )
+                self.style.SUCCESS(f"Exported {user.username!r} → {options['file']}")
             )
         else:
             self.stdout.write(payload)
@@ -208,19 +204,4 @@ class Command(BaseCommand):
                 "description": lang.description,
             }
             for lang in Language.objects.filter(user=user).order_by("name")
-        ]
-
-    def _snippets(self, user: User) -> list[dict]:
-        return [
-            {
-                "title": s.title,
-                "content": s.content,
-                "kind": s.kind,
-                "is_active": s.is_active,
-                "job": s.job.title if s.job else None,
-                "project": s.project.name if s.project else None,
-                "domains": _names(s.domains),
-                "skills": _names(s.skills),
-            }
-            for s in ResumeSnippet.objects.filter(user=user).order_by("title")
         ]

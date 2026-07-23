@@ -10,7 +10,6 @@ from .models import (
     Language,
     Location,
     Project,
-    ResumeSnippet,
     Skill,
 )
 
@@ -71,15 +70,6 @@ class LanguageAdmin(admin.ModelAdmin):
     list_display = ("name", "fluency")
     list_filter = ("fluency",)
     search_fields = ("name",)
-
-
-@admin.register(ResumeSnippet)
-class SnippetAdmin(admin.ModelAdmin):
-    list_display = ("title", "kind", "language", "is_active", "updated_at")
-    list_filter = ("kind", "is_active")
-    search_fields = ("title", "content")
-    filter_horizontal = ("domains", "skills")
-    autocomplete_fields = ("job", "project")
 
 
 class JobPostAddressInline(admin.StackedInline):

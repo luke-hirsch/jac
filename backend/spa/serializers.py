@@ -88,6 +88,12 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
             "questions",
             "answers_updated_at",
             "dossier_built_at",
+            "letter_tone",
+            "letter_focus",
+            "writing_sample",
+            "style_dossier",
+            "sample_updated_at",
+            "style_built_at",
             "updated_at",
         )
         read_only_fields = (
@@ -96,6 +102,9 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
             "questions",
             "answers_updated_at",
             "dossier_built_at",
+            "style_dossier",
+            "sample_updated_at",
+            "style_built_at",
             "updated_at",
         )
 
@@ -137,10 +146,15 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
         return cleaned
 
     def update(self, instance, validated_data):
-        if "answers" in validated_data:
-            from django.utils import timezone
+        from django.utils import timezone
 
+        if "answers" in validated_data:
             instance.answers_updated_at = timezone.now()
+        if (
+            "writing_sample" in validated_data
+            and validated_data["writing_sample"] != instance.writing_sample
+        ):
+            instance.sample_updated_at = timezone.now()
         return super().update(instance, validated_data)
 
 

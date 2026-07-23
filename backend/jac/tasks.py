@@ -113,8 +113,6 @@ def generate_run(run_id: int) -> None:
         logger.warning("generate_run: no run %s", run_id)
         return
 
-    # Claim the run: only a pending one is ours to execute. Anything else was cancelled
-    # while queued, already ran, or is owned by another worker — skip silently.
     claimed = GenerationRun.objects.filter(
         pk=run_id, status=GenerationRun.Status.pending
     ).update(status=GenerationRun.Status.running, updated_at=timezone.now())
@@ -132,8 +130,7 @@ def generate_run(run_id: int) -> None:
         return
 
     def notify_retry(operation: str, delay_s: float, error: str) -> None:
-        # Transient, not persisted: the DB keeps the real stage; the browser just gets
-        # told why nothing is moving right now.
+
         publish_event(
             run.pk,
             {
@@ -186,7 +183,14 @@ def generate_run(run_id: int) -> None:
             # 3. Build the cover letter.
             _progress(run, "writing letter")
             letter = CoverLetter(
-                user, jp, cv, address=addr, mode=mode, executor=executor
+                user,
+                jp,
+                cv,
+                address=addr,
+                mode=mode,
+                executor=executor,
+                tone=run.letter_tone,
+                focus=run.letter_focus,
             ).build()
 
         result = {
@@ -284,10 +288,4 @@ def sync_user_vectors(user_id: int) -> None:
 
     vectors.reconcile(
         user_id, vectors.DOC_CV, vectors.cv_corpus(user_id), delete_orphans=True
-    )
-    vectors.reconcile(
-        user_id,
-        vectors.DOC_SNIPPET,
-        vectors.snippet_corpus(user_id),
-        delete_orphans=True,
     )

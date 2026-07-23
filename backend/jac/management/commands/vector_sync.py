@@ -28,18 +28,16 @@ class Command(BaseCommand):
         if not store.is_enabled():
             raise CommandError("VECTOR_STORE is not configured — nothing to sync.")
         for user in self._users(opts.get("user")):
-            alias = vectors.sync_alias(user)
-            name = vectors.collection_for(alias, user)
+            name = vectors.collection_for()
             if opts["drop"] and name is not None:
                 client = store.get_client()
-                for doc in (vectors.DOC_CV, vectors.DOC_SNIPPET):
+                for doc in vectors.DOC_CV:
                     store.delete(client, name, user.pk, doc)
             corpora = {
                 vectors.DOC_CV: vectors.cv_corpus(user.pk),
-                vectors.DOC_SNIPPET: vectors.snippet_corpus(user.pk),
             }
             for doc, desired in corpora.items():
-                ok = vectors.reconcile(user, alias, doc, desired, delete_orphans=True)
+                ok = vectors.reconcile(user, doc, desired, delete_orphans=True)
                 status = f"{len(desired)} entries" if ok else "FAILED"
                 self.stdout.write(f"{user.username} [{doc}]: {status}")
 

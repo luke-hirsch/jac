@@ -22,7 +22,6 @@ from jac.views import (
     LanguageViewSet,
     LocationViewSet,
     ProjectViewSet,
-    ResumeSnippetViewSet,
     SkillViewSet,
 )
 
@@ -35,7 +34,6 @@ router.register("skills", SkillViewSet, basename="skill")
 router.register("jobs", JobViewSet, basename="job")
 router.register("projects", ProjectViewSet, basename="project")
 router.register("languages", LanguageViewSet, basename="language")
-router.register("resume-snippets", ResumeSnippetViewSet, basename="resume-snippet")
 router.register("generations", GenerationRunViewSet, basename="generation")
 router.register("applications", JobApplicationViewSet, basename="application")
 router.register("layouts", ApplicationLayoutViewSet, basename="layout")

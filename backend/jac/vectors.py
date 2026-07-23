@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # The two corpora sharing a collection; `doc` in the point payload keeps them apart.
 DOC_CV = "cv"
-DOC_SNIPPET = "snippet"
 
 
 def content_hash(text: str) -> str:
@@ -138,13 +137,3 @@ def cv_corpus(user_id) -> dict:
     from jac.cv import CV
 
     return {e["id"]: e["text"] for e in CV(user_pk=_uid(user_id))._flatten_entries()}
-
-
-def snippet_corpus(user_id) -> dict:
-    """{"kind:pk": content} for the user's active snippets (SnippetSelector's ids)."""
-    from jac.models import ResumeSnippet
-
-    return {
-        f"{s.kind}:{s.pk}": s.content
-        for s in ResumeSnippet.objects.filter(user=_uid(user_id), is_active=True)
-    }

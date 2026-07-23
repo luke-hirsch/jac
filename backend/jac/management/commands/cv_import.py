@@ -54,10 +54,8 @@ from jac.models import (
     Language,
     Location,
     Project,
-    ResumeSnippet,
     Skill,
 )
-
 
 # Cleared by --replace. Domain/Location are intentionally excluded: they are
 # shared-ish references (system defaults, reusable locations) that other rows
@@ -69,7 +67,6 @@ ENTRY_MODELS = (
     Job,
     Project,
     Language,
-    ResumeSnippet,
 )
 
 
@@ -141,9 +138,8 @@ class Command(BaseCommand):
             counts["educations"] = self._import_educations(
                 user, data.get("educations", [])
             )
-            counts["languages"] = self._import_languages(user, data.get("languages", []))
-            counts["resume_snippets"] = self._import_snippets(
-                user, data.get("resume_snippets", [])
+            counts["languages"] = self._import_languages(
+                user, data.get("languages", [])
             )
 
             if options["dry_run"]:
@@ -215,7 +211,9 @@ class Command(BaseCommand):
             out.append(skill)
         return out
 
-    def _resolve_certification(self, user: User, name: str | None) -> Certification | None:
+    def _resolve_certification(
+        self, user: User, name: str | None
+    ) -> Certification | None:
         if not name:
             return None
         cert = Certification.objects.filter(user=user, name=name).first()
@@ -276,11 +274,15 @@ class Command(BaseCommand):
             skill = Skill.objects.create(
                 user=user,
                 name=item["name"],
-                proficiency=item.get("proficiency", Skill.Proficiency_Choices.intermediate),
+                proficiency=item.get(
+                    "proficiency", Skill.Proficiency_Choices.intermediate
+                ),
                 category=item.get("category", Skill.Category.technical),
                 first_used=_parse_date(item.get("first_used")),
                 years_of_experience_override=item.get("years_of_experience_override"),
-                certification=self._resolve_certification(user, item.get("certification")),
+                certification=self._resolve_certification(
+                    user, item.get("certification")
+                ),
                 description=item.get("description", ""),
             )
             domains = self._resolve_domains(user, item.get("domains", []))
@@ -365,26 +367,9 @@ class Command(BaseCommand):
                 user=user,
                 name=item["name"],
                 fluency=item.get("fluency", Language.Fluency.basic),
-                certification=self._resolve_certification(user, item.get("certification")),
+                certification=self._resolve_certification(
+                    user, item.get("certification")
+                ),
                 description=item.get("description", ""),
             )
-        return len(items)
-
-    def _import_snippets(self, user: User, items: list[dict]) -> int:
-        for item in items:
-            snippet = ResumeSnippet.objects.create(
-                user=user,
-                title=item["title"],
-                content=item.get("content", ""),
-                kind=item.get("kind", ResumeSnippet.Kind.other),
-                is_active=item.get("is_active", True),
-                job=self._resolve_job(user, item.get("job")),
-                project=self._resolve_project(user, item.get("project")),
-            )
-            domains = self._resolve_domains(user, item.get("domains", []))
-            if domains:
-                snippet.domains.set(domains)
-            skills = self._resolve_skills(user, item.get("skills", []))
-            if skills:
-                snippet.skills.set(skills)
         return len(items)

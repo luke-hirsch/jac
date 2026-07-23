@@ -8,6 +8,7 @@ from llm_connector.conf import ExecutorError, resolve_executor
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
+from spa.models import PersonalityProfile
 
 from jac.models import (
     ApplicationLayout,
@@ -23,7 +24,6 @@ from jac.models import (
     Location,
     Mode,
     Project,
-    ResumeSnippet,
     Skill,
     normalize_mode,
 )
@@ -400,52 +400,6 @@ class CvSerializer(serializers.Serializer):
     languages = LanguageSerializer(many=True)
 
 
-class ResumeSnippetSerializer(ScopeDomainsToUserMixin, serializers.ModelSerializer):
-    user_scoped_fields = ("skills", "job", "project")
-    domain_scoped_fields = ("domains",)
-
-    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
-    domains = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=Domain.objects.all(),
-        required=False,
-    )
-    skills = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=Skill.objects.all(),
-        required=False,
-    )
-    job = serializers.PrimaryKeyRelatedField(
-        queryset=Job.objects.all(),
-        required=False,
-        allow_null=True,
-    )
-    project = serializers.PrimaryKeyRelatedField(
-        queryset=Project.objects.all(),
-        required=False,
-        allow_null=True,
-    )
-
-    class Meta:
-        model = ResumeSnippet
-        fields = [
-            "id",
-            "title",
-            "content",
-            "kind",
-            "domains",
-            "skills",
-            "job",
-            "project",
-            "language",
-            "is_active",
-            "created_at",
-            "updated_at",
-            "user",
-        ]
-        read_only_fields = ["id", "created_at", "updated_at"]
-
-
 class ApplicationLayoutSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     is_default = serializers.SerializerMethodField()
@@ -492,6 +446,8 @@ class GenerationRunCreateSerializer(
     provider = serializers.CharField(required=False, allow_blank=True, default="")
     model = serializers.CharField(required=False, allow_blank=True, default="")
     params = serializers.JSONField(required=False, default=dict)
+    letter_tone = serializers.CharField(required=False, allow_blank=True, default="")
+    letter_focus = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = GenerationRun
@@ -501,6 +457,8 @@ class GenerationRunCreateSerializer(
             "provider",
             "model",
             "params",
+            "letter_tone",
+            "letter_focus",
             "domains",
             "started",
             "ended",
@@ -539,6 +497,14 @@ class GenerationRunCreateSerializer(
         attrs["mode"] = mode
         attrs["provider"] = executor.provider
         attrs["model"] = executor.model or ""
+        tone = (attrs.get("letter_tone") or "").strip()
+        if tone and tone not in PersonalityProfile.Tone.values:
+            raise serializers.ValidationError({"letter_tone": ["unknown tone"]})
+        focus = (attrs.get("letter_focus") or "").strip()
+        if focus and focus not in PersonalityProfile.Focus.values:
+            raise serializers.ValidationError({"letter_focus": ["unknown focus"]})
+        attrs["letter_tone"] = tone
+        attrs["letter_focus"] = focus
         return attrs
 
 
@@ -560,6 +526,8 @@ class GenerationRunSerializer(serializers.ModelSerializer):
             "provider",
             "model",
             "params",
+            "letter_tone",
+            "letter_focus",
             "posting_title",
             "created_at",
             "updated_at",

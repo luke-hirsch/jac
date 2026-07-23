@@ -49,7 +49,6 @@ from jac.models import (
     Location,
     Mode,
     Project,
-    ResumeSnippet,
     Skill,
     TransitionError,
 )
@@ -66,7 +65,6 @@ from jac.serializers import (
     LanguageSerializer,
     LocationSerializer,
     ProjectSerializer,
-    ResumeSnippetSerializer,
     SkillSerializer,
 )
 from jac.tasks import GENERATION_EXPIRES_S, generate_run, publish_event
@@ -327,19 +325,6 @@ class CVEntryListView(APIView):
                     cv.entries["languages"], many=True, context=context
                 ).data,
             }
-        )
-
-
-class ResumeSnippetViewSet(BulkActionMixin, viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, IsOwner]
-    serializer_class = ResumeSnippetSerializer
-    search_fields = ["title", "content"]
-    filterset_fields = ["kind", "is_active", "domains", "skills"]
-    ordering_fields = ["kind", "title", "created_at", "updated_at"]
-
-    def get_queryset(self):
-        return ResumeSnippet.objects.filter(user=self.request.user).order_by(
-            "kind", "title"
         )
 
 

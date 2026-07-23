@@ -123,17 +123,6 @@ class Embed:
         return d / (na * nb) if na and nb else 0.0
 
 
-class SnippetEmbed(Embed):
-    """Embed rung for cover-letter snippet selection: identical mechanics to the CV
-    Embed, retrieval instruction retargeted at ResumeSnippets. Entries are
-    `{"id": "<kind>:<pk>", "text": <content>}` dicts."""
-
-    _EMBED_INSTRUCT = (
-        "Given a job posting, retrieve the resume snippets most relevant to it."
-    )
-    DOC_KIND = "snippet"
-
-
 class Conversational:
     """`strong` rung: a conversational LLM selects the CV holistically. It returns an
     ORDERED list of chosen entry ids (priority order, best first) each with a short `why`,
@@ -376,86 +365,89 @@ class AddressExtract:
 
 
 class CoverLetterWriter:
-    """Turn the embedding-selected `ResumeSnippet`s into cover-letter body prose.
+    """Compose a tailored cover-letter body from the candidate's tailored CV facts, their
+    personality + writing-style dossiers, and (when available) a company-research dossier —
+    shaped by the tone × focus matrix. There are no snippets: the CV entries are the ONLY source
+    of facts about the candidate, at every mode.
 
-    Snippet content is the only permitted source of facts about the candidate, at every
-    grade. What varies is the writer's licence:
-      - light: glue — join the snippets, minimal connective tissue (all a 1B model can do);
-      - standard: polish — rework the snippets into good prose, claims preserved;
-      - strong: compose — write an original letter; UNIQUELY, it sees the job posting
-        (`posting_text`) to tailor emphasis/tone/ordering. The posting is the classic
-        fabrication vector, which is why below strong it is never included, and why the
-        caller runs a mandatory grounding audit (+ one repair pass) on strong output.
-
-    `unsupported_claims` and `revision_notes` are the repair-pass channels: the
-    grounding audit's findings and the LetterCritic's writing notes are fed back so
-    one rewrite can fix both. `opening_paragraph` is the personal paragraph that will
-    sit above this body — context for the arc, never a source of candidate facts.
-
-    Output is free prose (the body), the one place structured line-format I/O does not
-    apply. Any failure -> '' so the caller falls back to the raw stitched snippets.
+    The posting is role context on `high` only (the classic fabrication vector — never a source of
+    facts). STYLE guides voice, never facts. `unsupported_claims` is the repair channel: the
+    grounding audit's findings feed exactly one rewrite. Free prose out; any failure -> '' so the
+    caller surfaces a loud stub.
     """
 
-    _TARGET_WORDS = (200, 280)
+    _TARGET_WORDS = (200, 320)
 
-    _MODE_CLAUSE = {
-        "standard": (
-            "Rework the snippets into a polished, cohesive letter body. This is a full "
-            "letter, not a summary: aim for roughly {lo}-{hi} words, keep every concrete "
-            "claim, and write one paragraph per theme with real transitions — write the "
-            "themes out; never compress the substance away. If the snippets hold less "
-            "material than that, use everything they state and stop — never pad or "
-            "invent to reach the length. Close with a brief final paragraph: a "
-            "call to action and genuine thanks for the consideration. Do not invent "
-            "facts the snippets do not state."
+    # Keys MUST match spa PersonalityProfile.Tone / .Focus values.
+    _TONE = {
+        "personal": (
+            "Write in a warm, personable, first-person voice — genuine and direct, as if speaking "
+            "to the reader."
         ),
-        "high": (
-            "Compose an original, persuasive letter body tailored to THIS job posting. Use the "
-            "posting only to choose emphasis, ordering, and tone — the posting is NEVER a "
-            "source of facts about the candidate. Every factual claim — skills, employers, "
-            "titles, numbers, dates, achievements, and any other checkable fact — must come "
-            "from the snippets; invent nothing. State each experience, project, and "
-            "achievement at most once — never "
-            "retell the same fact in different words. Aim for roughly {lo}-{hi} words — "
-            "the finished letter must fit one page; prefer dropping the weakest material "
-            "over compressing everything. Close with a brief final paragraph: "
-            "a call to action and genuine thanks for the consideration."
+        "neutral": (
+            "Write in a professional voice with measured warmth — neither stiff nor familiar."
+        ),
+        "formal": (
+            "Write in a formal, reserved business register — traditional and restrained."
         ),
     }
+    _FOCUS = {
+        "soft_skill": (
+            "Lead with working style, collaboration, values and motivation; use technical facts as "
+            "supporting evidence."
+        ),
+        "balanced": (
+            "Give technical achievements and working style / motivation roughly equal weight."
+        ),
+        "technical": (
+            "Lead with concrete technical achievements, tools, and measurable outcomes; keep "
+            "soft-skill framing brief."
+        ),
+    }
+
     _COMMON = (
-        "Write ONLY the body paragraphs of a cover letter — no date, no addresses, no subject "
-        "line, no salutation, no sign-off, no markdown, no placeholders. Write in {language}. "
-        "Use ONLY facts stated in the snippets below; do not add skills, employers, job titles, "
-        "numbers, dates, achievements, or any other factual claim the snippets do not state."
+        "Write ONLY the body paragraphs of a cover letter — no date, no addresses, no subject line, "
+        "no salutation, no sign-off, no markdown, no placeholders. Write in {language}. Every "
+        "factual claim about the candidate — skills, employers, job titles, numbers, dates, "
+        "achievements — must come from the CV FACTS below; invent nothing, and state each experience "
+        "at most once. Aim for {lo}-{hi} words and fit one page. Open with why the candidate fits "
+        "THIS role (use RESEARCH for company specifics when present), give the strongest evidence "
+        "next, then a brief close with a call to action and genuine thanks."
     )
 
     def __init__(
         self,
         executor,
-        snippets: list,
         candidate_name: str = "",
         title: str = "",
         language: str = "en",
+        tone: str = "neutral",
+        focus: str = "balanced",
+        cv_facts: str = "",
+        personality_dossier: str = "",
+        style_dossier: str = "",
+        company_dossier: str = "",
         mode: str = "standard",
         posting_text: str = "",
         unsupported_claims: list[str] | None = None,
-        revision_notes: list[str] | None = None,
-        opening_paragraph: str = "",
     ):
-        self.snippets = snippets
+        self.executor = executor
         self.candidate_name = candidate_name
         self.title = title
         self.language = language
+        self.tone = tone
+        self.focus = focus
+        self.cv_facts = cv_facts
+        self.personality_dossier = personality_dossier
+        self.style_dossier = style_dossier
+        self.company_dossier = company_dossier
         self.mode = mode
-        self.executor = executor
         self.posting_text = posting_text
         self.unsupported_claims = unsupported_claims or []
-        self.revision_notes = revision_notes or []
-        self.opening_paragraph = opening_paragraph
 
     def write(self) -> str:
-        """Return the woven body prose. '' when there are no snippets or the LLM fails."""
-        if not self.snippets:
+        """Return the composed body prose. '' when there are no CV facts or the LLM fails."""
+        if not (self.cv_facts or "").strip():
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
@@ -465,97 +457,88 @@ class CoverLetterWriter:
         return (raw or "").strip()
 
     def _prompt(self) -> str:
-        clause = self._MODE_CLAUSE.get(self.mode, self._MODE_CLAUSE["standard"])
         lo, hi = self._TARGET_WORDS
-        clause = clause.format(lo=lo, hi=hi)
-        common = self._COMMON.format(language=_language_name(self.language))
-        blocks = "\n\n".join(
-            f"[{s.get_kind_display()}] {s.title}\n{s.content}" for s in self.snippets
+        tone = self._TONE.get(self.tone, self._TONE["neutral"])
+        focus = self._FOCUS.get(self.focus, self._FOCUS["balanced"])
+        common = self._COMMON.format(
+            language=_language_name(self.language), lo=lo, hi=hi
+        )
+
+        style = (
+            f"STYLE (imitate this voice; it carries NO facts):\n{self.style_dossier}\n\n"
+            if self.style_dossier
+            else ""
+        )
+        personality = (
+            "PERSONALITY (who the candidate is — shape emphasis and framing, not a source of hard "
+            f"facts):\n{self.personality_dossier}\n\n"
+            if self.personality_dossier
+            else ""
+        )
+        research = (
+            "RESEARCH (company facts — the ONLY source for claims about the company):\n"
+            f"{self.company_dossier}\n\n"
+            if self.company_dossier
+            else ""
         )
         posting = ""
         if self.mode == "high" and self.posting_text:
-            posting = f"JOB POSTING (context only, never a source of facts):\n{self.posting_text}\n\n"
-        opening = ""
-        if self.opening_paragraph:
-            opening = (
-                "OPENING PARAGRAPH (already written; it appears directly above your "
-                "text): context only, never a source of facts about the candidate, and "
-                "do not repeat it — but you may echo its theme in one clause of your "
-                "closing to tie the letter together.\n"
-                f"{self.opening_paragraph}\n\n"
+            posting = (
+                "JOB POSTING (context only, never a source of facts about the candidate):\n"
+                f"{self.posting_text}\n\n"
             )
         repair = ""
         if self.unsupported_claims:
             claims = "\n".join(f"- {c}" for c in self.unsupported_claims)
             repair = (
-                "A previous draft contained these unsupported claims — remove them or "
-                f"replace them with claims the snippets actually state:\n{claims}\n\n"
-            )
-        notes = ""
-        if self.revision_notes:
-            flagged = "\n".join(f"- {n}" for n in self.revision_notes)
-            notes = (
-                "A reviewer flagged these writing problems in the previous draft — fix "
-                f"them without inventing new facts:\n{flagged}\n\n"
+                "A previous draft made these unsupported claims — remove them or replace them with "
+                f"claims the CV FACTS actually state:\n{claims}\n\n"
             )
         return (
-            f"{clause}\n{common}\n\n"
-            f"CANDIDATE: {self.candidate_name}\n"
-            f"ROLE: {self.title}\n\n"
-            f"{opening}{posting}{repair}{notes}"
-            f"SNIPPETS (your only source of facts):\n{blocks}\n\nLETTER BODY:"
+            f"{tone} {focus}\n{common}\n\n"
+            f"CANDIDATE: {self.candidate_name}\nROLE: {self.title}\n\n"
+            f"{style}{personality}{research}{posting}{repair}"
+            f"CV FACTS (the only source of facts about the candidate):\n{self.cv_facts}\n\n"
+            f"LETTER BODY:"
         )
 
 
 class FaithfulnessCheck:
-    """Grounding auditor for a generated cover-letter body: a fixed strong LLM reads the body plus
-    the candidate's authored snippets (the ONLY permitted source of fact) and lists every claim in
-    the body the snippets do not support.
+    """Grounding auditor for a generated cover-letter body: reads the body plus the SOURCES it was
+    written from (the tailored CV facts + personality dossier + any company research) and lists
+    every claim the sources do not support. The posting is deliberately NOT a source — a requirement
+    in a posting must never be treated as a fact about the candidate.
 
-    `ai_share` measures PROVENANCE (how much prose the machine produced); this measures
-    FAITHFULNESS (did the machine assert something untrue) — an orthogonal axis, which is why a 5%
-    `ai_share` letter can still hallucinate. The job posting is deliberately NOT given: a
-    requirement appearing in a posting must never be treated as a fact about the candidate.
-
-    Provider-agnostic. Line-format I/O (never JSON — see the `no-json-llm-io` memory): the reply's
-    'UNSUPPORTED <n>' line anchors the count; each following bullet line is one claim. On ANY
-    failure it returns count=None ('not checked'), NEVER 0 — a failed audit must not be mistaken for
-    a clean letter (the false-assurance trap this check exists to close).
+    Line-format I/O (never JSON — see [[no-json-llm-io]]): 'UNSUPPORTED <n>' anchors the count, each
+    bullet is one claim. On ANY failure it returns count=None ('not checked'), NEVER 0 — a failed
+    audit must not read as a clean letter.
     """
 
-    PREFERRED_PIN: str | None = "instruct"
-
     _INSTRUCTION = (
-        "You are fact-checking a COVER LETTER BODY against the candidate's authored SNIPPETS.\n"
-        "The snippets are the ONLY permitted source of factual claims — skills, employers, job "
-        "titles, numbers, dates, achievements, and any other checkable fact about the candidate. "
-        "A claim is UNSUPPORTED if the snippets do not state or clearly imply it.\n"
+        "You are fact-checking a COVER LETTER BODY against the SOURCES it was written from.\n"
+        "The sources are the ONLY permitted basis for factual claims about the candidate or the "
+        "company — skills, employers, titles, numbers, dates, achievements, company facts. A claim "
+        "is UNSUPPORTED if the sources do not state or clearly imply it. A personality trait rendered "
+        "as a professional strength is supported by the trait — reframing is not fabrication.\n"
         "List every unsupported factual claim in the letter body.\n"
         "Reply in this EXACT line format, nothing else:\n"
         "  - first line: 'UNSUPPORTED <n>' — the number of unsupported claims (0 if none);\n"
-        "  - then ONE line per claim, '- <claim, quoted or paraphrased>' (<=20 words), worst "
-        "first;\n"
+        "  - then ONE line per claim, '- <claim, quoted or paraphrased>' (<=20 words), worst first;\n"
         "  - if every claim is grounded, write 'UNSUPPORTED 0' and nothing else.\n"
-        "Do not flag style, tone, opinion, or first-person framing — only checkable facts. "
-        "No prose, no markdown headers, no JSON."
+        "Do not flag style, tone, opinion, or first-person framing — only checkable facts. No JSON."
     )
 
     _COUNT_RE = re.compile(r"\bUNSUPPORTED\s+(\d+)\b", re.IGNORECASE)
-    # a claim line: an optional bullet / number marker, then the claim text.
     _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
 
-    def __init__(self, body: str, snippets: list, executor: Executor):
+    def __init__(self, body: str, sources: str, executor: Executor):
         self.body = body
-        self.snippets = snippets
+        self.sources = sources
         self.executor = executor
 
     def critique(self) -> dict:
         """Return {'count': int | None, 'claims': [str]}.
-
-        count=None  -> audit failed / unreadable (surface as 'not checked', NOT clean).
-        count=0     -> audited and fully grounded.
-        count>0     -> that many claims the snippets do not support, worst first.
-        """
+        None = audit failed / unreadable ('not checked', NOT clean); 0 = clean; >0 = that many."""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
         except Exception:
@@ -564,192 +547,10 @@ class FaithfulnessCheck:
         return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
 
     def _prompt(self) -> str:
-        blocks = (
-            "\n\n".join(
-                f"[{s.get_kind_display()}] {s.title}\n{s.content}"
-                for s in self.snippets
-            )
-            or "(no snippets)"
-        )
         return (
             f"{self._INSTRUCTION}\n\n"
-            f"SNIPPETS (the only source of truth):\n{blocks}\n\n"
-            f"LETTER BODY:\n{self.body}\n\n"
-            f"AUDIT:"
-        )
-
-
-class LetterCritic:
-    """Prose-quality reviewer for a generated cover-letter body: reads the snippets and
-    the body and flags WRITING problems — redundancy, lost substance, compression, flow.
-
-    Advisory, not safety: findings feed ONE repair rewrite (CoverLetterWriter's
-    `revision_notes`), and on any failure the caller just skips the repair —
-    count=None is never surfaced as "unchecked" the way the grounding audit's is,
-    because no safety claim is being made. Faithfulness stays FaithfulnessCheck's job;
-    this rung is told not to fact-check. Same line format, same shared parser, same
-    honesty rule (listed lines win, unreadable -> None) — see the `no-json-llm-io`
-    memory.
-    """
-
-    PREFERRED_PIN: str | None = "instruct"
-    _INSTRUCTION = (
-        "You are reviewing the BODY of a job-application cover letter that was written "
-        "from the candidate's authored SNIPPETS.\n"
-        "Flag WRITING-QUALITY problems only:\n"
-        "  - redundancy: the same experience, achievement, or fact told more than once;\n"
-        "  - lost substance: a concrete snippet claim (skill, employer, number, "
-        "achievement) missing from the body;\n"
-        "  - compression: the body reads like a summary of the snippets instead of a "
-        "full letter;\n"
-        "  - flow: abrupt jumps, paragraphs without connective tissue.\n"
-        "Do NOT fact-check (a separate audit does that) and do NOT flag tone or opinion.\n"
-        "Reply in this EXACT line format, nothing else:\n"
-        "  - first line: 'ISSUES <n>' — the number of problems (0 if none);\n"
-        "  - then ONE line per problem, '- <issue>' (<=20 words), worst first;\n"
-        "  - if the body is sound, write 'ISSUES 0' and nothing else.\n"
-        "No prose, no markdown headers, no JSON."
-    )
-
-    _COUNT_RE = re.compile(r"\bISSUES\s+(\d+)\b", re.IGNORECASE)
-    _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
-
-    def __init__(self, body: str, snippets: list, executor: Executor):
-        self.body = body
-        self.snippets = snippets
-        self.executor = executor
-
-    def critique(self) -> dict:
-        """Return {'count': int | None, 'claims': [str]}. None = critic unavailable —
-        the caller skips the repair, nothing more."""
-        try:
-            raw = complete(prompt=self._prompt(), executor=self.executor)
-        except Exception:
-            logger.exception("LetterCritic: LLM call failed")
-            return {"count": None, "claims": []}
-        return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
-
-    def _prompt(self) -> str:
-        blocks = (
-            "\n\n".join(
-                f"[{s.get_kind_display()}] {s.title}\n{s.content}"
-                for s in self.snippets
-            )
-            or "(no snippets)"
-        )
-        return (
-            f"{self._INSTRUCTION}\n\n"
-            f"SNIPPETS (what the body was written from):\n{blocks}\n\n"
-            f"LETTER BODY:\n{self.body}\n\n"
-            f"REVIEW:"
-        )
-
-
-class PersonalParagraphWriter:
-    """Write the OPENING paragraph of a cover letter: why the candidate is a genuine fit
-    for THIS company.
-
-    Sources: the company research dossier (company facts) + the personality dossier (who they are).
-    The job posting is only light role context. Every company fact must come from RESEARCH, every
-    trait from PERSONALITY — invent nothing, but render each trait's employer-facing side (the
-    dossier stays honest; the letter shows the strength it implies). Free prose; any failure -> ''
-    (caller omits it).
-    """
-
-    _INSTRUCTION = (
-        "Write ONE short paragraph (3-5 sentences) that OPENS a cover letter: why this "
-        "candidate is personally drawn to and a strong fit for THIS company. Connect a "
-        "specific thing about the company (from RESEARCH) to who the candidate is (from "
-        "PERSONALITY). Use ONLY facts from RESEARCH for company claims and ONLY traits "
-        "from PERSONALITY for the candidate — invent nothing, add no skills/employers/"
-        "numbers. Every trait is one side of a coin: render each PERSONALITY trait as "
-        "the professional strength it implies, never worded so it could read as a "
-        "liability. (That move, illustrated — NOT this candidate's traits: 'values "
-        "autonomy' would become 'works independently'.) First person, genuine, "
-        "not fawning. End on a short bridge that leads naturally into the "
-        "qualifications below. No salutation, no sign-off, no markdown, no headers — "
-        "just the paragraph."
-    )
-
-    def __init__(
-        self,
-        executor,
-        posting_text="",
-        title="",
-        language="en",
-        company_dossier="",
-        personality_dossier="",
-    ):
-        self.posting_text = posting_text
-        self.title = title
-        self.language = language
-        self.company_dossier = company_dossier
-        self.personality_dossier = personality_dossier
-        self.executor = executor
-
-    def write(self) -> str:
-        if not self.company_dossier or not self.personality_dossier:
-            return ""
-        try:
-            raw = complete(prompt=self._prompt(), executor=self.executor)
-        except Exception:
-            logger.exception("PersonalParagraphWriter: LLM call failed")
-            return ""
-        return (raw or "").strip()
-
-    def _prompt(self) -> str:
-        return (
-            f"{self._INSTRUCTION}\nWrite in {_language_name(self.language)}.\n\n"
-            f"ROLE: {self.title}\n\n"
-            f"RESEARCH (company facts — the only source for company claims):\n{self.company_dossier}\n\n"
-            f"PERSONALITY (the candidate — the only source for who they are):\n{self.personality_dossier}\n\n"
-            f"PARAGRAPH:"
-        )
-
-
-class ParagraphGroundingCheck:
-    """Faithfulness audit for the personal paragraph. Mirrors FaithfulnessCheck, but the source of
-    truth is RESEARCH + PERSONALITY (never snippets, never the posting). Same line format and the
-    same honesty rule: count=None on any audit failure, never 0."""
-
-    PREFERRED_PIN: str | None = "instruct"
-
-    _INSTRUCTION = (
-        "You are fact-checking a cover-letter PARAGRAPH against two sources: RESEARCH (company facts) "
-        "and PERSONALITY (the candidate). A claim is UNSUPPORTED if neither source states or clearly "
-        "implies it. A PERSONALITY trait rendered in a positive professional light is supported by "
-        "the underlying trait — reframing is not fabrication. List every unsupported factual claim.\n"
-        "Reply in this EXACT line format, nothing else:\n"
-        "  - first line: 'UNSUPPORTED <n>';\n"
-        "  - then ONE line per claim, '- <claim>' (<=20 words), worst first;\n"
-        "  - if all grounded, write 'UNSUPPORTED 0' and nothing else.\n"
-        "Do not flag tone, opinion, or first-person framing — only checkable facts. No prose, no JSON."
-    )
-    _COUNT_RE = re.compile(r"\bUNSUPPORTED\s+(\d+)\b", re.IGNORECASE)
-    _CLAIM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
-
-    def __init__(
-        self, paragraph, company_dossier, personality_dossier, executor: Executor
-    ):
-        self.paragraph = paragraph
-        self.company_dossier = company_dossier
-        self.personality_dossier = personality_dossier
-        self.executor = executor
-
-    def critique(self) -> dict:
-        try:
-            raw = complete(prompt=self._prompt(), executor=self.executor)
-        except Exception:
-            logger.exception("ParagraphGroundingCheck: LLM call failed")
-            return {"count": None, "claims": []}
-        return _parse_unsupported(raw, self._COUNT_RE, self._CLAIM_RE)
-
-    def _prompt(self) -> str:
-        return (
-            f"{self._INSTRUCTION}\n\n"
-            f"RESEARCH:\n{self.company_dossier or '(none)'}\n\n"
-            f"PERSONALITY:\n{self.personality_dossier or '(none)'}\n\n"
-            f"PARAGRAPH:\n{self.paragraph}\n\nAUDIT:"
+            f"SOURCES (the only source of truth):\n{self.sources or '(none)'}\n\n"
+            f"LETTER BODY:\n{self.body}\n\nAUDIT:"
         )
 
 
@@ -776,8 +577,15 @@ class LetterChat:
     _MAX_TRANSCRIPT_CHARS = 6000
     _MAX_BODY_CHARS = 8000
 
-    def __init__(self, body, transcript, executor, posting_text="",
-                 cv_content=None, language="en"):
+    def __init__(
+        self,
+        body,
+        transcript,
+        executor,
+        posting_text="",
+        cv_content=None,
+        language="en",
+    ):
         self.body = body
         self.transcript = transcript
         self.executor = executor

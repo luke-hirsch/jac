@@ -397,48 +397,6 @@ class Language(CvEntry):
     )
 
 
-class ResumeSnippet(models.Model):
-    class Kind(models.TextChoices):
-        intro = "intro", _("Introduction")
-        achievement = "achievement", _("Achievement")
-        value_statement = "value_statement", _("Value statement")
-        closing = "closing", _("Closing")
-        other = "other", _("Other")
-
-    user = models.ForeignKey(
-        "auth.User", on_delete=models.CASCADE, related_name="snippets"
-    )
-    title = models.CharField(max_length=200)
-    content = models.TextField()
-    kind = models.CharField(max_length=16, choices=Kind, default=Kind.other)
-    domains = models.ManyToManyField(Domain, blank=True)
-    skills = models.ManyToManyField(Skill, blank=True)
-    job = models.ForeignKey(
-        Job,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="resume_snippets",
-    )
-    project = models.ForeignKey(
-        Project,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="resume_snippets",
-    )
-    language = models.CharField(max_length=8, default="en")
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["kind", "title"]
-
-    def __str__(self) -> str:
-        return f"{self.get_kind_display()}: {self.title}"  # type: ignore[attr-defined]
-
-
 class JobPosting(models.Model):
     """A job posting the user is tailoring an application to.
 
@@ -655,6 +613,10 @@ class GenerationRun(models.Model):
     provider = models.CharField(max_length=32, default="ollama")
     model = models.CharField(max_length=100, blank=True)
     params = models.JSONField(default=dict, blank=True)
+
+    # letter parameters overwriting from profile
+    letter_tone = models.CharField(max_length=16, blank=True)
+    letter_focus = models.CharField(max_length=16, blank=True)
 
     # CV scoping (all optional; map onto CV.__init__).
     domains = models.JSONField(default=list, blank=True)  # list[str] domain names

@@ -18,13 +18,12 @@ from jac.models import (
     Job,
     Language,
     Project,
-    ResumeSnippet,
     Skill,
 )
 
 logger = logging.getLogger(__name__)
 
-_WATCHED = (Job, Project, Education, Certification, Skill, Language, ResumeSnippet)
+_WATCHED = (Job, Project, Education, Certification, Skill, Language)
 
 
 def _enqueue(user_id: int) -> None:
@@ -41,8 +40,7 @@ def queue_vector_sync(sender, instance, **kwargs):
 
     if not store.is_enabled():
         return
-    # Privacy gate (2026-07-16): a user whose DEFAULT executor is commercial has
-    # opted their data OUT of the tower
+
     from llm_connector.models import LLMConfig
 
     if LLMConfig.objects.filter(user_id=instance.user_id, default=True).exists():

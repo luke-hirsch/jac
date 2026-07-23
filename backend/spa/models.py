@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from lukehirsch.managers import SystemScopedManager
 
+from spa.distill import StyleDistiller
 from spa.personality_questions import MAX_ANSWER_LEN
 
 
@@ -80,11 +81,19 @@ class UserProfile(models.Model):
 
 
 class PersonalityProfile(models.Model):
-    """Per-user personality questionnaire + a cached, LLM-distilled dossier.
+    """Per-user personality questionnaire + cached LLM-distilled dossier, the letter tone×focus
+    default, and a cached writing-style dossier distilled from a pasted sample. All three feed the
+    JAC cover-letter writer (and, later, the portfolio)."""
 
-    Answers are free text keyed by question id; the dossier is regenerated when answers change
-    (dossier_stale). Used by the JAC cover-letter personal paragraph and (later) the portfolio.
-    """
+    class Tone(models.TextChoices):
+        personal = "personal", _("Personal")
+        neutral = "neutral", _("Neutral")
+        formal = "formal", _("Formal")
+
+    class Focus(models.TextChoices):
+        soft_skill = "soft_skill", _("Soft-skill focus")
+        balanced = "balanced", _("Balanced")
+        technical = "technical", _("Technical focus")
 
     user = models.OneToOneField(
         "auth.User", on_delete=models.CASCADE, related_name="personality"
@@ -93,6 +102,20 @@ class PersonalityProfile(models.Model):
     dossier = models.TextField(blank=True)  # distilled, cached
     answers_updated_at = models.DateTimeField(null=True, blank=True)
     dossier_built_at = models.DateTimeField(null=True, blank=True)
+
+    # letter paramters
+    letter_tone = models.CharField(
+        max_length=16, choices=Tone.choices, default=Tone.neutral
+    )
+    letter_focus = models.CharField(
+        max_length=16, choices=Focus.choices, default=Focus.balanced
+    )
+    # writing style probe
+    writing_sample = models.TextField(blank=True)
+    style_dossier = models.TextField(blank=True)  # ai destill
+    sample_updated_at = models.DateTimeField(null=True, blank=True)
+    style_built_at = models.DateTimeField(null=True, blank=True)
+
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -116,8 +139,6 @@ class PersonalityProfile(models.Model):
             return self.dossier
         from spa.distill import PersonalityDistiller
 
-        # Resolve the slug->prompt map from the DB so a user's own questions render as
-        # their real wording in the distiller prompt, not a bare slug.
         labels = {
             q.slug: q.prompt for q in PersonalityQuestion.objects.for_user(self.user)
         }
@@ -129,6 +150,32 @@ class PersonalityProfile(models.Model):
             self.dossier_built_at = timezone.now()
             self.save(update_fields=["dossier", "dossier_built_at", "updated_at"])
         return self.dossier or ""
+
+    # --- writing-style cache (mirror of the dossier cache above) --------------------------
+
+    def has_sample(self) -> bool:
+        return bool((self.writing_sample or "").strip())
+
+    def style_stale(self) -> bool:
+        if self.style_built_at is None:
+            return True
+        return bool(
+            self.sample_updated_at and self.sample_updated_at > self.style_built_at
+        )
+
+    def ensure_style_dossier(self, executor) -> str:
+        """Return the style dossier, distilling (1 LLM call) if missing or stale. '' if no sample."""
+        if not self.has_sample():
+            return ""
+        if self.style_dossier and not self.style_stale():
+            return self.style_dossier
+
+        text = StyleDistiller(self.writing_sample, executor=executor).distill()
+        if text:
+            self.style_dossier = text
+            self.style_built_at = timezone.now()
+            self.save(update_fields=["style_dossier", "style_built_at", "updated_at"])
+        return self.style_dossier or ""
 
 
 class PersonalityQuestion(models.Model):
