@@ -76,11 +76,11 @@ describe("skillNames / entryParts", () => {
     expect(skillNames(undefined, [1])).toBe("");
   });
 
-  it("shapes a joined job with range, skills, body and favourite", () => {
+  it("splits the date into its own column, leaving skills in meta", () => {
     const p = entryParts(db, "jobs", content.jobs[0]);
     expect(p.heading).toBe("Senior Dev — ACME");
-    expect(p.meta).toContain("2021-01-01–present");
-    expect(p.meta).toContain("Python");
+    expect(p.date).toBe("2021-01-01–present");
+    expect(p.meta).toBe("Python"); // no date in meta any more
     expect(p.body).toBe("Built the pipeline.");
     expect(p.favourite).toBe(true);
   });
@@ -91,7 +91,13 @@ describe("skillNames / entryParts", () => {
       label: "a deleted job",
       relevance_score: null,
     });
-    expect(p).toEqual({ heading: "a deleted job", meta: "", body: "", favourite: false });
+    expect(p).toEqual({
+      heading: "a deleted job",
+      date: "",
+      meta: "",
+      body: "",
+      favourite: false,
+    });
   });
 });
 
