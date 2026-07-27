@@ -5,6 +5,7 @@ import {
   addEntry,
   dateRange,
   entryId,
+  formatMonthYear,
   fromCareerDb,
   joinEntry,
   labelFor,
@@ -84,17 +85,37 @@ describe("parseEntryId / entryId", () => {
 
 describe("labelFor / dateRange", () => {
   it("labels a job like the backend labeler", () => {
-    expect(labelFor("jobs", job)).toBe("Senior Dev at ACME (2021-01-01–present)");
+    expect(labelFor("jobs", job)).toBe("Senior Dev at ACME (Jan 2021 – present)");
   });
 
   it("labels an education with degree + field head", () => {
     expect(labelFor("educations", education)).toBe(
-      "BSc CS @ TU (2015-09-01–2018-08-31)",
+      "BSc CS @ TU (Sep 2015 – Aug 2018)",
     );
   });
 
   it("dateRange falls back to '?' and 'present'", () => {
-    expect(dateRange(null, null)).toBe("?–present");
+    expect(dateRange(null, null)).toBe("? – present");
+  });
+
+  it("dateRange formats ISO endpoints as 'Mon yyyy' with a spaced dash", () => {
+    expect(dateRange("2020-01-15", "2023-06-30")).toBe("Jan 2020 – Jun 2023");
+  });
+});
+
+describe("formatMonthYear", () => {
+  it("renders 'Mon yyyy' from a full ISO date", () => {
+    expect(formatMonthYear("2020-03-09")).toBe("Mar 2020");
+  });
+
+  it("renders a bare year when there is no month", () => {
+    expect(formatMonthYear("2020")).toBe("2020");
+  });
+
+  it("returns '' for null/empty and passes unknown shapes through", () => {
+    expect(formatMonthYear(null)).toBe("");
+    expect(formatMonthYear("")).toBe("");
+    expect(formatMonthYear("someday")).toBe("someday");
   });
 });
 
@@ -119,7 +140,7 @@ describe("fromCareerDb", () => {
     expect(built.jobs).toEqual([
       {
         id: "job:12",
-        label: "Senior Dev at ACME (2021-01-01–present)",
+        label: "Senior Dev at ACME (Jan 2021 – present)",
         relevance_score: null,
       },
     ]);
@@ -256,7 +277,7 @@ describe("addEntry", () => {
     expect(added.jobs.map((e) => e.id)).toEqual(["job:99", "job:12"]);
     expect(added.jobs[1]).toEqual({
       id: "job:12",
-      label: "Senior Dev at ACME (2021-01-01–present)",
+      label: "Senior Dev at ACME (Jan 2021 – present)",
       relevance_score: null,
     });
   });

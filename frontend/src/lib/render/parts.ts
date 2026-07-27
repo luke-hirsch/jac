@@ -6,6 +6,7 @@
 import {
   dateRange,
   entryId,
+  formatMonthYear,
   joinEntry,
   SECTION_ORDER,
   type SectionKey,
@@ -123,7 +124,7 @@ export function entryParts(
       const c = row as CertificationRow;
       return {
         heading: `${c.name} — ${c.issuer}`,
-        date: c.issued_on ?? "",
+        date: formatMonthYear(c.issued_on),
         meta: "",
         body: c.description,
         favourite,

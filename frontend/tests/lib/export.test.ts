@@ -79,7 +79,7 @@ describe("skillNames / entryParts", () => {
   it("splits the date into its own column, leaving skills in meta", () => {
     const p = entryParts(db, "jobs", content.jobs[0]);
     expect(p.heading).toBe("Senior Dev — ACME");
-    expect(p.date).toBe("2021-01-01–present");
+    expect(p.date).toBe("Jan 2021 – present");
     expect(p.meta).toBe("Python"); // no date in meta any more
     expect(p.body).toBe("Built the pipeline.");
     expect(p.favourite).toBe(true);

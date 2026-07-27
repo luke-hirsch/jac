@@ -70,11 +70,30 @@ export function joinEntry(
   return (db[section] as AnyRow[]).find((r) => r.id === parsed.pk) ?? null;
 }
 
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** ISO `yyyy`, `yyyy-mm`, or `yyyy-mm-dd` → "Mon yyyy" (or bare "yyyy"). Unknown
+ *  shapes pass through untouched; empty/null → "". Keeps CV dates short enough to
+ *  wrap inside the fixed hints column instead of overflowing the content column. */
+export function formatMonthYear(iso: string | null): string {
+  if (!iso) return "";
+  const m = /^(\d{4})(?:-(\d{2}))?/.exec(iso);
+  if (!m) return iso;
+  const mi = m[2] ? Number(m[2]) : 0;
+  const month = mi >= 1 && mi <= 12 ? MONTHS[mi - 1] : null;
+  return month ? `${month} ${m[1]}` : m[1];
+}
+
 export function dateRange(
   started: string | null,
   ended: string | null,
 ): string {
-  return `${started ?? "?"}–${ended ?? "present"}`;
+  const from = formatMonthYear(started) || "?";
+  const to = ended ? formatMonthYear(ended) : "present";
+  return `${from} – ${to}`;
 }
 
 export function labelFor(section: SectionKey, row: AnyRow): string {

@@ -104,13 +104,6 @@ export function cvStyles(spec: LayoutSpec) {
       marginBottom: base * 0.4,
     },
     summary: { marginBottom: base * 0.4, lineHeight: 1.4 },
-    // The moderncv accent line under the header block.
-    headerRule: {
-      borderBottomWidth: 1.5,
-      borderBottomColor: spec.colors.accent,
-      marginTop: base * 0.3,
-      marginBottom: base * 0.4,
-    },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
@@ -228,7 +221,6 @@ export function CvPages({
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {contact ? <Text style={styles.contact}>{contact}</Text> : null}
-      <View style={styles.headerRule} />
       {spec.cv.sections.map((s) => (
         <CvSectionView
           key={s}
@@ -258,7 +250,9 @@ function letterStyles(spec: LayoutSpec) {
   const base = Math.max(spec.font.base_pt, 11); // letters read better a notch larger
   return StyleSheet.create({
     page: {
-      paddingTop: mm(98),
+      // DIN 5008 address zone ends at 85mm; start the body right below it rather
+      // than at the 98mm reference-line position we don't use (kills a ~13mm gap).
+      paddingTop: mm(85),
       paddingBottom: mm(25),
       paddingLeft: mm(25),
       paddingRight: mm(20),

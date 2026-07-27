@@ -179,7 +179,12 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             summary,
             hidden,
           }}
-          letter={{ spec: s, meta, body: app.cover_letter, signatureUrl }}
+          letter={{
+            spec: s,
+            meta,
+            body: stripSoftStub(app.cover_letter),
+            signatureUrl,
+          }}
         />
       );
     return { blob: await renderPdfBlob(doc), fit, letterPages };
