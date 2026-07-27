@@ -6,6 +6,14 @@ from spa.views import (
     PersonalityProfileView,
     PersonalityQuestionDetailView,
     PersonalityQuestionListCreateView,
+    PortfolioBlockDetailView,
+    PortfolioBlockListCreateView,
+    PortfolioLinkDetailView,
+    PortfolioLinkListCreateView,
+    PortfolioLinkRevokeView,
+    PortfolioNativeView,
+    PortfolioRankView,
+    PortfolioResolveView,
     UserProfileView,
 )
 
@@ -27,5 +35,45 @@ urlpatterns = [
         "personality/questions/<int:pk>/",
         PersonalityQuestionDetailView.as_view(),
         name="personality-question-detail",
+    ),
+    path(
+        "portfolio/manage/blocks/",
+        PortfolioBlockListCreateView.as_view(),
+        name="portfolio-blocks",
+    ),
+    path(
+        "portfolio/manage/blocks/<int:pk>/",
+        PortfolioBlockDetailView.as_view(),
+        name="portfolio-block-detail",
+    ),
+    path(
+        "portfolio/manage/links/",
+        PortfolioLinkListCreateView.as_view(),
+        name="portfolio-links",
+    ),
+    path(
+        "portfolio/manage/links/<int:pk>/",
+        PortfolioLinkDetailView.as_view(),
+        name="portfolio-link-detail",
+    ),
+    path(
+        "portfolio/manage/links/<int:pk>/revoke/",
+        PortfolioLinkRevokeView.as_view(),
+        name="portfolio-link-revoke",
+    ),
+    path(
+        "portfolio/links/<slug:slug>/",
+        PortfolioResolveView.as_view(),
+        name="portfolio-resolve",
+    ),
+    path(
+        "portfolio/native/",
+        PortfolioNativeView.as_view(),
+        name="portfolio-native",
+    ),
+    path(
+        "portfolio/native/rank/",
+        PortfolioRankView.as_view(),
+        name="portfolio-rank",
     ),
 ]

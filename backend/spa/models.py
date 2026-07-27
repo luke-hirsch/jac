@@ -11,7 +11,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from lukehirsch.managers import SystemScopedManager
-
+from django.core.exceptions import ValidationError
+from django.db.models import Q
 from spa.distill import StyleDistiller
 from spa.personality_questions import MAX_ANSWER_LEN
 
@@ -19,6 +20,11 @@ from spa.personality_questions import MAX_ANSWER_LEN
 def _avatar_path(instance, filename):
     """Store one avatar per user, named by pk so uploads auto-replace."""
     return f"avatars/{instance.user_id}{Path(filename).suffix.lower()}"
+
+
+def _block_image_path(instance, filename):
+    """Namespace block images per owner; Django suffixes duplicates itself."""
+    return f"portfolio/blocks/{instance.user_id}/{Path(filename).name}"
 
 
 class UserProfile(models.Model):
@@ -207,3 +213,134 @@ class PersonalityQuestion(models.Model):
 
     def __str__(self):
         return self.prompt
+
+
+class PortfolioBlock(models.Model):
+    """Owner-authored portfolio content the career DB can't hold: a markdown text
+    group or a captioned image. Domain-taggable so every filtering axis that applies
+    to career entries applies to blocks too; `favourite` = featured-by-default (same
+    axis as `CvEntry.favourite`, no cap — blocks are already hand-curated). Public id
+    grammar: `block:<pk>` beside the career ids (`job:12`).
+    """
+
+    class Kind(models.TextChoices):
+        text = "text", _("Text")
+        image = "image", _("Image")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="portfolio_blocks"
+    )
+    kind = models.CharField(max_length=5, choices=Kind, default=Kind.text)
+    title = models.CharField(max_length=200, blank=True)
+    body = models.TextField(blank=True)  # markdown for text blocks; caption for images
+    image = models.ImageField(upload_to=_block_image_path, blank=True)
+    alt_text = models.CharField(max_length=200, blank=True)
+    domains = models.ManyToManyField(
+        "jac.Domain", blank=True, related_name="portfolio_blocks"
+    )
+    favourite = models.BooleanField(default=False)
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.title or f"{self.kind} block {self.pk}"
+
+    def clean(self):
+        """A block must carry its kind's payload. DRF doesn't call full_clean — the
+        serializer repeats this rule; this keeps admin/forms honest (the CvEntry pattern,
+        jac/models.py:200)."""
+        super().clean()
+        if self.kind == self.Kind.image and not self.image:
+            raise ValidationError({"image": "An image block needs an image."})
+        if self.kind == self.Kind.text and not (self.body or "").strip():
+            raise ValidationError({"body": "A text block needs a body."})
+
+
+class PortfolioLink(models.Model):
+    """A personalised public portfolio URL (`/portfolio/<slug>`).
+
+    `manual` links are owner-named and hand-curated; `application` links are minted by
+    jac via `spa.portfolio.link_for_application` (readable-plus-entropy slug) and render
+    the application's tailored selection — live while draft, frozen at the `sent`
+    transition (`spa.portfolio.freeze_link`). Revocation is a timestamp, not a delete:
+    the public queryset filters `revoked_at__isnull=True` (revoked ≡ never-existed →
+    identical 404s) and the partial unique constraint below allows one *active* link per
+    application while keeping revoked history for regenerate.
+    """
+
+    class Kind(models.TextChoices):
+        manual = "manual", _("Manual")
+        application = "application", _("Application")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="portfolio_links"
+    )
+    slug = models.SlugField(max_length=80, unique=True)
+    kind = models.CharField(max_length=12, choices=Kind, default=Kind.manual)
+    title = models.CharField(max_length=200, blank=True)
+    intro = models.TextField(blank=True)
+    application = models.ForeignKey(
+        "jac.JobApplication",
+        on_delete=models.SET_NULL,  # a frozen page survives application deletion
+        null=True,
+        blank=True,
+        related_name="portfolio_links",
+    )
+    # {"featured": ["job:12", "block:7", …], "domains": [names], "hide_explore": bool}
+    # — ids only, joined against the live career DB at render time (deleted rows drop
+    # silently, the cv-doc philosophy). Application links keep featured empty until the
+    # sent-freeze; the public view falls back to the live cv_content meanwhile.
+    content = models.JSONField(default=dict, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["application"],
+                condition=Q(revoked_at__isnull=True, application__isnull=False),
+                name="one_active_link_per_application",
+            )
+        ]
+
+    def __str__(self):
+        state = ", revoked" if self.revoked_at else ""
+        return f"/{self.slug} ({self.kind}{state})"
+
+    @property
+    def active(self) -> bool:
+        return self.revoked_at is None
+
+    def revoke(self) -> None:
+        """Idempotent soft-kill: the public path 404s from the next request on."""
+        if self.revoked_at is None:
+            self.revoked_at = timezone.now()
+            self.save(update_fields=["revoked_at", "updated_at"])
+
+
+class PortfolioVisit(models.Model):
+    """Daily visit bucket per link — deliberately GDPR-light (no IP/UA/timestamps) and
+    bounded at links × days. Bumped by the public resolve view (guide 2), which skips
+    the owner's own previews. Native-flow traffic is deliberately untracked (bots)."""
+
+    link = models.ForeignKey(
+        PortfolioLink, on_delete=models.CASCADE, related_name="visits"
+    )
+    day = models.DateField()
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["link", "day"], name="one_visit_row_per_link_day"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.link.slug} {self.day}: {self.count}"

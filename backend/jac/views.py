@@ -35,6 +35,8 @@ from rest_framework.response import Response
 from rest_framework.settings import api_settings as drf_api_settings
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from spa.portfolio import freeze_link, link_for_application
+from spa.serializers import PortfolioLinkSerializer
 
 from jac.cv import CV
 from jac.llm_prompts import LetterChat, ParagraphRewrite
@@ -394,6 +396,23 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         _enqueue_run(run)
 
     @extend_schema(
+        request=None,
+        responses=OpenApiResponse(
+            description="The application's active portfolio link (slug, url, …)"
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="portfolio-link")
+    def portfolio_link(self, request, pk=None):
+        """Get-or-create the application's public portfolio link — idempotent; the
+        export card calls this when the portfolio-QR toggle first goes on (guide 4).
+        Lazy creation keeps auto-runs that never export from littering link rows."""
+        application = self.get_object()
+        link = link_for_application(application)
+        return Response(
+            PortfolioLinkSerializer(link, context={"request": request}).data
+        )
+
+    @extend_schema(
         request=inline_serializer(
             "ParagraphRewrite",
             {
@@ -587,6 +606,13 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         except TransitionError as exc:
             return Response({"to": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
         application.save()
+        if application.status == JobApplication.StatusChoices.sent:
+            freeze_link(
+                application
+            )  # snapshot the sent selection; no-op without a link
+        return Response(
+            JobApplicationSerializer(application, context={"request": request}).data
+        )
         return Response(
             JobApplicationSerializer(application, context={"request": request}).data
         )

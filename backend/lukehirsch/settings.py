@@ -192,13 +192,7 @@ HIRSCHAI = {
 
 LLM_LOGGING = True
 
-# SSRF policy for user-supplied `custom` / `ollama` urls (see llm_connector/validators.py).
-# By default the validator refuses private / loopback destinations. Self-hosting Ollama over a
-# VPN is a first-class use case, so the *operator* can vouch for specific internal destinations:
-#   LLM_URL_ALLOWLIST — comma-separated hostnames and/or CIDRs (e.g.
-#       "localhost,127.0.0.1,100.64.0.0/10,ollama.tail1234.ts.net"). Dev allows localhost.
-#   LLM_URL_ALLOW_PRIVATE — blanket "trust my whole private net" escape hatch (pure self-host).
-# Neither lifts the hard block on cloud-metadata / link-local, multicast or unspecified addresses.
+
 LLM_URL_ALLOWLIST = env_list(
     "LLM_URL_ALLOWLIST", ["localhost", "127.0.0.1", "::1"] if DEBUG else []
 )
@@ -234,9 +228,11 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # A streaming LLM endpoint is the cheapest thing on the site to abuse — token
-    # budgets wait for open signup, this scoped rate is the backstop today.
-    "DEFAULT_THROTTLE_RATES": {"llm-chat": "20/min"},
+    "DEFAULT_THROTTLE_RATES": {
+        "llm-chat": "20/min",
+        "portfolio": "60/hour",
+        "portfolio-rank": "6/hour",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -293,3 +289,6 @@ verify_production_secrets(
     secret_key=SECRET_KEY,
     encryption_key=LLM_ENCRYPTION_KEY,
 )
+
+
+PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "Lukas")

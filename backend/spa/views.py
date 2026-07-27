@@ -2,16 +2,29 @@
 
 from allauth.account.internal.flows.reauthentication import did_recently_authenticate
 from django.contrib.auth import logout
+from django.http import Http404
+from django.shortcuts import get_object_or_404
 from llm_connector.conf import ExecutorError, resolve_executor
 from rest_framework import generics, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from spa.models import PersonalityProfile, PersonalityQuestion, UserProfile
+from spa.models import (
+    PersonalityProfile,
+    PersonalityQuestion,
+    PortfolioBlock,
+    PortfolioLink,
+    UserProfile,
+)
+from spa.portfolio import build_payload, bump_visit, get_owner, rank_for_query
 from spa.serializers import (
     PersonalityProfileSerializer,
     PersonalityQuestionSerializer,
+    PortfolioBlockSerializer,
+    PortfolioLinkSerializer,
+    PortfolioRankSerializer,
     UserProfileSerializer,
 )
 
@@ -109,3 +122,136 @@ class PersonalityQuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return PersonalityQuestion.objects.filter(user=self.request.user)
+
+
+class PortfolioBlockListCreateView(generics.ListCreateAPIView):
+    """Owner CRUD over portfolio blocks. Small list — pagination off, like the
+    personality questions. Multipart for the image field (the avatar-upload pattern)."""
+
+    serializer_class = PortfolioBlockSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return PortfolioBlock.objects.filter(user=self.request.user).prefetch_related(
+            "domains"
+        )
+
+
+class PortfolioBlockDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = PortfolioBlockSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PortfolioBlock.objects.filter(user=self.request.user)
+
+
+class PortfolioLinkListCreateView(generics.ListCreateAPIView):
+    """List every link — manual and application, revoked included (the owner sees
+    history); POST creates a manual link (kind is read-only, application links come
+    from jac's portfolio-link action)."""
+
+    serializer_class = PortfolioLinkSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            PortfolioLink.objects.filter(user=self.request.user)
+            .select_related("application")
+            .order_by("-created_at")
+        )
+
+
+class PortfolioLinkDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """PATCH title/intro/content/slug; DELETE hard-removes (revoke is the soft path —
+    prefer it for anything ever sent out)."""
+
+    serializer_class = PortfolioLinkSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PortfolioLink.objects.filter(user=self.request.user)
+
+
+class PortfolioLinkRevokeView(APIView):
+    """POST: soft-kill a link — public 404 from the next request on. Idempotent."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        link = get_object_or_404(PortfolioLink, pk=pk, user=request.user)
+        link.revoke()
+        return Response(
+            PortfolioLinkSerializer(link, context={"request": request}).data
+        )
+
+
+####### Public Views
+
+
+class PublicPortfolioAPIView(APIView):
+    """Base for the anonymous portfolio endpoints: explicit AllowAny (the IndexView
+    pattern — public by opt-in, never by omission), scoped throttling, and an
+    X-Robots-Tag so the API URLs themselves never get indexed."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "portfolio"
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        response["X-Robots-Tag"] = "noindex"
+        return response
+
+
+class PortfolioResolveView(PublicPortfolioAPIView):
+    """GET: personalised slug → payload. Revoked ≡ missing — the single filtered
+    lookup yields identical 404s. Counts the visit unless the owner previews their
+    own link."""
+
+    def get(self, request, slug):
+        link = get_object_or_404(
+            PortfolioLink.objects.filter(revoked_at__isnull=True), slug=slug
+        )
+        if request.user.pk != link.user_id:
+            bump_visit(link)
+        return Response(build_payload(link.user, link=link))
+
+
+class PortfolioNativeView(PublicPortfolioAPIView):
+    """GET: the native (questionnaire-driven) view of the configured owner's
+    portfolio. `?domains=a,b` scopes; `?lucky=1` = favourites + a random tasting
+    menu. Stateless — bots create zero rows."""
+
+    def get(self, request):
+        owner = get_owner()
+        if owner is None:
+            raise Http404
+        domains = [
+            d.strip()
+            for d in (request.query_params.get("domains") or "").split(",")
+            if d.strip()
+        ]
+        lucky = request.query_params.get("lucky") in ("1", "true")
+        return Response(build_payload(owner, domains=domains, lucky=lucky))
+
+
+class PortfolioRankView(PublicPortfolioAPIView):
+    """POST: the embed finale. The tight `portfolio-rank` scope is the abuse valve —
+    this is the only anonymous endpoint that costs tower compute."""
+
+    throttle_scope = "portfolio-rank"
+
+    def post(self, request):
+        owner = get_owner()
+        if owner is None:
+            raise Http404
+        ser = PortfolioRankSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        ranked = rank_for_query(
+            owner,
+            ser.validated_data["query"],
+            ser.validated_data.get("domains") or [],
+        )
+        return Response({"ranked": ranked})

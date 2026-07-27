@@ -1,7 +1,17 @@
+import re
+
+from django.conf import settings
+from django.db.models import Sum
 from django.utils.text import slugify
 from rest_framework import serializers
 
-from spa.models import PersonalityProfile, PersonalityQuestion, UserProfile
+from spa.models import (
+    PersonalityProfile,
+    PersonalityQuestion,
+    PortfolioBlock,
+    PortfolioLink,
+    UserProfile,
+)
 from spa.personality_questions import MAX_ANSWER_LEN
 
 
@@ -16,6 +26,11 @@ def _unique_question_slug(user, prompt: str) -> str:
     while slug in taken:
         slug, n = f"{base}-{n}", n + 1
     return slug
+
+
+FEATURED_ID_RE = re.compile(
+    r"^(skill|job|education|certification|project|language|block):\d+$"
+)
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -191,3 +206,133 @@ class PersonalityQuestionSerializer(serializers.ModelSerializer):
             validated_data["user"], validated_data["prompt"]
         )
         return super().create(validated_data)
+
+
+class PortfolioBlockSerializer(serializers.ModelSerializer):
+    """Owner CRUD over portfolio blocks. `domains` accepts pks from the user's visible
+    taxonomy (own + system defaults). Mirrors the model's kind↔payload rule because DRF
+    never calls full_clean."""
+
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+
+    class Meta:
+        model = PortfolioBlock
+        fields = (
+            "id",
+            "user",
+            "kind",
+            "title",
+            "body",
+            "image",
+            "alt_text",
+            "domains",
+            "favourite",
+            "order",
+            "is_active",
+            "updated_at",
+        )
+        read_only_fields = ("id", "updated_at")
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request is not None:
+            from jac.models import Domain  # runtime-only; models use string refs
+
+            fields["domains"].child_relation.queryset = Domain.objects.for_user(
+                request.user
+            )
+        return fields
+
+    def validate(self, attrs):
+        kind = attrs.get("kind", getattr(self.instance, "kind", ""))
+        image = attrs.get("image", getattr(self.instance, "image", None))
+        body = attrs.get("body", getattr(self.instance, "body", ""))
+        if kind == PortfolioBlock.Kind.image and not image:
+            raise serializers.ValidationError(
+                {"image": "An image block needs an image."}
+            )
+        if kind == PortfolioBlock.Kind.text and not (body or "").strip():
+            raise serializers.ValidationError({"body": "A text block needs a body."})
+        return attrs
+
+
+class PortfolioLinkSerializer(serializers.ModelSerializer):
+    """Owner-side link CRUD. Manage-created links are always `manual` (kind/application
+    are read-only — application links come from jac's portfolio-link action); `url` is
+    the absolute public URL the QR encodes, built from FRONTEND_URL so the frontend
+    never hardcodes the domain."""
+
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    url = serializers.SerializerMethodField()
+    visits = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PortfolioLink
+        fields = (
+            "id",
+            "user",
+            "slug",
+            "kind",
+            "title",
+            "intro",
+            "application",
+            "content",
+            "revoked_at",
+            "url",
+            "visits",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "kind",
+            "application",
+            "revoked_at",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_url(self, obj) -> str:
+        return f"{settings.FRONTEND_URL}/portfolio/{obj.slug}"
+
+    def get_visits(self, obj) -> int:
+        # Small owner lists — the per-row aggregate is fine; revisit if links grow.
+        return obj.visits.aggregate(total=Sum("count"))["total"] or 0
+
+    def validate_slug(self, value):
+        slug = slugify(value)[:80]
+        if not slug:
+            raise serializers.ValidationError("Slug can't be empty.")
+        return slug
+
+    def validate_content(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Expected an object.")
+        featured = value.get("featured", [])
+        domains = value.get("domains", [])
+        if not isinstance(featured, list) or not all(
+            isinstance(i, str) and FEATURED_ID_RE.match(i) for i in featured
+        ):
+            raise serializers.ValidationError(
+                "featured must be a list of '<type>:<pk>' ids."
+            )
+        if not isinstance(domains, list) or not all(
+            isinstance(d, str) and d.strip() for d in domains
+        ):
+            raise serializers.ValidationError("domains must be a list of names.")
+        return {
+            "featured": featured,
+            "domains": domains,
+            "hide_explore": bool(value.get("hide_explore", False)),
+        }
+
+
+class PortfolioRankSerializer(serializers.Serializer):
+    """Input caps for the embed finale — one-tweet query (the questionnaire's own
+    MAX_ANSWER_LEN), at most 10 domain names."""
+
+    query = serializers.CharField(max_length=MAX_ANSWER_LEN)
+    domains = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, max_length=10
+    )

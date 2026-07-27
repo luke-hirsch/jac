@@ -34,3 +34,28 @@ class PersonalityQuestionAdmin(admin.ModelAdmin):
     search_fields = ["slug", "prompt"]
     raw_id_fields = ["user"]
     ordering = ["user", "order"]
+
+
+@admin.register(PortfolioBlock)
+class PortfolioBlockAdmin(admin.ModelAdmin):
+    list_display = ["title", "kind", "user", "favourite", "order", "is_active"]
+    list_filter = ["kind", "favourite", "is_active"]
+    search_fields = ["title", "body"]
+    raw_id_fields = ["user"]
+    filter_horizontal = ["domains"]
+
+
+@admin.register(PortfolioLink)
+class PortfolioLinkAdmin(admin.ModelAdmin):
+    list_display = ["slug", "kind", "user", "application", "revoked_at", "created_at"]
+    list_filter = ["kind"]
+    search_fields = ["slug", "title"]
+    raw_id_fields = ["user", "application"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(PortfolioVisit)
+class PortfolioVisitAdmin(admin.ModelAdmin):
+    list_display = ["link", "day", "count"]
+    ordering = ["-day"]
+    raw_id_fields = ["link"]
