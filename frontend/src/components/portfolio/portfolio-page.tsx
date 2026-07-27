@@ -1,4 +1,5 @@
 import { ItemCard } from "@/components/portfolio/item-card";
+import { isEmptyPayload } from "@/lib/portfolio/content";
 import type { PortfolioPayload } from "@/lib/queries/portfolio";
 
 export function PortfolioPage({
@@ -67,6 +68,13 @@ export function PortfolioPage({
               <ItemCard key={item.id} item={item} />
             ))}
           </div>
+        </section>
+      )}
+
+      {isEmptyPayload(payload.featured, more) && (
+        <section className="py-12 text-center text-muted-foreground">
+          <p>Nothing to show for this selection yet.</p>
+          <p className="text-sm">Try “Start over” above to pick a different path.</p>
         </section>
       )}
     </main>

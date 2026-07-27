@@ -1,11 +1,10 @@
-import { useEffect } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
+import { Button } from "@/components/ui/button";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
-import { useAuth } from "@/lib/auth";
 import { reorderByRank } from "@/lib/portfolio/content";
-import { writeStamp } from "@/lib/portfolio/stamp";
+import { clearStamp } from "@/lib/portfolio/stamp";
 import { useNativePortfolio, usePortfolioRank } from "@/lib/queries/portfolio";
 
 const exploreSearch = z.object({
@@ -22,20 +21,13 @@ export const Route = createFileRoute("/explore")({
 
 function ExploreRoute() {
   const search = Route.useSearch();
-  const { status, isPending } = useAuth();
+  const navigate = useNavigate();
   const portfolio = useNativePortfolio(search);
   const rank = usePortfolioRank(search);
 
-  // Remember the answers (not the free-text q — a stale query re-ranking on every
-  // return visit would burn the 6/h budget for nothing).
-  useEffect(() => {
-    if (portfolio.data && !isPending && status === "anonymous") {
-      writeStamp({
-        kind: "native",
-        search: { d: search.d, lucky: search.lucky },
-      });
-    }
-  }, [portfolio.data, isPending, status, search.d, search.lucky]);
+  // NOTE: no stamp is written here. The stamp is set once, when the visitor answers
+  // the questionnaire (index.tsx onDone). Writing it on every passive load was the
+  // reset trap — it re-stamped a visitor the moment the escape hatch cleared them.
 
   if (portfolio.isPending) {
     return (
@@ -45,10 +37,24 @@ function ExploreRoute() {
     );
   }
   if (!portfolio.data) {
-    // Owner unset (native flow off) or transient failure — no dead end.
+    // Owner unset (native flow off) or transient failure — always offer a way back,
+    // and clear the stamp so "/" doesn't bounce the visitor straight back here.
     return (
-      <main className="min-h-screen grid place-items-center text-muted-foreground">
-        The portfolio isn't available right now.
+      <main className="min-h-screen grid place-items-center">
+        <div className="space-y-3 text-center">
+          <p className="text-muted-foreground">
+            The portfolio isn't available right now.
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => {
+              clearStamp();
+              navigate({ to: "/" });
+            }}
+          >
+            Back to start
+          </Button>
+        </div>
       </main>
     );
   }
@@ -58,7 +64,9 @@ function ExploreRoute() {
     : portfolio.data.more;
   return (
     <>
-      <EscapeHatch />
+      <EscapeHatch
+        onShuffle={search.lucky ? () => portfolio.refetch() : undefined}
+      />
       {search.q && rank.isError ? (
         <p className="text-center text-xs text-muted-foreground pt-2">
           Couldn't rank by your interest just now — showing the natural order.

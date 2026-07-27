@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
 
 /** Search params a native stamp restores (mirrors /explore's validateSearch). */
 const nativeSearchSchema = z.object({
@@ -49,4 +50,12 @@ export function clearStamp(
   } catch {
     /* ditto */
   }
+}
+
+/** The stamp to persist for a completed native questionnaire. The free-text `q` is
+ *  deliberately dropped — a stale query re-ranking on every return visit would burn the
+ *  6/h rank budget for nothing. This is the ONE place a native stamp is built; the
+ *  passive /explore load must never write one (that was the reset trap). */
+export function nativeStamp(search: ExploreSearch): Stamp {
+  return { kind: "native", search: { d: search.d, lucky: search.lucky } };
 }

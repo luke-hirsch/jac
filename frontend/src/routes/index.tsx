@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Questionnaire } from "@/components/portfolio/questionnaire";
 import { useAuth } from "@/lib/auth";
-import { readStamp, writeStamp } from "@/lib/portfolio/stamp";
+import { readStamp, writeStamp, nativeStamp } from "@/lib/portfolio/stamp";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/")({
@@ -68,10 +68,7 @@ function Home() {
         <>
           <Questionnaire
             onDone={(search) => {
-              writeStamp({
-                kind: "native",
-                search: { d: search.d, lucky: search.lucky },
-              });
+              writeStamp(nativeStamp(search));
               navigate({ to: "/explore", search });
             }}
           />

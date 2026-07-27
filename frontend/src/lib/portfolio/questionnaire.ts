@@ -75,7 +75,7 @@ export function walk(
   const state: QuestState = { domains: [], lucky: false };
   for (const answer of answers) {
     if (!node) break;
-    const opt = node.options.find((o) => o.id === answer);
+    const opt: QOption | undefined = node.options.find((o) => o.id === answer);
     if (!opt) break;
     if (opt.lucky) state.lucky = true;
     if (opt.domains) state.domains = [...opt.domains];
