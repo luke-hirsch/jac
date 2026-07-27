@@ -70,6 +70,13 @@ function AuthedLayout() {
             >
               Applications
             </Link>
+            <Link
+              to="/portfolio/links"
+              className="hover:underline"
+              activeProps={{ className: "font-medium underline" }}
+            >
+              Portfolio
+            </Link>
           </nav>
         </div>
         <div className="flex items-center gap-3 text-sm">

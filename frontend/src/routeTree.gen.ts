@@ -19,12 +19,16 @@ import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as AuthRequestResetRouteImport } from './routes/auth/request-reset'
 import { Route as AuthMfaChallengeRouteImport } from './routes/auth/mfa-challenge'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
+import { Route as AuthenticatedPortfolioRouteImport } from './routes/_authenticated/portfolio'
 import { Route as AuthenticatedCvRouteImport } from './routes/_authenticated/cv'
 import { Route as AuthenticatedApplicationsRouteImport } from './routes/_authenticated/applications'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
+import { Route as AuthenticatedPortfolioIndexRouteImport } from './routes/_authenticated/portfolio/index'
 import { Route as AuthenticatedCvIndexRouteImport } from './routes/_authenticated/cv/index'
 import { Route as AuthenticatedApplicationsIndexRouteImport } from './routes/_authenticated/applications/index'
 import { Route as AuthResetPasswordKeyRouteImport } from './routes/auth/reset-password.$key'
+import { Route as AuthenticatedPortfolioLinksRouteImport } from './routes/_authenticated/portfolio/links'
+import { Route as AuthenticatedPortfolioBlocksRouteImport } from './routes/_authenticated/portfolio/blocks'
 import { Route as AuthenticatedCvSkillsRouteImport } from './routes/_authenticated/cv/skills'
 import { Route as AuthenticatedCvProjectsRouteImport } from './routes/_authenticated/cv/projects'
 import { Route as AuthenticatedCvLanguagesRouteImport } from './routes/_authenticated/cv/languages'
@@ -89,6 +93,11 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AuthRoute,
 } as any)
+const AuthenticatedPortfolioRoute = AuthenticatedPortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedCvRoute = AuthenticatedCvRouteImport.update({
   id: '/cv',
   path: '/cv',
@@ -105,6 +114,12 @@ const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   path: '/account',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedPortfolioIndexRoute =
+  AuthenticatedPortfolioIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedPortfolioRoute,
+  } as any)
 const AuthenticatedCvIndexRoute = AuthenticatedCvIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -121,6 +136,18 @@ const AuthResetPasswordKeyRoute = AuthResetPasswordKeyRouteImport.update({
   path: '/reset-password/$key',
   getParentRoute: () => AuthRoute,
 } as any)
+const AuthenticatedPortfolioLinksRoute =
+  AuthenticatedPortfolioLinksRouteImport.update({
+    id: '/links',
+    path: '/links',
+    getParentRoute: () => AuthenticatedPortfolioRoute,
+  } as any)
+const AuthenticatedPortfolioBlocksRoute =
+  AuthenticatedPortfolioBlocksRouteImport.update({
+    id: '/blocks',
+    path: '/blocks',
+    getParentRoute: () => AuthenticatedPortfolioRoute,
+  } as any)
 const AuthenticatedCvSkillsRoute = AuthenticatedCvSkillsRouteImport.update({
   id: '/skills',
   path: '/skills',
@@ -209,6 +236,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AuthenticatedAccountRouteWithChildren
   '/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/cv': typeof AuthenticatedCvRouteWithChildren
+  '/portfolio': typeof AuthenticatedPortfolioRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
   '/auth/request-reset': typeof AuthRequestResetRoute
@@ -229,9 +257,12 @@ export interface FileRoutesByFullPath {
   '/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/portfolio/blocks': typeof AuthenticatedPortfolioBlocksRoute
+  '/portfolio/links': typeof AuthenticatedPortfolioLinksRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/cv/': typeof AuthenticatedCvIndexRoute
+  '/portfolio/': typeof AuthenticatedPortfolioIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -258,9 +289,12 @@ export interface FileRoutesByTo {
   '/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/portfolio/blocks': typeof AuthenticatedPortfolioBlocksRoute
+  '/portfolio/links': typeof AuthenticatedPortfolioLinksRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/applications': typeof AuthenticatedApplicationsIndexRoute
   '/cv': typeof AuthenticatedCvIndexRoute
+  '/portfolio': typeof AuthenticatedPortfolioIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -271,6 +305,7 @@ export interface FileRoutesById {
   '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
   '/_authenticated/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/_authenticated/cv': typeof AuthenticatedCvRouteWithChildren
+  '/_authenticated/portfolio': typeof AuthenticatedPortfolioRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
   '/auth/request-reset': typeof AuthRequestResetRoute
@@ -291,9 +326,12 @@ export interface FileRoutesById {
   '/_authenticated/cv/languages': typeof AuthenticatedCvLanguagesRoute
   '/_authenticated/cv/projects': typeof AuthenticatedCvProjectsRoute
   '/_authenticated/cv/skills': typeof AuthenticatedCvSkillsRoute
+  '/_authenticated/portfolio/blocks': typeof AuthenticatedPortfolioBlocksRoute
+  '/_authenticated/portfolio/links': typeof AuthenticatedPortfolioLinksRoute
   '/auth/reset-password/$key': typeof AuthResetPasswordKeyRoute
   '/_authenticated/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/_authenticated/cv/': typeof AuthenticatedCvIndexRoute
+  '/_authenticated/portfolio/': typeof AuthenticatedPortfolioIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -304,6 +342,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/applications'
     | '/cv'
+    | '/portfolio'
     | '/auth/login'
     | '/auth/mfa-challenge'
     | '/auth/request-reset'
@@ -324,9 +363,12 @@ export interface FileRouteTypes {
     | '/cv/languages'
     | '/cv/projects'
     | '/cv/skills'
+    | '/portfolio/blocks'
+    | '/portfolio/links'
     | '/auth/reset-password/$key'
     | '/applications/'
     | '/cv/'
+    | '/portfolio/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -353,9 +395,12 @@ export interface FileRouteTypes {
     | '/cv/languages'
     | '/cv/projects'
     | '/cv/skills'
+    | '/portfolio/blocks'
+    | '/portfolio/links'
     | '/auth/reset-password/$key'
     | '/applications'
     | '/cv'
+    | '/portfolio'
   id:
     | '__root__'
     | '/'
@@ -365,6 +410,7 @@ export interface FileRouteTypes {
     | '/_authenticated/account'
     | '/_authenticated/applications'
     | '/_authenticated/cv'
+    | '/_authenticated/portfolio'
     | '/auth/login'
     | '/auth/mfa-challenge'
     | '/auth/request-reset'
@@ -385,9 +431,12 @@ export interface FileRouteTypes {
     | '/_authenticated/cv/languages'
     | '/_authenticated/cv/projects'
     | '/_authenticated/cv/skills'
+    | '/_authenticated/portfolio/blocks'
+    | '/_authenticated/portfolio/links'
     | '/auth/reset-password/$key'
     | '/_authenticated/applications/'
     | '/_authenticated/cv/'
+    | '/_authenticated/portfolio/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -470,6 +519,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/_authenticated/portfolio': {
+      id: '/_authenticated/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof AuthenticatedPortfolioRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/cv': {
       id: '/_authenticated/cv'
       path: '/cv'
@@ -491,6 +547,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/portfolio/': {
+      id: '/_authenticated/portfolio/'
+      path: '/'
+      fullPath: '/portfolio/'
+      preLoaderRoute: typeof AuthenticatedPortfolioIndexRouteImport
+      parentRoute: typeof AuthenticatedPortfolioRoute
+    }
     '/_authenticated/cv/': {
       id: '/_authenticated/cv/'
       path: '/'
@@ -511,6 +574,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/auth/reset-password/$key'
       preLoaderRoute: typeof AuthResetPasswordKeyRouteImport
       parentRoute: typeof AuthRoute
+    }
+    '/_authenticated/portfolio/links': {
+      id: '/_authenticated/portfolio/links'
+      path: '/links'
+      fullPath: '/portfolio/links'
+      preLoaderRoute: typeof AuthenticatedPortfolioLinksRouteImport
+      parentRoute: typeof AuthenticatedPortfolioRoute
+    }
+    '/_authenticated/portfolio/blocks': {
+      id: '/_authenticated/portfolio/blocks'
+      path: '/blocks'
+      fullPath: '/portfolio/blocks'
+      preLoaderRoute: typeof AuthenticatedPortfolioBlocksRouteImport
+      parentRoute: typeof AuthenticatedPortfolioRoute
     }
     '/_authenticated/cv/skills': {
       id: '/_authenticated/cv/skills'
@@ -677,16 +754,36 @@ const AuthenticatedCvRouteWithChildren = AuthenticatedCvRoute._addFileChildren(
   AuthenticatedCvRouteChildren,
 )
 
+interface AuthenticatedPortfolioRouteChildren {
+  AuthenticatedPortfolioBlocksRoute: typeof AuthenticatedPortfolioBlocksRoute
+  AuthenticatedPortfolioLinksRoute: typeof AuthenticatedPortfolioLinksRoute
+  AuthenticatedPortfolioIndexRoute: typeof AuthenticatedPortfolioIndexRoute
+}
+
+const AuthenticatedPortfolioRouteChildren: AuthenticatedPortfolioRouteChildren =
+  {
+    AuthenticatedPortfolioBlocksRoute: AuthenticatedPortfolioBlocksRoute,
+    AuthenticatedPortfolioLinksRoute: AuthenticatedPortfolioLinksRoute,
+    AuthenticatedPortfolioIndexRoute: AuthenticatedPortfolioIndexRoute,
+  }
+
+const AuthenticatedPortfolioRouteWithChildren =
+  AuthenticatedPortfolioRoute._addFileChildren(
+    AuthenticatedPortfolioRouteChildren,
+  )
+
 interface AuthenticatedRouteChildren {
   AuthenticatedAccountRoute: typeof AuthenticatedAccountRouteWithChildren
   AuthenticatedApplicationsRoute: typeof AuthenticatedApplicationsRouteWithChildren
   AuthenticatedCvRoute: typeof AuthenticatedCvRouteWithChildren
+  AuthenticatedPortfolioRoute: typeof AuthenticatedPortfolioRouteWithChildren
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAccountRoute: AuthenticatedAccountRouteWithChildren,
   AuthenticatedApplicationsRoute: AuthenticatedApplicationsRouteWithChildren,
   AuthenticatedCvRoute: AuthenticatedCvRouteWithChildren,
+  AuthenticatedPortfolioRoute: AuthenticatedPortfolioRouteWithChildren,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
