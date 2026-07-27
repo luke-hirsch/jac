@@ -640,7 +640,7 @@ class GenerationRun(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-created_at"]  # typing ClassVar
 
     def __str__(self) -> str:
         return f"GenerationRun {self.pk} ({self.status})"
@@ -653,3 +653,22 @@ class GenerationRun(models.Model):
     @property
     def posting(self) -> JobPosting:
         return self.job_application.posting
+
+
+class ApplicationAttachment(models.Model):
+    """A PDF appended to the exported application (cert, transcript, reference letter). Merged in
+    `position` order client-side (pdf-lib) at export time. Validated as a PDF on upload."""
+
+    application = models.ForeignKey(
+        JobApplication, on_delete=models.CASCADE, related_name="attachments"
+    )
+    file = models.FileField(upload_to="application_attachments")
+    label = models.CharField(max_length=120, blank=True)
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self) -> str:
+        return self.label or f"attachment {self.pk}"

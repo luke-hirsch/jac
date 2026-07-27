@@ -11,6 +11,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from jac.views import (
+    ApplicationAttachmentViewSet,
     ApplicationLayoutViewSet,
     CertificationViewSet,
     CVEntryListView,
@@ -37,6 +38,7 @@ router.register("languages", LanguageViewSet, basename="language")
 router.register("generations", GenerationRunViewSet, basename="generation")
 router.register("applications", JobApplicationViewSet, basename="application")
 router.register("layouts", ApplicationLayoutViewSet, basename="layout")
+router.register("attachments", ApplicationAttachmentViewSet, basename="attachment")
 
 urlpatterns = router.urls + [
     path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),

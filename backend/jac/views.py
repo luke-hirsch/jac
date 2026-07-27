@@ -29,6 +29,7 @@ from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings as drf_api_settings
@@ -38,6 +39,7 @@ from rest_framework.views import APIView
 from jac.cv import CV
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
+    ApplicationAttachment,
     ApplicationLayout,
     Certification,
     Domain,
@@ -53,6 +55,7 @@ from jac.models import (
     TransitionError,
 )
 from jac.serializers import (
+    ApplicationAttachmentSerializer,
     ApplicationLayoutSerializer,
     CertificationSerializer,
     CvSerializer,
@@ -512,7 +515,7 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
                         return
                     yield f"data: {json.dumps({'delta': delta})}\n\n"
                 yield 'data: {"done": true}\n\n'
-            except Exception as exc:  # noqa: BLE001 — surface as a terminal event
+            except Exception as exc:
                 logger.exception("letter chat stream failed")
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
 
@@ -635,7 +638,7 @@ class GenerationRunViewSet(
         if run.task_id:
             try:
                 celery_current_app.control.revoke(run.task_id, terminate=True)
-            except Exception:  # noqa: BLE001 — broker down must not block the cancel
+            except Exception:
                 logger.warning(
                     "cancel run %s: revoke of task %s failed",
                     run.pk,
@@ -649,3 +652,19 @@ class GenerationRunViewSet(
             run.pk, {"event": "failed", "status": run.status, "error": run.error}
         )
         return Response(GenerationRunSerializer(run).data)
+
+
+class ApplicationAttachmentViewSet(viewsets.ModelViewSet):
+    """User's application attachments. Owner-scoped through the parent application; list is
+    filterable by `?application=<pk>`."""
+
+    serializer_class = ApplicationAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+    filterset_fields = ["application"]
+    ordering_fields = ["position", "created_at"]
+
+    def get_queryset(self):
+        return ApplicationAttachment.objects.filter(
+            application__user=self.request.user
+        ).order_by("position", "id")

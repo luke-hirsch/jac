@@ -11,6 +11,7 @@ from rest_framework.validators import UniqueTogetherValidator
 from spa.models import PersonalityProfile
 
 from jac.models import (
+    ApplicationAttachment,
     ApplicationLayout,
     Certification,
     Domain,
@@ -691,3 +692,27 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
                 user=validated_data["user"], posting_text=text
             )
         return super().create(validated_data)
+
+
+class ApplicationAttachmentSerializer(
+    ScopeRelatedToUserMixin, serializers.ModelSerializer
+):
+    """Owner-scoped attachment upload. `application` is validated to be the requester's (mixin);
+    `file` must be a PDF under the size cap."""
+
+    user_scoped_fields = ("application",)
+    _MAX_BYTES = 10 * 1024 * 1024
+
+    class Meta:
+        model = ApplicationAttachment
+        fields = ["id", "application", "file", "label", "position", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def validate_file(self, f):
+        if f.size > self._MAX_BYTES:
+            raise serializers.ValidationError("Attachment too large (max 10 MB).")
+        head = f.read(5)
+        f.seek(0)
+        if head[:5] != b"%PDF-":
+            raise serializers.ValidationError("Only PDF attachments are supported.")
+        return f
