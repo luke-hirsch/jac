@@ -5,7 +5,6 @@ Adapter wire formats live in test_adapters; resolution rules in test_config.
 Target API = `[backend]-executor-connector`.
 """
 
-import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -274,7 +273,6 @@ class KnobbyFake(FakeAdapter):
 register("fakeknobs")(KnobbyFake)
 
 
-@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
 @override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
 class ClientParamsSeamTests(TestCase):
     """Per-run knobs travel as one `params` kwarg to the client, which pops it and

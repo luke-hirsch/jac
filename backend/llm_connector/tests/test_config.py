@@ -6,7 +6,6 @@ LLMConfig is user+provider+key+default, unique per (user, provider); the tower i
 a system-owned row; models are per-run picks validated against the catalog.
 """
 
-import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -449,7 +448,6 @@ class LLMConfigAdminFormTests(TestCase):
         self.assertEqual(form.save().api_key, "sk-new")
 
 
-@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
 class KnobSpecTests(TestCase):
     """[fullstack]-model-knobs: the knob spec is DATA in the catalog — bounds,
     choices, and exclusions validated once (`validate_params`), mapped mechanically

@@ -4,7 +4,6 @@
 Target API = `[backend]-executor-connector`.
 """
 
-import unittest
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -73,7 +72,7 @@ class LLMConfigApiTests(APITestCase):
             {"provider": "openai", "api_key": "b", "default": True},
             format="json",
         )
-        rows = self.client.get(CONFIGS_URL).data
+        rows = self.client.get(CONFIGS_URL).data["results"]
         defaults = [row["provider"] for row in rows if row["default"]]
         self.assertEqual(defaults, ["openai"])
 
@@ -96,7 +95,7 @@ class LLMConfigApiTests(APITestCase):
         hirschai_row()  # the system row exists…
         fake_row(self.bob, provider="anthropic", api_key="sk-b")
         mine = fake_row(self.alice, provider="openai", api_key="sk-a")
-        rows = self.client.get(CONFIGS_URL).data
+        rows = self.client.get(CONFIGS_URL).data["results"]
         self.assertEqual([row["id"] for row in rows], [mine.pk])
 
     def test_cross_user_detail_is_404(self):
@@ -221,8 +220,9 @@ class LLMRequestLogApiTests(APITestCase):
     def test_list_returns_only_own_logs(self):
         self.client.force_login(self.alice)
         r = self.client.get("/api/llm/request-logs/")
-        self.assertEqual([row["id"] for row in r.data], [self.mine.pk])
-        self.assertEqual(r.data[0]["provider"], "fake")
+        rows = r.data["results"]
+        self.assertEqual([row["id"] for row in rows], [self.mine.pk])
+        self.assertEqual(rows[0]["provider"], "fake")
 
     def test_retrieve_other_users_log_is_404(self):
         self.client.force_login(self.alice)
@@ -231,7 +231,6 @@ class LLMRequestLogApiTests(APITestCase):
         self.assertEqual(r.status_code, 404)
 
 
-@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class ExecutorKnobAdvertisingTests(APITestCase):
     """[fullstack]-model-knobs: the executors endpoint advertises each provider's
@@ -248,6 +247,9 @@ class ExecutorKnobAdvertisingTests(APITestCase):
         with patch("llm_connector.views.hirschai_reachable", return_value=True):
             rows = {r["provider"]: r for r in self.client.get("/api/llm/executors/").data}
         self.assertEqual(rows["ollama"]["knobs"], {})
+        # Anthropic keeps both knobs; OpenAI is reasoning-only (effort, no temperature).
         self.assertIn("effort", rows["anthropic"]["knobs"])
         self.assertIn("choices", rows["anthropic"]["knobs"]["effort"])
-        self.assertIn("temperature", rows["openai"]["knobs"])
+        self.assertIn("temperature", rows["anthropic"]["knobs"])
+        self.assertIn("effort", rows["openai"]["knobs"])
+        self.assertNotIn("temperature", rows["openai"]["knobs"])

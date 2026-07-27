@@ -7,7 +7,6 @@ the task_id CharField); the tower probe is mocked wherever resolution consults i
 """
 
 import json
-import unittest
 from unittest.mock import patch
 
 from django.conf import settings as dj_settings
@@ -153,8 +152,8 @@ class GenerationRunReadTests(APITestCase):
             set(r.data),
             {
                 "id", "job_application", "status", "stage", "error", "result",
-                "mode", "provider", "model", "posting_title",
-                "created_at", "updated_at",
+                "mode", "provider", "model", "params", "letter_tone",
+                "letter_focus", "posting_title", "created_at", "updated_at",
             },
         )
         self.assertEqual(r.data["provider"], "anthropic")
@@ -346,7 +345,6 @@ class PinnedEntriesApiTests(APITestCase):
         self.assertEqual(self._patch_pins(pins).status_code, 400)
 
 
-@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class GenerationRunParamsTests(APITestCase):
     """[fullstack]-model-knobs: per-run effort/temperature (`params`), validated

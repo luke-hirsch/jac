@@ -72,7 +72,6 @@ class LLMRequestLogSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "user",
-            "alias",
             "provider",
             "model",
             "prompt_tokens",

@@ -1,7 +1,6 @@
 """Provider adapters — Ollama behaviour + web-search capability (base flag, Anthropic, OpenAI)."""
 
 import json
-import unittest
 from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ImproperlyConfigured
@@ -280,7 +279,6 @@ class AnthropicCompleteTests(TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skip("[fullstack]-model-knobs — unskip when starting that guide")
 class AdapterKnobMappingTests(TestCase):
     """Generic per-run knobs ({effort, temperature}) → provider-native kwargs via
     `map_params`. Base = {} so a provider without knobs (ollama — whose payload

@@ -5,16 +5,14 @@ prompt tests live in test_prompts.py; view plumbing in test_api.py.
 Target API = `[backend]-pipeline-single-executor` and `[backend]-entry-pins`.
 """
 
-import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 
-from jac.cover_letter import PERSONAL_STUB, CoverLetter, editable_body
+from jac.cover_letter import editable_body
 from jac.filter import CVFilter, GenerationError
 from jac.llm_prompts import Instruct, LetterChat
-from jac.models import Mode, ResumeSnippet
+from jac.models import Mode
 from llm_connector.executor import Executor
 from llm_connector.tests._helpers import FakeAdapter
 
@@ -206,96 +204,12 @@ class PinnedSelectionTests(TestCase):
         self.assertNotIn("job:999", _kept_ids(out))
 
 
-@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
 class CoverLetterBookkeepingTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = make_user()
-
-    def _letter(self, mode=Mode.standard, executor=TOWER):
-        posting = SimpleNamespace(posting_text=POST, language="en", title="Engineer")
-        return CoverLetter(self.user, posting, cv=None, mode=mode, executor=executor)
-
-    @staticmethod
-    def _snippet(content, language="en"):
-        # Unsaved instances — the writer/bookkeeping only reads attributes.
-        return ResumeSnippet(
-            kind=ResumeSnippet.Kind.achievement, title="t",
-            content=content, language=language,
-        )
-
-    def test_ai_share_taxes_by_mode(self):
-        native = [self._snippet("five words of native prose")]
-        standard = self._letter(Mode.standard)._ai_share(native, "en", False)
-        high = self._letter(Mode.high)._ai_share(native, "en", False)
-        self.assertEqual(standard, 0.20)  # polish tax
-        self.assertEqual(high, 0.60)  # compose tax
-        self.assertLess(standard, high)
-
-    def test_ai_share_counts_translated_snippets_as_machine_words(self):
-        mixed = [self._snippet("vier deutsche Worte hier", language="de"),
-                 self._snippet("four english words here")]
-        share = self._letter(Mode.standard)._ai_share(mixed, "en", False)
-        self.assertGreater(share, 0.20)  # the translated half is fully machine
-
-    def test_ai_share_is_full_without_snippets(self):
-        self.assertEqual(self._letter()._ai_share([], "en", False), 1.0)
-        self.assertEqual(
-            self._letter()._ai_share([self._snippet("x")], "en", True), 1.0
-        )
-
-    def test_editable_body_prepends_the_personal_paragraph(self):
-        letter = {"personal_paragraph": "Opening.", "body": "Body."}
-        self.assertEqual(editable_body(letter), "Opening.\n\nBody.")
+    def test_editable_body_returns_the_composed_body(self):
+        # The company-fit opening is folded into the body now, so editable_body is
+        # just the composed body — there is no separate personal paragraph to prepend.
         self.assertEqual(editable_body({"body": "Body."}), "Body.")
-
-
-@override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
-class PersonalParagraphGateTests(TestCase):
-    """Purely capability-driven: real only on a web-capable (commercial) executor
-    WITH a personality dossier; every other combination is the loud stub."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.user = make_user()
-
-    def _letter(self, executor):
-        posting = SimpleNamespace(posting_text=POST, language="en", title="Engineer")
-        return CoverLetter(
-            self.user, posting, cv=None, mode=Mode.standard, executor=executor
-        )
-
-    def test_a_hirschai_run_always_stubs(self):
-        pp = self._letter(TOWER)._personal_paragraph("en", "Engineer")
-        self.assertTrue(pp["is_stub"])
-        self.assertEqual(pp["text"], PERSONAL_STUB)
-
-    def test_commercial_without_a_dossier_stubs(self):
-        fake_row(self.user, provider="fakesearch", model="fs-1")
-        executor = Executor("fakesearch", user=self.user)
-        pp = self._letter(executor)._personal_paragraph("en", "Engineer")
-        self.assertTrue(pp["is_stub"])
-
-    def test_commercial_with_a_dossier_writes_the_real_paragraph(self):
-        fake_row(
-            self.user, provider="fakesearch", model="fs-1",
-            _response="I admire Acme's rocketry and bring curious energy.",
-        )
-        executor = Executor("fakesearch", user=self.user)
-        letter = self._letter(executor)
-        # The recipient block needs a company for research to have a subject.
-        letter.address = SimpleNamespace(
-            company="Acme GmbH", contact_name="", street="", address_line2="",
-            zip="", city="", country="", email="", phone="",
-        )
-        with patch.object(
-            CoverLetter, "_personality_dossier", return_value="a curious builder"
-        ):
-            pp = letter._personal_paragraph("en", "Engineer")
-        self.assertFalse(pp["is_stub"])
-        self.assertIn("Acme", pp["text"])
-        self.assertEqual(pp["sources"], ["https://example.com/about"])
-        self.assertIn("grounding", pp)
+        self.assertEqual(editable_body({}), "")
 
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI, LLM_LOGGING=False)
