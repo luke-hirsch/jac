@@ -46,6 +46,8 @@ import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
 import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { useLineSave } from "@/components/cv/use-line-save";
+import { EntryFilesField } from "@/components/cv/entry-files-field";
+import { useUploadAttachment } from "@/lib/queries/attachments";
 
 const schema = z.object({
   name: z.string().min(1).max(200),
@@ -298,6 +300,8 @@ function CertificationEditor({
   onClose: () => void;
 }) {
   const create = useCreate<CertificationRow>("certifications");
+  const uploadAttachment = useUploadAttachment();
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const update = useUpdate<CertificationRow>("certifications");
   const initial: CertificationInput = row
     ? {
@@ -343,8 +347,16 @@ function CertificationEditor({
         expires_on: value.expires_on || null,
       };
       try {
-        if (row) await update.mutateAsync({ id: row.id, body });
-        else await create.mutateAsync(body);
+        if (row) {
+          await update.mutateAsync({ id: row.id, body });
+        } else {
+          const created = await create.mutateAsync(body);
+          if (pendingFile)
+            await uploadAttachment.mutateAsync({
+              file: pendingFile,
+              certification: created.id,
+            });
+        }
         toast.success(row ? "Updated" : "Created");
         onClose();
       } catch (e) {
@@ -523,6 +535,13 @@ function CertificationEditor({
           </div>
         )}
       </form.Field>
+
+      <EntryFilesField
+        entryType="certification"
+        entryId={row?.id ?? null}
+        pending={pendingFile}
+        onPendingChange={setPendingFile}
+      />
 
       <form.Field name="favourite">
         {(f) => (

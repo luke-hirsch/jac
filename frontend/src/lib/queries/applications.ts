@@ -62,6 +62,7 @@ export type ApplicationRow = {
   created_at: string;
   updated_at: string;
   pinned_entries: string[];
+  attachments: number[]; // ordered CvAttachment ids appended to the export
 };
 
 export type ApplicationPatch = Partial<{
@@ -72,6 +73,7 @@ export type ApplicationPatch = Partial<{
   deadline: string | null;
   notes: string;
   pinned_entries?: string[];
+  attachments: number[];
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */

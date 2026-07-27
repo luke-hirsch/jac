@@ -22,28 +22,15 @@ export async function mergePdfs(
   return new Blob([buf], { type: "application/pdf" });
 }
 
-export type AttachmentLike = { id: number; position: number };
-
-/** Re-number a list to contiguous 0-based positions (mirrors cv-doc moveEntry). */
-export function withPositions<T extends AttachmentLike>(items: T[]): T[] {
-  return items.map((a, i) => ({ ...a, position: i }));
-}
-
-export function moveAttachment<T extends AttachmentLike>(
-  items: T[],
-  index: number,
-  delta: -1 | 1,
-): T[] {
+/** Move the id at `index` by `delta` within an ordered id list. Returns the SAME array
+ *  reference (no-op) at the boundaries or out of range, so callers can skip a needless save.
+ *  The application's `attachments` field is exactly this ordered id list. */
+export function moveId(ids: number[], index: number, delta: -1 | 1): number[] {
   const target = index + delta;
-  if (
-    index < 0 ||
-    index >= items.length ||
-    target < 0 ||
-    target >= items.length
-  ) {
-    return items;
+  if (index < 0 || index >= ids.length || target < 0 || target >= ids.length) {
+    return ids;
   }
-  const next = [...items];
+  const next = [...ids];
   [next[index], next[target]] = [next[target], next[index]];
-  return withPositions(next);
+  return next;
 }

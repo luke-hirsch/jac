@@ -65,7 +65,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   const spec = useLayoutSpec(layout);
   const careerDb = useCvEntries();
   const profile = useProfile();
-  const attachments = useAttachments(app.id);
+  const library = useAttachments();
   const [scope, setScope] = useState<ExportScope>("complete");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{
@@ -185,13 +185,14 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     return { blob: await renderPdfBlob(doc), fit, letterPages };
   }
 
-  // Client-side pdf-lib merge: append the attachment PDFs (in position order) to a rendered
-  // blob. Skipped for a letter-only export — attachments follow the CV, not the letter.
+  // Client-side pdf-lib merge: resolve the application's selected attachment ids to file URLs
+  // (in the stored order, stale ids skipped) and append them. Skipped for a letter-only export
+  // — attachments follow the CV, not the letter.
   async function withAttachments(blob: Blob): Promise<Blob> {
-    const urls = (attachments.data ?? [])
-      .slice()
-      .sort((a, b) => a.position - b.position)
-      .map((a) => a.file);
+    const byId = new Map((library.data ?? []).map((a) => [a.id, a] as const));
+    const urls = (app.attachments ?? [])
+      .map((id) => byId.get(id)?.file)
+      .filter((u): u is string => !!u);
     return urls.length && scope !== "letter" ? mergePdfs(blob, urls) : blob;
   }
 

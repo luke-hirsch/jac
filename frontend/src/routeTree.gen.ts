@@ -29,6 +29,7 @@ import { Route as AuthenticatedCvLanguagesRouteImport } from './routes/_authenti
 import { Route as AuthenticatedCvJobsRouteImport } from './routes/_authenticated/cv/jobs'
 import { Route as AuthenticatedCvEducationRouteImport } from './routes/_authenticated/cv/education'
 import { Route as AuthenticatedCvCertificationsRouteImport } from './routes/_authenticated/cv/certifications'
+import { Route as AuthenticatedCvAttachmentsRouteImport } from './routes/_authenticated/cv/attachments'
 import { Route as AuthenticatedApplicationsApplicationIdRouteImport } from './routes/_authenticated/applications/$applicationId'
 import { Route as AuthenticatedAccountSecurityRouteImport } from './routes/_authenticated/account/security'
 import { Route as AuthenticatedAccountProfileRouteImport } from './routes/_authenticated/account/profile'
@@ -141,6 +142,12 @@ const AuthenticatedCvCertificationsRoute =
     path: '/certifications',
     getParentRoute: () => AuthenticatedCvRoute,
   } as any)
+const AuthenticatedCvAttachmentsRoute =
+  AuthenticatedCvAttachmentsRouteImport.update({
+    id: '/attachments',
+    path: '/attachments',
+    getParentRoute: () => AuthenticatedCvRoute,
+  } as any)
 const AuthenticatedApplicationsApplicationIdRoute =
   AuthenticatedApplicationsApplicationIdRouteImport.update({
     id: '/$applicationId',
@@ -201,6 +208,7 @@ export interface FileRoutesByFullPath {
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
+  '/cv/attachments': typeof AuthenticatedCvAttachmentsRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/cv/education': typeof AuthenticatedCvEducationRoute
   '/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -227,6 +235,7 @@ export interface FileRoutesByTo {
   '/account/profile': typeof AuthenticatedAccountProfileRoute
   '/account/security': typeof AuthenticatedAccountSecurityRoute
   '/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
+  '/cv/attachments': typeof AuthenticatedCvAttachmentsRoute
   '/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/cv/education': typeof AuthenticatedCvEducationRoute
   '/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -257,6 +266,7 @@ export interface FileRoutesById {
   '/_authenticated/account/profile': typeof AuthenticatedAccountProfileRoute
   '/_authenticated/account/security': typeof AuthenticatedAccountSecurityRoute
   '/_authenticated/applications/$applicationId': typeof AuthenticatedApplicationsApplicationIdRoute
+  '/_authenticated/cv/attachments': typeof AuthenticatedCvAttachmentsRoute
   '/_authenticated/cv/certifications': typeof AuthenticatedCvCertificationsRoute
   '/_authenticated/cv/education': typeof AuthenticatedCvEducationRoute
   '/_authenticated/cv/jobs': typeof AuthenticatedCvJobsRoute
@@ -287,6 +297,7 @@ export interface FileRouteTypes {
     | '/account/profile'
     | '/account/security'
     | '/applications/$applicationId'
+    | '/cv/attachments'
     | '/cv/certifications'
     | '/cv/education'
     | '/cv/jobs'
@@ -313,6 +324,7 @@ export interface FileRouteTypes {
     | '/account/profile'
     | '/account/security'
     | '/applications/$applicationId'
+    | '/cv/attachments'
     | '/cv/certifications'
     | '/cv/education'
     | '/cv/jobs'
@@ -342,6 +354,7 @@ export interface FileRouteTypes {
     | '/_authenticated/account/profile'
     | '/_authenticated/account/security'
     | '/_authenticated/applications/$applicationId'
+    | '/_authenticated/cv/attachments'
     | '/_authenticated/cv/certifications'
     | '/_authenticated/cv/education'
     | '/_authenticated/cv/jobs'
@@ -501,6 +514,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedCvCertificationsRouteImport
       parentRoute: typeof AuthenticatedCvRoute
     }
+    '/_authenticated/cv/attachments': {
+      id: '/_authenticated/cv/attachments'
+      path: '/attachments'
+      fullPath: '/cv/attachments'
+      preLoaderRoute: typeof AuthenticatedCvAttachmentsRouteImport
+      parentRoute: typeof AuthenticatedCvRoute
+    }
     '/_authenticated/applications/$applicationId': {
       id: '/_authenticated/applications/$applicationId'
       path: '/$applicationId'
@@ -592,6 +612,7 @@ const AuthenticatedApplicationsRouteWithChildren =
   )
 
 interface AuthenticatedCvRouteChildren {
+  AuthenticatedCvAttachmentsRoute: typeof AuthenticatedCvAttachmentsRoute
   AuthenticatedCvCertificationsRoute: typeof AuthenticatedCvCertificationsRoute
   AuthenticatedCvEducationRoute: typeof AuthenticatedCvEducationRoute
   AuthenticatedCvJobsRoute: typeof AuthenticatedCvJobsRoute
@@ -602,6 +623,7 @@ interface AuthenticatedCvRouteChildren {
 }
 
 const AuthenticatedCvRouteChildren: AuthenticatedCvRouteChildren = {
+  AuthenticatedCvAttachmentsRoute: AuthenticatedCvAttachmentsRoute,
   AuthenticatedCvCertificationsRoute: AuthenticatedCvCertificationsRoute,
   AuthenticatedCvEducationRoute: AuthenticatedCvEducationRoute,
   AuthenticatedCvJobsRoute: AuthenticatedCvJobsRoute,

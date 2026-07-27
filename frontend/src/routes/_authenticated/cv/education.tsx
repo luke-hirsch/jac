@@ -46,6 +46,8 @@ import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
 import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { useLineSave } from "@/components/cv/use-line-save";
+import { EntryFilesField } from "@/components/cv/entry-files-field";
+import { useUploadAttachment } from "@/lib/queries/attachments";
 
 const schema = z.object({
   institution: z.string().min(1).max(200),
@@ -299,6 +301,8 @@ function EducationEditor({
 }) {
   const create = useCreate<EducationRow>("education");
   const update = useUpdate<EducationRow>("education");
+  const uploadAttachment = useUploadAttachment();
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const initial: EducationInput = row
     ? {
@@ -338,8 +342,16 @@ function EducationEditor({
       // DRF's DateField rejects "" for the nullable `ended` — send null.
       const body = { ...value, ended: value.ended || null };
       try {
-        if (row) await update.mutateAsync({ id: row.id, body });
-        else await create.mutateAsync(body);
+        if (row) {
+          await update.mutateAsync({ id: row.id, body });
+        } else {
+          const created = await create.mutateAsync(body);
+          if (pendingFile)
+            await uploadAttachment.mutateAsync({
+              file: pendingFile,
+              education: created.id,
+            });
+        }
         toast.success(row ? "Updated" : "Created");
         onClose();
       } catch (e) {
@@ -534,6 +546,13 @@ function EducationEditor({
           </div>
         )}
       </form.Field>
+
+      <EntryFilesField
+        entryType="education"
+        entryId={row?.id ?? null}
+        pending={pendingFile}
+        onPendingChange={setPendingFile}
+      />
 
       <form.Field name="favourite">
         {(f) => (

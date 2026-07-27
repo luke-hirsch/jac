@@ -8,6 +8,7 @@ const TABS = [
   { to: "/cv/certifications", label: "Certifications" },
   { to: "/cv/projects", label: "Projects" },
   { to: "/cv/languages", label: "Languages" },
+  { to: "/cv/attachments", label: "Files" },
 ] as const;
 
 export const Route = createFileRoute("/_authenticated/cv")({

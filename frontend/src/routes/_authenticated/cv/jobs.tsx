@@ -55,6 +55,8 @@ import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
 import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { useLineSave } from "@/components/cv/use-line-save";
+import { EntryFilesField } from "@/components/cv/entry-files-field";
+import { useUploadAttachment } from "@/lib/queries/attachments";
 const JOB_TYPES: { value: JobRow["job_type"]; label: string }[] = [
   { value: "ft", label: "Full-time" },
   { value: "pt", label: "Part-time" },
@@ -354,6 +356,8 @@ function JobEditor({
   onClose: () => void;
 }) {
   const create = useCreate<JobRow>("jobs");
+  const uploadAttachment = useUploadAttachment();
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const update = useUpdate<JobRow>("jobs");
   const initial: JobInput = row
     ? {
@@ -394,8 +398,16 @@ function JobEditor({
       // DRF's DateField rejects "" for nullable dates — send null instead.
       const body = { ...value, ended: value.ended || null };
       try {
-        if (row) await update.mutateAsync({ id: row.id, body });
-        else await create.mutateAsync(body);
+        if (row) {
+          await update.mutateAsync({ id: row.id, body });
+        } else {
+          const created = await create.mutateAsync(body);
+          if (pendingFile)
+            await uploadAttachment.mutateAsync({
+              file: pendingFile,
+              job: created.id,
+            });
+        }
         toast.success(row ? "Updated" : "Created");
         onClose();
       } catch (e) {
@@ -603,6 +615,13 @@ function JobEditor({
           </div>
         )}
       </form.Field>
+
+      <EntryFilesField
+        entryType="job"
+        entryId={row?.id ?? null}
+        pending={pendingFile}
+        onPendingChange={setPendingFile}
+      />
 
       <form.Field name="favourite">
         {(f) => (
