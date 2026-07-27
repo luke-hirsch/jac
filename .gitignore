@@ -21,7 +21,7 @@ db.sqlite3
 .DS_Store
 Thumbs.db
 .python-version
-
+.vscode/
 data/
 dump.*
 

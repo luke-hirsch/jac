@@ -25,9 +25,7 @@ from jac.llm_prompts import (
     Embed,
     FaithfulnessCheck,
     Instruct,
-    LetterCritic,
 )
-from jac.models import ResumeSnippet
 from llm_connector.executor import Executor
 from llm_connector.probe import hirschai_reachable
 
@@ -59,27 +57,29 @@ ENTRIES = [
      "refs": [], "favourite": False},
 ]
 
-# Unsaved instances — the writer prompts only read attributes.
-SNIPPETS = [
-    ResumeSnippet(
-        kind=ResumeSnippet.Kind.intro, title="intro", language="en",
-        content=(
-            "I am a backend engineer with six years of Python and Django "
-            "experience, building REST services used by thousands of customers."
-        ),
-    ),
-    ResumeSnippet(
-        kind=ResumeSnippet.Kind.achievement, title="pipeline", language="en",
-        content=(
-            "At DataCorp I designed a PostgreSQL reporting pipeline that cut "
-            "nightly batch times from four hours to twenty minutes."
-        ),
-    ),
-    ResumeSnippet(
-        kind=ResumeSnippet.Kind.closing, title="closing", language="en",
-        content="I would be glad to discuss how I can contribute to your team.",
-    ),
-]
+# The tailored CV facts feed the writer and ground the faithfulness audit. Format
+# mirrors CoverLetter._cv_facts(): one "- <fact>" line per entry. There are no
+# snippets — the CV entries are the ONLY source of facts in the current pipeline.
+CV_FACTS = "\n".join(
+    (
+        "- Backend engineer at DataCorp (2020-2024): built Django REST services "
+        "and PostgreSQL data models used by thousands of customers.",
+        "- Designed a PostgreSQL reporting pipeline that cut nightly batch times "
+        "from four hours to twenty minutes.",
+        "- Python (expert), Django, PostgreSQL, and Linux deployment.",
+        "- English (native).",
+    )
+)
+
+# A letter body whose every factual claim is stated in CV_FACTS — the clean case
+# the faithfulness audit must pass.
+GROUNDED_BODY = (
+    "As a backend engineer at DataCorp from 2020 to 2024, I built Django REST "
+    "services and PostgreSQL data models used by thousands of customers. I "
+    "designed a PostgreSQL reporting pipeline that cut nightly batch times from "
+    "four hours to twenty minutes. I work in Python, Django, and PostgreSQL and "
+    "deploy on Linux, and I am a native English speaker."
+)
 
 REFUSAL_MARKERS = ("i can't", "i cannot", "i'm sorry", "as an ai")
 
@@ -166,12 +166,12 @@ class CoverLetterWriterPromptTests(LivePromptTestCase):
     def test_standard_body_is_a_real_letter_body(self):
         def check():
             body = CoverLetterWriter(
-                SNIPPETS,
+                executor=self.executor,
                 candidate_name="Alex Example",
                 title="Python Backend Engineer",
                 language="en",
                 mode="standard",
-                executor=self.executor,
+                cv_facts=CV_FACTS,
             ).write()
             if not body:
                 return False
@@ -189,38 +189,22 @@ class CoverLetterWriterPromptTests(LivePromptTestCase):
 
 
 class FaithfulnessPromptTests(LivePromptTestCase):
-    def test_a_verbatim_body_audits_clean(self):
-        body = "\n\n".join(s.content for s in SNIPPETS)
-
+    def test_a_grounded_body_audits_clean(self):
         def check():
-            res = FaithfulnessCheck(body, SNIPPETS, executor=self.executor).critique()
+            res = FaithfulnessCheck(
+                GROUNDED_BODY, CV_FACTS, executor=self.executor
+            ).critique()
             return res["count"] == 0
 
-        self.assertPasses(check, "clean body audits UNSUPPORTED 0")
+        self.assertPasses(check, "grounded body audits UNSUPPORTED 0")
 
     def test_a_fabricated_claim_is_flagged(self):
-        body = (
-            "\n\n".join(s.content for s in SNIPPETS)
-            + "\n\nI also won the Nobel Prize in Physics in 2020."
-        )
+        body = GROUNDED_BODY + " I also won the Nobel Prize in Physics in 2020."
 
         def check():
-            res = FaithfulnessCheck(body, SNIPPETS, executor=self.executor).critique()
+            res = FaithfulnessCheck(
+                body, CV_FACTS, executor=self.executor
+            ).critique()
             return (res["count"] or 0) >= 1
 
         self.assertPasses(check, "fabrication is flagged")
-
-
-class LetterCriticPromptTests(LivePromptTestCase):
-    def test_the_critique_parses(self):
-        body = "\n\n".join(s.content for s in SNIPPETS)
-
-        def check():
-            res = LetterCritic(body, SNIPPETS, executor=self.executor).critique()
-            # Structure over opinion: the reply must parse (count is an int —
-            # None means the line format broke), claims must be a list.
-            return isinstance(res.get("count"), int) and isinstance(
-                res.get("claims"), list
-            )
-
-        self.assertPasses(check, "critic line-format compliance")

@@ -329,13 +329,13 @@ class AddressExtract:
         "No prose, no markdown, no JSON."
     )
     _MAX_POST_CHARS = 12000
-    _PLACEHOLDERS = {"none", "n/a", "na", "-", "—", "unknown", "null"}
 
     _LINE = re.compile(r"^\s*([a-zA-Z_]+)\s*[:\-]\s*(.+?)\s*$")
 
     def __init__(self, job_post_text: str, executor):
         self.job_post_text = job_post_text
         self.executor = executor
+        self._PLACEHOLDERS = {"none", "n/a", "na", "-", "—", "unknown", "null"}
 
     def extract(self) -> dict:
         """Return {field: value} for the fields the posting states. {} on any failure."""
@@ -379,31 +379,6 @@ class CoverLetterWriter:
     _TARGET_WORDS = (200, 320)
 
     # Keys MUST match spa PersonalityProfile.Tone / .Focus values.
-    _TONE = {
-        "personal": (
-            "Write in a warm, personable, first-person voice — genuine and direct, as if speaking "
-            "to the reader."
-        ),
-        "neutral": (
-            "Write in a professional voice with measured warmth — neither stiff nor familiar."
-        ),
-        "formal": (
-            "Write in a formal, reserved business register — traditional and restrained."
-        ),
-    }
-    _FOCUS = {
-        "soft_skill": (
-            "Lead with working style, collaboration, values and motivation; use technical facts as "
-            "supporting evidence."
-        ),
-        "balanced": (
-            "Give technical achievements and working style / motivation roughly equal weight."
-        ),
-        "technical": (
-            "Lead with concrete technical achievements, tools, and measurable outcomes; keep "
-            "soft-skill framing brief."
-        ),
-    }
 
     _COMMON = (
         "Write ONLY the body paragraphs of a cover letter — no date, no addresses, no subject line, "
@@ -444,6 +419,32 @@ class CoverLetterWriter:
         self.mode = mode
         self.posting_text = posting_text
         self.unsupported_claims = unsupported_claims or []
+
+        self._TONE = {
+            "personal": (
+                "Write in a warm, personable, first-person voice — genuine and direct, as if speaking "
+                "to the reader."
+            ),
+            "neutral": (
+                "Write in a professional voice with measured warmth — neither stiff nor familiar."
+            ),
+            "formal": (
+                "Write in a formal, reserved business register — traditional and restrained."
+            ),
+        }
+        self._FOCUS = {
+            "soft_skill": (
+                "Lead with working style, collaboration, values and motivation; use technical facts as "
+                "supporting evidence."
+            ),
+            "balanced": (
+                "Give technical achievements and working style / motivation roughly equal weight."
+            ),
+            "technical": (
+                "Lead with concrete technical achievements, tools, and measurable outcomes; keep "
+                "soft-skill framing brief."
+            ),
+        }
 
     def write(self) -> str:
         """Return the composed body prose. '' when there are no CV facts or the LLM fails."""
