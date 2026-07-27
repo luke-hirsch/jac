@@ -9,16 +9,35 @@ export type PersonalityQuestion = {
   editable: boolean;
 };
 
+export type LetterTone = "personal" | "neutral" | "formal";
+export type LetterFocus = "soft_skill" | "balanced" | "technical";
+
 export type PersonalityRow = {
   id: number;
   answers: Record<string, string>;
   dossier: string;
-  /** Server-owned question pool — render from this, never hardcode it. */
   questions: PersonalityQuestion[];
   answers_updated_at: string | null;
   dossier_built_at: string | null;
+  letter_tone: LetterTone;
+  letter_focus: LetterFocus;
+  writing_sample: string;
+  style_dossier: string;
+  sample_updated_at: string | null;
+  style_built_at: string | null;
   updated_at: string;
 };
+
+export const TONE_OPTIONS: { value: LetterTone; label: string }[] = [
+  { value: "personal", label: "Personal" },
+  { value: "neutral", label: "Neutral" },
+  { value: "formal", label: "Formal" },
+];
+export const FOCUS_OPTIONS: { value: LetterFocus; label: string }[] = [
+  { value: "soft_skill", label: "Soft-skill focus" },
+  { value: "balanced", label: "Balanced" },
+  { value: "technical", label: "Technical focus" },
+];
 
 const URL = "/api/spa/personality/";
 const KEY = ["personality"];
@@ -91,10 +110,24 @@ export function dossierState(
   return "fresh";
 }
 
-/** Generate-panel nag: a capable (commercial) executor that could write a real
- *  personal paragraph, but zero personality answers, guarantees a stub — say so
- *  before the run, not after. Silent while loading or when the pick can't produce a
- *  real paragraph anyway (HirschAI always stubs; its own muted line covers that). */
+/** Style-dossier freshness — mirrors PersonalityProfile.style_stale server-side.
+ *  Generation rebuilds it automatically on the next run (ensure_style_dossier). */
+export function styleState(
+  row: Pick<
+    PersonalityRow,
+    "writing_sample" | "style_dossier" | "sample_updated_at" | "style_built_at"
+  >,
+): "none" | "stale" | "fresh" {
+  if (!row.writing_sample.trim()) return "none";
+  if (!row.style_dossier || !row.style_built_at) return "stale";
+  if (
+    row.sample_updated_at &&
+    Date.parse(row.sample_updated_at) > Date.parse(row.style_built_at)
+  )
+    return "stale";
+  return "fresh";
+}
+
 export function personalityHint(
   capable: boolean,
   row: PersonalityRow | undefined,
@@ -102,7 +135,7 @@ export function personalityHint(
   if (!capable || !row) return null;
   if (answeredCount(row.answers) > 0) return null;
   return (
-    "No personality answers yet — the personal paragraph will come out as a stub. " +
+    "No personality answers yet — the letter can't reflect who you are. " +
     "Fill the questionnaire under Account → Personality."
   );
 }
@@ -130,6 +163,22 @@ export function useUpdateAnswers() {
   });
 }
 
+export function useUpdateLetterSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      patch: Partial<
+        Pick<PersonalityRow, "letter_tone" | "letter_focus" | "writing_sample">
+      >,
+    ) =>
+      api<PersonalityRow>(URL, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
 export function useRebuildDossier() {
   const qc = useQueryClient();
   return useMutation({
@@ -137,6 +186,20 @@ export function useRebuildDossier() {
     // the user's default executor ([fullstack]-chat-assistant-rework can add a pick).
     mutationFn: () =>
       api<{ dossier: string }>(`${URL}rebuild/`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+/** Same endpoint as useRebuildDossier; kind="style" force-rebuilds the writing-style
+ *  dossier (ensure_style_dossier) instead of the personality one. */
+export function useRebuildStyleDossier() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<{ dossier: string }>(`${URL}rebuild/`, {
+        method: "POST",
+        body: JSON.stringify({ kind: "style" }),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }

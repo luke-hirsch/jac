@@ -298,6 +298,23 @@ class PersonalityAPITests(APITestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["dossier"], "Fresh dossier.")
 
+    def test_rebuild_style_kind_force_distils(self):
+        prof = PersonalityProfile.objects.get(user=self.user)
+        prof.writing_sample = "A few paragraphs I wrote."
+        prof.sample_updated_at = timezone.now()
+        prof.save()
+        with (
+            patch("spa.views.resolve_executor", return_value=object()),
+            patch("spa.distill.complete", return_value="Fresh style dossier."),
+        ):
+            r = self.client.post(
+                "/api/spa/personality/rebuild/", {"kind": "style"}, format="json"
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["dossier"], "Fresh style dossier.")
+        prof.refresh_from_db()
+        self.assertEqual(prof.style_dossier, "Fresh style dossier.")
+
     def test_rebuild_maps_executor_error_to_400(self):
         from llm_connector.conf import ExecutorError
 

@@ -37,12 +37,6 @@ const SECTIONS: { key: ResourceKey; label: string; to: string; url: string }[] =
       to: "/cv/languages",
       url: "/api/jac/languages/",
     },
-    {
-      key: "snippets",
-      label: "Snippets",
-      to: "/cv/snippets",
-      url: "/api/jac/resume-snippets/",
-    },
   ];
 
 export const Route = createFileRoute("/_authenticated/cv/")({

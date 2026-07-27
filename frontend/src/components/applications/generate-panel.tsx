@@ -31,17 +31,22 @@ import {
   type ApplicationRow,
 } from "@/lib/queries/applications";
 import {
-  aiShareBadge,
   groundingBadge,
   isStalePending,
   knobParams,
   pendingAgeSeconds,
-  qualityBadge,
   useCreateGeneration,
   type RunState,
 } from "@/lib/queries/generations";
 import { type SocketStatus } from "@/lib/ws";
-import { personalityHint, usePersonality } from "@/lib/queries/personality";
+import {
+  personalityHint,
+  usePersonality,
+  type LetterTone,
+  type LetterFocus,
+  TONE_OPTIONS,
+  FOCUS_OPTIONS,
+} from "@/lib/queries/personality";
 
 function toneClass(tone: "green" | "amber" | "muted") {
   return tone === "green"
@@ -121,6 +126,9 @@ export function GeneratePanel({
   const capable = pickedRow != null && !pickedRow.self_hosted;
   const personality = usePersonality(capable);
   const hint = personalityHint(capable, personality.data);
+  const personalityRow = personality.data;
+  const [toneOverride, setToneOverride] = useState<LetterTone | "">("");
+  const [focusOverride, setFocusOverride] = useState<LetterFocus | "">("");
 
   const running =
     activeRunId != null &&
@@ -142,6 +150,8 @@ export function GeneratePanel({
         provider: picked.provider,
         model: picked.model, // "" for HirschAI → omitted by toPayload
         params: knobParams(picked.knobs), // blanks omitted; {} → omitted by toPayload
+        letter_tone: toneOverride,
+        letter_focus: focusOverride,
       });
       onRunSelected(run.id);
     } catch (e) {
@@ -179,11 +189,10 @@ export function GeneratePanel({
   }
 
   const result = runState.status === "done" ? runState.result : null;
-  const ai = result ? aiShareBadge(result.cover_letter.ai_share) : null;
+
   const grounding = result
     ? groundingBadge(result.cover_letter.grounding)
     : null;
-  const quality = result ? qualityBadge(result.cover_letter.critique) : null;
 
   return (
     <Card>
@@ -386,6 +395,43 @@ export function GeneratePanel({
                       })}
                   </>
                 )}
+                <div className="grid grid-cols-2 gap-2">
+                  <Select
+                    value={
+                      toneOverride || (personalityRow?.letter_tone ?? "neutral")
+                    }
+                    onValueChange={(v) => setToneOverride(v as LetterTone)}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue placeholder="Tone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TONE_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={
+                      focusOverride ||
+                      (personalityRow?.letter_focus ?? "balanced")
+                    }
+                    onValueChange={(v) => setFocusOverride(v as LetterFocus)}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue placeholder="Focus" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FOCUS_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </>
             )}
 
@@ -447,7 +493,7 @@ export function GeneratePanel({
           </p>
         )}
 
-        {result && ai && grounding && (
+        {result && grounding && (
           <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/40 p-2 text-sm">
             <span
               className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
@@ -456,38 +502,14 @@ export function GeneratePanel({
               {result.meta.mode} · {providerLabel(rows, result.meta.provider)}
               {result.meta.model ? ` · ${result.meta.model}` : ""}
             </span>
-            <span
-              className={`rounded px-2 py-0.5 text-xs ${toneClass(ai.tone)}`}
-            >
-              {ai.label}
-            </span>
+
             <span
               className={`rounded px-2 py-0.5 text-xs ${toneClass(grounding.tone)}`}
               title={result.cover_letter.grounding.claims.join("\n")}
             >
               {grounding.label}
             </span>
-            {quality && (
-              <span
-                className={`rounded px-2 py-0.5 text-xs ${toneClass(quality.tone)}`}
-                title={(result.cover_letter.critique?.claims ?? []).join("\n")}
-              >
-                {quality.label}
-              </span>
-            )}
-            {result.cover_letter.snippet_ranking && (
-              <span
-                className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                title="How the letter's snippets were picked: embedding = ranked against the posting; structural = no embedder was reachable, career-DB links decided."
-              >
-                snippets: {result.cover_letter.snippet_ranking}
-              </span>
-            )}
-            {result.cover_letter.personal_paragraph_is_stub && (
-              <span className="rounded bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
-                personal paragraph is a stub
-              </span>
-            )}
+
             <span className="text-xs text-muted-foreground">
               {applied
                 ? "Result is in the application below."

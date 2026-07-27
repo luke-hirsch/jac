@@ -143,7 +143,7 @@ export function ApplicationContentCard({
       hasStub(coverLetter)
     ) {
       toast.warning(
-        "The letter still contains the personal-paragraph stub — it is not sendable.",
+        "The letter is a placeholder — regenerate it before marking the application sent.",
       );
     }
     update.mutate(

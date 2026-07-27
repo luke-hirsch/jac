@@ -8,6 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   MAX_ANSWER_LEN,
   answeredCount,
   answersDirty,
@@ -18,8 +25,15 @@ import {
   useDeleteQuestion,
   usePersonality,
   useRebuildDossier,
+  useRebuildStyleDossier,
   useUpdateAnswers,
   validateQuestionPrompt,
+  TONE_OPTIONS,
+  FOCUS_OPTIONS,
+  type LetterTone,
+  type LetterFocus,
+  styleState,
+  useUpdateLetterSettings,
 } from "@/lib/queries/personality";
 
 export const Route = createFileRoute("/_authenticated/account/personality")({
@@ -36,8 +50,13 @@ function PersonalityPage() {
   const personality = usePersonality();
   const update = useUpdateAnswers();
   const rebuild = useRebuildDossier();
+  const rebuildStyle = useRebuildStyleDossier();
   const createQuestion = useCreateQuestion();
   const deleteQuestion = useDeleteQuestion();
+  const settings = useUpdateLetterSettings();
+  const [sample, setSample] = useState<string | null>(null);
+  if (personality.data && sample === null)
+    setSample(personality.data.writing_sample);
   // Seeded from the server once; refetches must not clobber edits (adjust-state-
   // during-render, same pattern as the content card's server re-seed).
   const [draft, setDraft] = useState<Record<string, string> | null>(null);
@@ -54,6 +73,27 @@ function PersonalityPage() {
   const answered = answeredCount(draft);
   const newQuestionError = validateQuestionPrompt(newQuestion);
 
+  const styleFresh = styleState(row);
+  const sampleDirty =
+    sample !== null && sample.trim() !== row.writing_sample.trim();
+
+  function saveMatrix(patch: {
+    letter_tone?: LetterTone;
+    letter_focus?: LetterFocus;
+  }) {
+    settings.mutate(patch, {
+      onError: () => toast.error("Could not save the letter setting"),
+    });
+  }
+  function saveSample() {
+    settings.mutate(
+      { writing_sample: (sample ?? "").trim() },
+      {
+        onSuccess: () => toast.success("Writing sample saved"),
+        onError: () => toast.error("Could not save the writing sample"),
+      },
+    );
+  }
   function onSave() {
     update.mutate(cleanAnswers(draft!), {
       onSuccess: () => toast.success("Answers saved"),
@@ -65,6 +105,13 @@ function PersonalityPage() {
     rebuild.mutate(undefined, {
       onSuccess: () => toast.success("Dossier rebuilt"),
       onError: () => toast.error("Could not rebuild the dossier"),
+    });
+  }
+
+  function onRebuildStyle() {
+    rebuildStyle.mutate(undefined, {
+      onSuccess: () => toast.success("Writing dossier rebuilt"),
+      onError: () => toast.error("Could not rebuild the writing dossier"),
     });
   }
 
@@ -176,7 +223,101 @@ function PersonalityPage() {
           {answered} of {row.questions.length} answered
         </span>
       </div>
+      <Separator />
 
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-sm font-medium">Cover-letter voice</h3>
+          <p className="text-sm text-muted-foreground">
+            The default tone × focus for every letter, and a sample of your own
+            writing the model imitates. A run can override the tone/focus for
+            one application.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Tone</Label>
+            <Select
+              value={row.letter_tone}
+              onValueChange={(v) =>
+                saveMatrix({ letter_tone: v as LetterTone })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TONE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Focus</Label>
+            <Select
+              value={row.letter_focus}
+              onValueChange={(v) =>
+                saveMatrix({ letter_focus: v as LetterFocus })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FOCUS_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="writing-sample">Writing sample</Label>
+          <Textarea
+            id="writing-sample"
+            value={sample ?? ""}
+            rows={6}
+            placeholder="Paste a few paragraphs you wrote — an email, a blog post, an old cover letter…"
+            onChange={(e) => setSample(e.target.value)}
+          />
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={saveSample}
+              disabled={!sampleDirty || settings.isPending}
+            >
+              {settings.isPending ? "Saving…" : "Save sample"}
+            </Button>
+            <Badge variant="outline">
+              {styleFresh === "none"
+                ? "no style yet"
+                : styleFresh === "stale"
+                  ? "rebuilds on the next generation"
+                  : "up to date"}
+            </Badge>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={onRebuildStyle}
+              disabled={styleFresh === "none" || rebuildStyle.isPending}
+            >
+              {rebuildStyle.isPending ? "Rebuilding…" : "Rebuild now"}
+            </Button>
+          </div>
+          {row.style_dossier && (
+            <p className="whitespace-pre-wrap rounded border bg-muted/40 p-3 text-sm">
+              {row.style_dossier}
+            </p>
+          )}
+        </div>
+      </div>
       <Separator />
 
       <div className="space-y-2">

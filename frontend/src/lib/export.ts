@@ -9,7 +9,7 @@ import {
   SECTION_TITLES,
   type CvContent,
 } from "@/lib/cv-doc";
-import { hasStub, type LetterMeta } from "@/lib/letter-doc";
+import { hasStub, stripSoftStub, type LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import { entryParts } from "@/lib/render/parts";
 
@@ -36,6 +36,7 @@ export function cvToMarkdown(
 
 /** Mirrors CoverLetter.render_markdown: sender block, recipient block, date, subject, …, name. */
 export function letterToMarkdown(meta: LetterMeta, body: string): string {
+  body = stripSoftStub(body);
   const snd = meta.sender;
   const rcp = meta.recipient;
   const out: string[] = [];
@@ -89,10 +90,7 @@ export function exportBlocker(
 ): string | null {
   if (scope === "cv" || format === "json") return null;
   if (hasStub(body)) {
-    return (
-      "The letter body still contains the personal-paragraph stub — " +
-      "replace it before exporting."
-    );
+    return "The letter could not be generated (placeholder still in the body) — regenerate before exporting.";
   }
   return null;
 }

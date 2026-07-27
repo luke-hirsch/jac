@@ -52,7 +52,7 @@ def editable_body(letter: dict) -> str:
 
 
 class CoverLetter:
-    """Build a tailored cover letter from a filtered CV, a JobPosting, and the user's snippets.
+    """Build a tailored cover letter from a filtered CV, a JobPosting and users writting dossier.
 
     `cv` must already be filtered (CV.filter_cv + CV.apply_selection applied). `address` may be
     passed explicitly (the test command builds transient instances); otherwise it is read from

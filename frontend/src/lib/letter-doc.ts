@@ -1,8 +1,10 @@
 import type { CoverLetterResult } from "@/lib/queries/generations";
 
-/** Must match backend jac/cover_letter.py PERSONAL_STUB byte for byte. */
-export const PERSONAL_STUB =
-  "⚠️⚠️ WRITE A PERSONAL PARAGRAPH YOU LAZY PIECE OF SHIT ⚠️⚠️";
+export const LETTER_STUB =
+  "⚠️⚠️ THE MODEL COULD NOT WRITE THIS LETTER — regenerate before sending ⚠️⚠️";
+
+export const COMPANY_STUB =
+  "⟨ add one line on why THIS company — omitted from exports until you do ⟩";
 
 export type LetterMeta = {
   language: string;
@@ -102,34 +104,20 @@ export function letterMetaFromResult(letter: CoverLetterResult): LetterMeta {
 /** Mirror of backend jac/cover_letter.py editable_body(): the personal paragraph
  *  (real or stub) OPENS the letter, then the body. */
 export function editableBody(letter: CoverLetterResult): string {
-  const parts = [letter.personal_paragraph, letter.body];
-  return parts.filter(Boolean).join("\n\n");
+  return letter.body;
 }
 
 export function hasStub(text: string): boolean {
-  return text.includes(PERSONAL_STUB);
+  return text.includes(LETTER_STUB);
 }
 
-/**
- * Swap every stub marker for the user's paragraph. An empty paragraph removes the stub
- * instead, collapsing the blank-line padding it sat between.
- */
-export function replaceStub(text: string, paragraph: string): string {
-  const p = paragraph.trim();
-  if (p) return text.split(PERSONAL_STUB).join(p);
+export function stripSoftStub(text: string): string {
   return text
     .split("\n\n")
-    .map((block) => block.split(PERSONAL_STUB).join("").trim())
-    .filter((block) => block !== "")
-    .join("\n\n");
-}
-
-/** Append a paragraph (e.g. a snippet's content) as its own block. */
-export function appendParagraph(text: string, paragraph: string): string {
-  const p = paragraph.trim();
-  if (!p) return text;
-  const base = text.replace(/\s+$/, "");
-  return base ? `${base}\n\n${p}` : p;
+    .filter((block) => !block.includes(COMPANY_STUB))
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** Splice `replacement` over [start, end) — how an AI-rewritten selection lands back. */

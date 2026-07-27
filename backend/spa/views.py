@@ -61,8 +61,10 @@ class PersonalityProfileView(generics.RetrieveUpdateAPIView):
 
 
 class PersonalityDossierRebuildView(APIView):
-    """POST: force-rebuild + return the dossier (preview the distilled text).
-    Optional body {provider, model}; blank = the user's default executor."""
+    """POST: force-rebuild + return a dossier (preview the distilled text).
+    Body {kind}: "style" rebuilds the writing-style dossier, anything else the
+    personality dossier. Optional {provider, model}; blank = the user's default
+    executor."""
 
     permission_classes = [IsAuthenticated]
 
@@ -78,6 +80,9 @@ class PersonalityDossierRebuildView(APIView):
                 {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
             )
         prof = PersonalityProfile.objects.get(user=request.user)
+        if request.data.get("kind") == "style":
+            prof.style_built_at = None  # force ensure_style_dossier to re-distil
+            return Response({"dossier": prof.ensure_style_dossier(executor)})
         prof.dossier_built_at = None
         return Response({"dossier": prof.ensure_dossier(executor)})
 

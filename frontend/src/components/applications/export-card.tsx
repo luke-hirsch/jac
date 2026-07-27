@@ -24,6 +24,7 @@ import {
   fillBlanks,
   normalizeLetterMeta,
   senderFromProfile,
+  stripSoftStub,
 } from "@/lib/letter-doc";
 import { useCvEntries, useFullList, type LayoutRow } from "@/lib/queries/jac";
 import { useProfile } from "@/lib/queries/profile";
@@ -117,7 +118,11 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
       scope === "cv"
         ? null
         : await pdfPages(
-            <LetterDocument spec={s} meta={meta} body={app.cover_letter} />,
+            <LetterDocument
+              spec={s}
+              meta={meta}
+              body={stripSoftStub(app.cover_letter)}
+            />,
           );
 
     // The machine-readable layer: built from the fit *result* (which is why the fit's
@@ -153,13 +158,21 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
           docMeta={docMeta}
           spec={s}
           meta={meta}
-          body={app.cover_letter}
+          body={stripSoftStub(app.cover_letter)}
           hidden={hidden}
         />
       ) : (
         <ApplicationDocument
           docMeta={docMeta}
-          cv={{ spec: s, name, content: fit!.content, db, contact, summary, hidden }}
+          cv={{
+            spec: s,
+            name,
+            content: fit!.content,
+            db,
+            contact,
+            summary,
+            hidden,
+          }}
           letter={{ spec: s, meta, body: app.cover_letter }}
         />
       );

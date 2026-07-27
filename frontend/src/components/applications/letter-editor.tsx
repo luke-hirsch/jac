@@ -1,29 +1,17 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+
 import { Textarea } from "@/components/ui/textarea";
 import {
   useRewriteParagraph,
   type RunSummary,
 } from "@/lib/queries/applications";
-import { useFullList, type ResumeSnippetRow } from "@/lib/queries/jac";
+
 import { seedDiscussion, type ChatMessage } from "@/lib/letter-chat";
-import {
-  appendParagraph,
-  hasStub,
-  replaceRange,
-  replaceStub,
-  type LetterMeta,
-} from "@/lib/letter-doc";
+import { hasStub, replaceRange, type LetterMeta } from "@/lib/letter-doc";
 import { RefineChat } from "./refine-chat";
 import { caretOffset, RewritePopover } from "./rewrite-popover";
 
@@ -78,11 +66,9 @@ export function LetterEditor({
   onBody: (b: string) => void;
   runs: RunSummary[];
 }) {
-  const snippets = useFullList<ResumeSnippetRow>("snippets");
   const rewrite = useRewriteParagraph();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [stubDraft, setStubDraft] = useState("");
-  const [snippetId, setSnippetId] = useState("");
 
   // Selection popover (Apple-Pages-style writing tools): tracked from the textarea's
   // own selection events; the range is state, not read at click time, so popover
@@ -121,13 +107,6 @@ export function LetterEditor({
   const setBlockField =
     (block: "recipient" | "sender", field: string) => (v: string) =>
       onMeta({ ...meta, [block]: { ...meta[block], [field]: v } });
-
-  function onAppendSnippet() {
-    const s = snippets.data?.find((r) => String(r.id) === snippetId);
-    if (!s) return;
-    onBody(appendParagraph(body, s.content));
-    setSnippetId("");
-  }
 
   function onRewrite(instruction: string) {
     if (!sel) return;
@@ -258,53 +237,8 @@ export function LetterEditor({
             onChange={(e) => setStubDraft(e.target.value)}
             placeholder="Why this company, in your own words…"
           />
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              disabled={!stubDraft.trim()}
-              onClick={() => {
-                onBody(replaceStub(body, stubDraft));
-                setStubDraft("");
-              }}
-            >
-              Replace stub
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onBody(replaceStub(body, ""))}
-            >
-              Remove stub
-            </Button>
-          </div>
         </div>
       )}
-
-      <div className="flex items-end gap-2">
-        <div className="space-y-1">
-          <Label className="text-xs">Append a snippet</Label>
-          <Select value={snippetId} onValueChange={setSnippetId}>
-            <SelectTrigger className="w-64">
-              <SelectValue placeholder="Pick a snippet…" />
-            </SelectTrigger>
-            <SelectContent>
-              {(snippets.data ?? []).map((s) => (
-                <SelectItem key={s.id} value={String(s.id)}>
-                  {s.kind}: {s.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!snippetId}
-          onClick={onAppendSnippet}
-        >
-          Append
-        </Button>
-      </div>
 
       <RefineChat
         applicationId={applicationId}

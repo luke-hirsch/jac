@@ -25,20 +25,20 @@ optional per-run matrix override on `GenerationRun`. This guide brings the SPA i
 
 ## Affected files
 
-| path | change |
-| --- | --- |
-| `frontend/src/lib/queries/generations.ts` | `CoverLetterResult`: drop snippet/ai_share/critique/personal_paragraph fields, add `tone`/`focus`/`sources`/`is_stub`; `GenerationForm`/`GenerationPayload`/`toPayload`: add `letter_tone`/`letter_focus`; **delete** `aiShareBadge`/`qualityBadge` |
-| `frontend/src/lib/queries/personality.ts` | `PersonalityRow`: add matrix + style fields; `TONE_OPTIONS`/`FOCUS_OPTIONS`; `styleState()`; `useUpdateLetterSettings()` |
-| `frontend/src/routes/_authenticated/account/personality.tsx` | matrix Selects + writing-sample textarea + style-dossier display |
-| `frontend/src/components/applications/generate-panel.tsx` | per-run tone/focus override; remove ai/quality badges + snippet-ranking + personal-paragraph-stub blocks |
-| `frontend/src/lib/letter-doc.ts` | `PERSONAL_STUB` → `LETTER_STUB`; add soft `COMPANY_STUB` + `stripSoftStub`; `editableBody` = just `body`; prune personal-paragraph-only helpers |
-| `frontend/src/lib/export.ts` | `exportBlocker` blocks on `LETTER_STUB` only; `stripSoftStub` the body in md + pdf export paths |
-| `frontend/src/components/applications/content-card.tsx` | stub-warning toast copy |
-| `frontend/src/components/applications/letter-editor.tsx` | delete the "Append a snippet" block + `ResumeSnippetRow` usage |
-| `frontend/src/lib/queries/jac.ts` | delete the `snippets` resource + its union membership |
-| `frontend/src/routes/_authenticated/cv.tsx`, `cv/index.tsx` | delete the Snippets nav link + resource card |
-| `frontend/src/routes/_authenticated/cv/snippets.tsx`, `frontend/src/lib/snippet-form.ts` | **delete** the files |
-| `frontend/src/components/cv/{job,project}-picker.tsx` | delete **only if** orphaned once the snippet form is gone (grep first) |
+| path                                                                                     | change                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frontend/src/lib/queries/generations.ts`                                                | `CoverLetterResult`: drop snippet/ai_share/critique/personal_paragraph fields, add `tone`/`focus`/`sources`/`is_stub`; `GenerationForm`/`GenerationPayload`/`toPayload`: add `letter_tone`/`letter_focus`; **delete** `aiShareBadge`/`qualityBadge` |
+| `frontend/src/lib/queries/personality.ts`                                                | `PersonalityRow`: add matrix + style fields; `TONE_OPTIONS`/`FOCUS_OPTIONS`; `styleState()`; `useUpdateLetterSettings()`                                                                                                                            |
+| `frontend/src/routes/_authenticated/account/personality.tsx`                             | matrix Selects + writing-sample textarea + style-dossier display                                                                                                                                                                                    |
+| `frontend/src/components/applications/generate-panel.tsx`                                | per-run tone/focus override; remove ai/quality badges + snippet-ranking + personal-paragraph-stub blocks                                                                                                                                            |
+| `frontend/src/lib/letter-doc.ts`                                                         | `PERSONAL_STUB` → `LETTER_STUB`; add soft `COMPANY_STUB` + `stripSoftStub`; `editableBody` = just `body`; prune personal-paragraph-only helpers                                                                                                     |
+| `frontend/src/lib/export.ts`                                                             | `exportBlocker` blocks on `LETTER_STUB` only; `stripSoftStub` the body in md + pdf export paths                                                                                                                                                     |
+| `frontend/src/components/applications/content-card.tsx`                                  | stub-warning toast copy                                                                                                                                                                                                                             |
+| `frontend/src/components/applications/letter-editor.tsx`                                 | delete the "Append a snippet" block + `ResumeSnippetRow` usage                                                                                                                                                                                      |
+| `frontend/src/lib/queries/jac.ts`                                                        | delete the `snippets` resource + its union membership                                                                                                                                                                                               |
+| `frontend/src/routes/_authenticated/cv.tsx`, `cv/index.tsx`                              | delete the Snippets nav link + resource card                                                                                                                                                                                                        |
+| `frontend/src/routes/_authenticated/cv/snippets.tsx`, `frontend/src/lib/snippet-form.ts` | **delete** the files                                                                                                                                                                                                                                |
+| `frontend/src/components/cv/{job,project}-picker.tsx`                                    | delete **only if** orphaned once the snippet form is gone (grep first)                                                                                                                                                                              |
 
 ---
 
@@ -214,13 +214,18 @@ a dirty-tracked local draft + Save (mirroring the answers pattern):
 ```tsx
 const settings = useUpdateLetterSettings();
 const [sample, setSample] = useState<string | null>(null);
-if (personality.data && sample === null) setSample(personality.data.writing_sample);
+if (personality.data && sample === null)
+  setSample(personality.data.writing_sample);
 // ... existing loading guard covers sample === null too ...
 
 const styleFresh = styleState(row);
-const sampleDirty = sample !== null && sample.trim() !== row.writing_sample.trim();
+const sampleDirty =
+  sample !== null && sample.trim() !== row.writing_sample.trim();
 
-function saveMatrix(patch: { letter_tone?: LetterTone; letter_focus?: LetterFocus }) {
+function saveMatrix(patch: {
+  letter_tone?: LetterTone;
+  letter_focus?: LetterFocus;
+}) {
   settings.mutate(patch, {
     onError: () => toast.error("Could not save the letter setting"),
   });
@@ -342,7 +347,9 @@ letter_focus: focusOverride,
 ```
 
 ```tsx
-{/* Letter voice (optional per-application override of the account default) */}
+{
+  /* Letter voice (optional per-application override of the account default) */
+}
 <div className="grid grid-cols-2 gap-2">
   <Select
     value={toneOverride || (personalityRow?.letter_tone ?? "neutral")}
@@ -353,7 +360,9 @@ letter_focus: focusOverride,
     </SelectTrigger>
     <SelectContent>
       {TONE_OPTIONS.map((o) => (
-        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+        <SelectItem key={o.value} value={o.value}>
+          {o.label}
+        </SelectItem>
       ))}
     </SelectContent>
   </Select>
@@ -366,11 +375,13 @@ letter_focus: focusOverride,
     </SelectTrigger>
     <SelectContent>
       {FOCUS_OPTIONS.map((o) => (
-        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+        <SelectItem key={o.value} value={o.value}>
+          {o.label}
+        </SelectItem>
       ))}
     </SelectContent>
   </Select>
-</div>
+</div>;
 ```
 
 (Selecting a value stamps the override; leaving it stamps `""` so the server uses the profile
@@ -425,9 +436,9 @@ letter-editor snippet block removed in step 8 (`rg -n "appendParagraph|replaceSt
 never blocks — it is stripped instead:
 
 ```ts
-  if (hasStub(body)) {
-    return "The letter could not be generated (placeholder still in the body) — regenerate before exporting.";
-  }
+if (hasStub(body)) {
+  return "The letter could not be generated (placeholder still in the body) — regenerate before exporting.";
+}
 ```
 
 **Strip the soft stub in the sendable export paths.** In `letterToMarkdown`, strip first so md never
@@ -449,9 +460,9 @@ JSON export may keep it (a raw data dump, not a sendable artefact). The **editor
 save — it just won't export):
 
 ```tsx
-      toast.warning(
-        "The letter is a placeholder — regenerate it before marking the application sent.",
-      );
+toast.warning(
+  "The letter is a placeholder — regenerate it before marking the application sent.",
+);
 ```
 
 ### 7–9. Snippet removal (checklist)
@@ -519,3 +530,5 @@ the grounding badge + the letter — no ai_share, no personal-paragraph stub chr
 ## Results
 
 <!-- Human fills this in after testing: raw test output, observed issues, what works. -->
+
+"rebuild now" button for writing sample dossier is missing.

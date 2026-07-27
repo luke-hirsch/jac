@@ -25,13 +25,6 @@ export type Grounding = {
   repaired?: boolean;
 };
 
-export type Critique = {
-  count: number | null;
-  claims: string[];
-  /** Standard+ only: a quality repair replaced the body (true) or the rewrite failed (false). */
-  repaired?: boolean;
-};
-
 export type CoverLetterResult = {
   language: string;
   subject: string;
@@ -41,18 +34,13 @@ export type CoverLetterResult = {
   recipient: Record<string, string>;
   date: string;
   closing: string;
-  snippets_used: string[];
-  snippet_provenance: { native: string[]; translated: string[] };
-  ai_share: number;
+  tone: string;
+  focus: string;
   grounding: Grounding;
-  /** Prose-quality critique (standard+strong): advisory, feeds the repair pass. */
-  critique?: Critique;
-  /** How the snippets were picked: embedding cosine vs the structural fallback. */
-  snippet_ranking?: "embedding" | "structural";
-  personal_paragraph: string;
-  personal_paragraph_is_stub: boolean;
-  personal_paragraph_sources: string[];
-  personal_paragraph_grounding: Grounding;
+  /** Company-research source URLs (commercial web-search runs); [] otherwise. */
+  sources: string[];
+  /** The writer produced nothing — body is LETTER_STUB, must be regenerated. */
+  is_stub: boolean;
   text: string;
 };
 
@@ -82,6 +70,8 @@ export type GenerationForm = {
   provider: string; // "" = the user's default executor
   model: string; // "" = catalog default
   params?: GenerationParams;
+  letter_tone?: string; // "" = the profile default
+  letter_focus?: string;
 };
 
 export type GenerationPayload = {
@@ -90,6 +80,8 @@ export type GenerationPayload = {
   provider?: string;
   model?: string;
   params?: GenerationParams;
+  letter_tone?: string;
+  letter_focus?: string;
 };
 export type GenerationParams = Record<string, string | number>;
 
@@ -147,9 +139,9 @@ export function toPayload(f: GenerationForm): GenerationPayload {
   if (f.mode) p.mode = f.mode;
   if (f.provider) p.provider = f.provider;
   if (f.model) p.model = f.model;
-  // params is optional (the auto-run path and no-knob picks omit it) — guard
-  // before Object.keys, and only send a non-empty object.
   if (f.params && Object.keys(f.params).length) p.params = f.params;
+  if (f.letter_tone) p.letter_tone = f.letter_tone;
+  if (f.letter_focus) p.letter_focus = f.letter_focus;
   return p;
 }
 
@@ -206,11 +198,6 @@ export function knobParams(input: {
 
 export type Badge = { tone: "green" | "amber" | "muted"; label: string };
 
-export function aiShareBadge(share: number): Badge {
-  const pct = Math.round(share * 100);
-  return { tone: pct <= 25 ? "green" : "amber", label: `${pct}% AI` };
-}
-
 export function groundingBadge(g: Grounding): Badge {
   if (g.count === null) return { tone: "muted", label: "not checked" };
   const suffix = g.repaired ? " · repaired" : "";
@@ -218,17 +205,5 @@ export function groundingBadge(g: Grounding): Badge {
   return {
     tone: "amber",
     label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
-  };
-}
-
-export function qualityBadge(c: Critique | undefined): Badge | null {
-  // TODO: when the critic didn't run (light grade, old runs, critic down)
-  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
-  if (!c || c.count === null) return null;
-  const suffix = c.repaired ? " · repaired" : "";
-  if (c.count === 0) return { tone: "green", label: "quality ok" };
-  return {
-    tone: "amber",
-    label: `${c.count} issue${c.count === 1 ? "" : "s"}${suffix}`,
   };
 }
