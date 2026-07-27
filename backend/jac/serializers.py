@@ -11,9 +11,9 @@ from rest_framework.validators import UniqueTogetherValidator
 from spa.models import PersonalityProfile
 
 from jac.models import (
-    ApplicationAttachment,
     ApplicationLayout,
     Certification,
+    CvAttachment,
     Domain,
     Education,
     GenerationRun,
@@ -603,6 +603,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "cover_letter",
             "letter_meta",
             "pinned_entries",
+            "attachments",
             "layout",
             "status",
             "deadline",
@@ -685,6 +686,23 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
                 )
         return list(dict.fromkeys(value))
 
+    def validate_attachments(self, value):
+        """Ordered list of the user's own CvAttachment ids (dedup, ownership-checked). Stale
+        ids (attachment deleted later) are tolerated at merge time, garbage isn't at write."""
+        if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+            raise serializers.ValidationError("Expected a list of attachment ids.")
+        deduped = list(dict.fromkeys(value))
+        user = self.context["request"].user
+        owned = set(
+            CvAttachment.objects.filter(user=user, pk__in=deduped).values_list(
+                "pk", flat=True
+            )
+        )
+        missing = [pk for pk in deduped if pk not in owned]
+        if missing:
+            raise serializers.ValidationError(f"Not found or not yours: {missing}")
+        return deduped
+
     def create(self, validated_data):
         text = validated_data.pop("posting_text", "").strip()
         if text:
@@ -694,18 +712,28 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
         return super().create(validated_data)
 
 
-class ApplicationAttachmentSerializer(
-    ScopeRelatedToUserMixin, serializers.ModelSerializer
-):
-    """Owner-scoped attachment upload. `application` is validated to be the requester's (mixin);
-    `file` must be a PDF under the size cap."""
+class CvAttachmentSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
+    """Owner-scoped, reusable attachment. `file` must be a PDF under the size cap. The optional
+    link (`job`/`education`/`certification`) is scoped to the requester's own entries (mixin) and
+    at most one may be set. `user` is bound from the request, never client-supplied."""
 
-    user_scoped_fields = ("application",)
+    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    user_scoped_fields = ("job", "education", "certification")
+    _LINK_FIELDS = ("job", "education", "certification")
     _MAX_BYTES = 10 * 1024 * 1024
 
     class Meta:
-        model = ApplicationAttachment
-        fields = ["id", "application", "file", "label", "position", "created_at"]
+        model = CvAttachment
+        fields = [
+            "id",
+            "file",
+            "label",
+            "job",
+            "education",
+            "certification",
+            "created_at",
+            "user",
+        ]
         read_only_fields = ["id", "created_at"]
 
     def validate_file(self, f):
@@ -716,3 +744,19 @@ class ApplicationAttachmentSerializer(
         if head[:5] != b"%PDF-":
             raise serializers.ValidationError("Only PDF attachments are supported.")
         return f
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # At most one entry link. On PATCH, fall back to the stored value for fields not sent.
+        set_links = [
+            name
+            for name in self._LINK_FIELDS
+            if (attrs.get(name) if name in attrs else getattr(self.instance, name, None))
+            is not None
+        ]
+        if len(set_links) > 1:
+            raise serializers.ValidationError(
+                "An attachment can link to at most one entry "
+                f"(got {', '.join(set_links)})."
+            )
+        return attrs

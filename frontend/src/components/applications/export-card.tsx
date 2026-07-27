@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { type ApplicationRow } from "@/lib/queries/applications";
+import { useAttachments } from "@/lib/queries/attachments";
+import { mergePdfs } from "@/lib/render/attachments";
 import { activeContent } from "@/lib/cv-doc";
 import {
   contactLine,
@@ -63,6 +65,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   const spec = useLayoutSpec(layout);
   const careerDb = useCvEntries();
   const profile = useProfile();
+  const attachments = useAttachments(app.id);
   const [scope, setScope] = useState<ExportScope>("complete");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{
@@ -81,6 +84,8 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     : stored;
   const name = meta.sender.name || "CV";
   const stem = `application-${app.id}-${scope}`;
+  // Per-user uploaded signature image, rendered in the letter closing when present.
+  const signatureUrl = profile.data?.signature || undefined;
 
   async function buildPdf(): Promise<BuiltPdf> {
     if (!spec.data) throw new Error("layout spec not loaded");
@@ -159,6 +164,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
           spec={s}
           meta={meta}
           body={stripSoftStub(app.cover_letter)}
+          signatureUrl={signatureUrl}
           hidden={hidden}
         />
       ) : (
@@ -173,10 +179,20 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             summary,
             hidden,
           }}
-          letter={{ spec: s, meta, body: app.cover_letter }}
+          letter={{ spec: s, meta, body: app.cover_letter, signatureUrl }}
         />
       );
     return { blob: await renderPdfBlob(doc), fit, letterPages };
+  }
+
+  // Client-side pdf-lib merge: append the attachment PDFs (in position order) to a rendered
+  // blob. Skipped for a letter-only export — attachments follow the CV, not the letter.
+  async function withAttachments(blob: Blob): Promise<Blob> {
+    const urls = (attachments.data ?? [])
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map((a) => a.file);
+    return urls.length && scope !== "letter" ? mergePdfs(blob, urls) : blob;
   }
 
   async function withBusy<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -201,7 +217,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     if (blockedBy("pdf")) return;
     void withBusy(async () => {
       const built = await buildPdf();
-      downloadBlob(built.blob, `${stem}.pdf`);
+      downloadBlob(await withAttachments(built.blob), `${stem}.pdf`);
       notify(built);
     });
   }
@@ -210,7 +226,8 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     if (blockedBy("pdf")) return;
     void withBusy(async () => {
       const built = await buildPdf();
-      setPreview({ url: URL.createObjectURL(built.blob), info: built });
+      const blob = await withAttachments(built.blob);
+      setPreview({ url: URL.createObjectURL(blob), info: built });
     });
   }
 

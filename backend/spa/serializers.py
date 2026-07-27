@@ -53,6 +53,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "updated_at",
             "street",
             "address_line2",
+            "signature",
             "zip",
             "city",
             "country",

@@ -16,6 +16,7 @@ export type ProfileRow = {
   linkedin_url: string;
   github_url: string;
   show_socials: boolean;
+  signature: string; // media URL of the uploaded signature image ("" when unset)
   street: string;
   address_line2: string;
   zip: string;

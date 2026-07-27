@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, csrfHeaders } from "@/lib/api";
 import {
   drfFieldError,
   shouldSend,
@@ -44,6 +44,7 @@ type Profile = {
   contrast: "normal" | "high";
   email_reminders: boolean;
   show_socials: boolean;
+  signature: string; // media URL of the uploaded signature image ("" when unset)
 };
 
 const schema = z.object({
@@ -100,6 +101,7 @@ function ProfilePage() {
   return (
     <ProfileForm
       username={p.username}
+      signatureUrl={p.signature}
       initial={{
         first_name: p.first_name,
         last_name: p.last_name,
@@ -134,12 +136,14 @@ function ProfilePage() {
 
 function ProfileForm({
   username,
+  signatureUrl,
   initial,
   onSubmit,
   onPatch,
   busy,
 }: {
   username: string;
+  signatureUrl: string;
   initial: ProfileSchema;
   onSubmit: (v: ProfileSchema) => Promise<unknown>;
   onPatch: (body: Partial<ProfileSchema>) => Promise<unknown>;
@@ -254,6 +258,7 @@ function ProfileForm({
         </div>
         {text("country", "Country")}
       </div>
+      <SignatureField initialUrl={signatureUrl} />
       {text("timezone", "Timezone")}
       <form.Field name="theme">
         {(field) => (
@@ -342,5 +347,81 @@ function ProfileForm({
         Save
       </Button>
     </form>
+  );
+}
+
+/**
+ * Signature image upload — the one multipart field on the profile (everything else PATCHes
+ * as JSON). Uploads straight to `/api/spa/profile/` as `multipart/form-data`, then writes the
+ * fresh profile into the shared `["profile"]` cache so the export card picks up the new URL.
+ */
+function SignatureField({ initialUrl }: { initialUrl: string }) {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [url, setUrl] = useState(initialUrl);
+
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("signature", file);
+      const res = await fetch("/api/spa/profile/", {
+        method: "PATCH",
+        headers: csrfHeaders(), // NOT Content-Type — the browser sets the multipart boundary
+        credentials: "same-origin",
+        body: fd,
+      });
+      if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+      return (await res.json()) as Profile;
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(["profile"], data);
+      setUrl(data.signature);
+      if (fileRef.current) fileRef.current.value = "";
+      toast.success("Signature saved");
+    },
+    onError: () => toast.error("Signature upload failed"),
+  });
+
+  function onUpload() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Image files only — a transparent-background PNG works best.");
+      return;
+    }
+    upload.mutate(file);
+  }
+
+  return (
+    <div className="space-y-1">
+      <Label>Signature</Label>
+      <p className="text-xs text-muted-foreground">
+        A PNG (transparent background) shown above your name in the cover-letter
+        closing. Optional — the letter just omits it when unset.
+      </p>
+      {url ? (
+        <img
+          src={url}
+          alt="Your signature"
+          className="h-16 max-w-[240px] object-contain"
+        />
+      ) : null}
+      <div className="flex items-center gap-2">
+        <Input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="w-56"
+        />
+        <Button
+          type="button"
+          size="sm"
+          onClick={onUpload}
+          disabled={upload.isPending}
+        >
+          {upload.isPending ? "Uploading…" : "Upload"}
+        </Button>
+      </div>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ApplicationContentCard } from "@/components/applications/content-card";
+import { AttachmentsCard } from "@/components/applications/attachments-card";
 import { ExportCard } from "@/components/applications/export-card";
 import { GeneratePanel } from "@/components/applications/generate-panel";
 import { PostingCard } from "@/components/applications/posting-card";
@@ -77,6 +78,7 @@ function ApplicationDetailPage() {
         </div>
         <div className="space-y-6">
           <ApplicationContentCard app={app.data} fresh={highlight.fresh} />
+          <AttachmentsCard app={app.data} />
           <ExportCard app={app.data} />
         </div>
       </div>

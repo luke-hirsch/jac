@@ -26,7 +26,8 @@ export function cvToMarkdown(
     for (const e of entries) {
       const p = entryParts(db, section, e);
       lines.push(`### ${p.favourite ? "★ " : ""}${p.heading}`);
-      if (p.meta) lines.push(p.meta);
+      const metaLine = [p.date, p.meta].filter(Boolean).join(" · ");
+      if (metaLine) lines.push(metaLine);
       if (p.body) lines.push(p.body);
       lines.push("");
     }

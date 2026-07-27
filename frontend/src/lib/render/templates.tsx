@@ -11,6 +11,7 @@
  */
 import {
   Document,
+  Image,
   Page,
   StyleSheet,
   Text,
@@ -23,7 +24,7 @@ import { SECTION_TITLES, type CvContent, type SectionKey } from "@/lib/cv-doc";
 import type { LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import { countPdfPages } from "./fit";
-import { entryParts } from "./parts";
+import { entryParts, skillGroups } from "./parts";
 import type { LayoutSpec } from "./spec";
 
 import type { DocMeta } from "./hidden";
@@ -87,35 +88,54 @@ export function cvStyles(spec: LayoutSpec) {
       fontSize: base,
       color: spec.colors.text,
     },
-    // 0.4 × base under the name — a full line's gap made the header feel
-    // disconnected from the bio (density Results follow-up).
     name: {
       fontSize: base * 2,
       marginBottom: base * 0.4,
       color: spec.colors.accent,
     },
+    subtitle: {
+      fontSize: base * 1.1,
+      color: spec.colors.muted,
+      marginBottom: base * 0.4,
+    },
     contact: {
       color: spec.colors.muted,
       fontSize: base * 0.9,
-      marginBottom: base,
+      marginBottom: base * 0.4,
     },
     summary: { marginBottom: base * 0.4, lineHeight: 1.4 },
+    // The moderncv accent line under the header block.
+    headerRule: {
+      borderBottomWidth: 1.5,
+      borderBottomColor: spec.colors.accent,
+      marginTop: base * 0.3,
+      marginBottom: base * 0.4,
+    },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
       marginTop: base * 1.4,
       marginBottom: base * 0.4,
+      borderBottomWidth: 0.5,
+      borderBottomColor: spec.colors.accent,
+      paddingBottom: base * 0.15,
     },
-    entry: { marginBottom: base / 3 },
+    // Two-column entry: fixed date/label column + flexible content column.
+    row: { flexDirection: "row", marginBottom: base / 3 },
+    hints: {
+      width: mm(22),
+      color: spec.colors.muted,
+      fontSize: small,
+      paddingRight: base * 0.5,
+    },
+    content: { flex: 1 },
+    entry: { marginBottom: base / 3 }, // kept — density decision
     heading: { fontFamily: `${spec.font.family}-Bold` },
     meta: { color: spec.colors.muted, fontSize: small },
     body: { marginTop: base * 0.15 },
-    // Sidebar sections as one joined line per section — smaller still, so skills and
-    // languages carry more information per line.
     compact: { fontSize: small, marginBottom: base / 3 },
   });
 }
-
 function CvSectionView({
   section,
   content,
@@ -131,43 +151,57 @@ function CvSectionView({
 }) {
   const entries = content[section] ?? [];
   if (entries.length === 0) return null;
+
   if (compact) {
-    // One joined paragraph: "Python (expert · technical), German (native), …" —
-    // compact on paper, and a linear text run for machine parsers.
-    const line = entries
-      .map((e) => {
-        const p = entryParts(db, section, e);
-        const head = `${p.favourite ? "★ " : ""}${p.heading}`;
-        return p.meta ? `${head} (${p.meta})` : head;
-      })
-      .join(", ");
+    const rows =
+      section === "skills"
+        ? skillGroups(db, entries)
+        : [
+            {
+              label: "",
+              names: entries
+                .map((e) => {
+                  const p = entryParts(db, section, e);
+                  return p.meta ? `${p.heading} (${p.meta})` : p.heading;
+                })
+                .join(", "),
+            },
+          ];
     return (
       <View>
         <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
-        <Text style={styles.compact}>{line}</Text>
+        {rows.map((r, i) => (
+          <View key={r.label || i} style={styles.row}>
+            {r.label ? <Text style={styles.hints}>{r.label}</Text> : null}
+            <Text style={[styles.content, styles.compact]}>{r.names}</Text>
+          </View>
+        ))}
       </View>
     );
   }
+
   return (
     <View>
       <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
       {entries.map((e) => {
         const p = entryParts(db, section, e);
         return (
-          <View key={e.id} style={styles.entry} wrap={false}>
-            <Text style={styles.heading}>
-              {p.favourite ? "★ " : ""}
-              {p.heading}
-            </Text>
-            {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
-            {p.body ? <Text style={styles.body}>{p.body}</Text> : null}
+          <View key={e.id} style={styles.row} wrap={false}>
+            <Text style={styles.hints}>{p.date}</Text>
+            <View style={styles.content}>
+              <Text style={styles.heading}>
+                {p.favourite ? "★ " : ""}
+                {p.heading}
+              </Text>
+              {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
+              {p.body ? <Text style={styles.body}>{p.body}</Text> : null}
+            </View>
           </View>
         );
       })}
     </View>
   );
 }
-
 export function CvPages({
   spec,
   name,
@@ -175,6 +209,7 @@ export function CvPages({
   db,
   contact,
   summary,
+  subtitle,
   hidden,
 }: {
   spec: LayoutSpec;
@@ -183,15 +218,17 @@ export function CvPages({
   db: CvEntriesResponse | undefined;
   contact?: string;
   summary?: string;
+  subtitle?: string;
   hidden?: string;
 }) {
   const styles = cvStyles(spec);
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
-      {/* Header order: name → bio → contact (Lukas's call, 2026-07-11). */}
       <Text style={styles.name}>{name}</Text>
+      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {contact ? <Text style={styles.contact}>{contact}</Text> : null}
+      <View style={styles.headerRule} />
       {spec.cv.sections.map((s) => (
         <CvSectionView
           key={s}
@@ -215,7 +252,6 @@ export function CvPages({
     </Page>
   );
 }
-
 /* ---------- letter (DIN 5008-ish) ---------- */
 
 function letterStyles(spec: LayoutSpec) {
@@ -251,6 +287,11 @@ function letterStyles(spec: LayoutSpec) {
     },
     subject: { fontFamily: `${spec.font.family}-Bold`, marginBottom: base },
     para: { marginBottom: base },
+    signatureImg: {
+      width: mm(40),
+      marginTop: base * 0.5,
+      marginBottom: base * 0.2,
+    },
     signature: { marginTop: base * 2 },
     footer: {
       position: "absolute",
@@ -268,11 +309,13 @@ export function LetterPage({
   spec,
   meta,
   body,
+  signatureUrl,
   hidden,
 }: {
   spec: LayoutSpec;
   meta: LetterMeta;
   body: string;
+  signatureUrl?: string;
   hidden?: string;
 }) {
   const styles = letterStyles(spec);
@@ -320,6 +363,9 @@ export function LetterPage({
         </Text>
       ))}
       <Text style={styles.para}>{meta.closing}</Text>
+      {signatureUrl ? (
+        <Image src={signatureUrl} style={styles.signatureImg} />
+      ) : null}
       <Text style={styles.signature}>{snd.name}</Text>
       {contactLine ? (
         <Text style={styles.footer} fixed>

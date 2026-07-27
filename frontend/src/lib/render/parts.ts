@@ -23,11 +23,11 @@ import type {
 
 export type EntryParts = {
   heading: string;
-  meta: string;
+  date: string; // the moderncv left-column date/period; "" for skills/languages
+  meta: string; // secondary line: skills, grade, url — NO date
   body: string;
   favourite: boolean;
 };
-
 export function skillNames(
   db: CvEntriesResponse | undefined,
   ids: number[],
@@ -39,6 +39,29 @@ export function skillNames(
     .join(", ");
 }
 
+export function skillGroups(
+  db: CvEntriesResponse | undefined,
+  entries: CvEntry[],
+): { label: string; names: string }[] {
+  const groups: Record<string, string[]> = {};
+  for (const e of entries) {
+    const row = db ? (joinEntry(db, "skills", e) as SkillRow | null) : null;
+    const cat = row?.category ?? "other";
+    (groups[cat] ??= []).push(row?.name ?? e.label);
+  }
+  return SKILL_CATEGORY_ORDER.filter((c) => groups[c]?.length).map((c) => ({
+    label: SKILL_CATEGORY_LABELS[c] ?? c,
+    names: groups[c].join(", "),
+  }));
+}
+const SKILL_CATEGORY_LABELS: Record<string, string> = {
+  technical: "Technical",
+  soft: "Soft",
+  domain: "Domain",
+  other: "Other",
+};
+const SKILL_CATEGORY_ORDER = ["technical", "soft", "domain", "other"];
+
 export function entryParts(
   db: CvEntriesResponse | undefined,
   section: SectionKey,
@@ -46,16 +69,21 @@ export function entryParts(
 ): EntryParts {
   const row = db ? joinEntry(db, section, entry) : null;
   if (!row)
-    return { heading: entry.label, meta: "", body: "", favourite: false };
+    return {
+      heading: entry.label,
+      date: "",
+      meta: "",
+      body: "",
+      favourite: false,
+    };
   const favourite = "favourite" in row ? Boolean(row.favourite) : false;
   switch (section) {
     case "jobs": {
       const j = row as JobRow;
       return {
         heading: `${j.title} — ${j.company}`,
-        meta: [dateRange(j.started, j.ended), skillNames(db, j.skills)]
-          .filter(Boolean)
-          .join(" · "),
+        date: dateRange(j.started, j.ended),
+        meta: skillNames(db, j.skills),
         body: j.description,
         favourite,
       };
@@ -65,12 +93,8 @@ export function entryParts(
       const head = `${e.degree ?? ""} ${e.field_of_study ?? ""}`.trim();
       return {
         heading: head ? `${head} @ ${e.institution}` : e.institution,
-        meta: [
-          dateRange(e.started, e.ended),
-          e.grade ? `Grade: ${e.grade}` : "",
-        ]
-          .filter(Boolean)
-          .join(" · "),
+        date: dateRange(e.started, e.ended),
+        meta: e.grade ? `Grade: ${e.grade}` : "",
         body: e.description,
         favourite,
       };
@@ -79,9 +103,8 @@ export function entryParts(
       const p = row as ProjectRow;
       return {
         heading: p.name,
-        meta: [dateRange(p.started, p.ended), skillNames(db, p.skills), p.url]
-          .filter(Boolean)
-          .join(" · "),
+        date: dateRange(p.started, p.ended),
+        meta: [skillNames(db, p.skills), p.url].filter(Boolean).join(" · "),
         body: p.description,
         favourite,
       };
@@ -90,6 +113,7 @@ export function entryParts(
       const s = row as SkillRow;
       return {
         heading: s.name,
+        date: "",
         meta: `${s.proficiency} · ${s.category}`,
         body: "",
         favourite,
@@ -99,14 +123,21 @@ export function entryParts(
       const c = row as CertificationRow;
       return {
         heading: `${c.name} — ${c.issuer}`,
-        meta: c.issued_on ? `Issued: ${c.issued_on}` : "",
+        date: c.issued_on ?? "",
+        meta: "",
         body: c.description,
         favourite,
       };
     }
     case "languages": {
       const l = row as LanguageRow;
-      return { heading: l.name, meta: l.fluency, body: "", favourite };
+      return {
+        heading: l.name,
+        date: "",
+        meta: l.fluency,
+        body: "",
+        favourite,
+      };
     }
   }
 }

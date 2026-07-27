@@ -488,6 +488,9 @@ class JobApplication(models.Model):
     cover_letter = models.TextField(blank=True)
     letter_meta = models.JSONField(default=dict, blank=True)
     pinned_entries = models.JSONField(default=list, blank=True)
+    # Ordered list of CvAttachment ids to append to this application's export (the user's
+    # per-application pick from their reusable attachment library). Ownership validated on write.
+    attachments = models.JSONField(default=list, blank=True)
     layout = models.ForeignKey(
         ApplicationLayout,
         on_delete=models.SET_DEFAULT,
@@ -655,20 +658,42 @@ class GenerationRun(models.Model):
         return self.job_application.posting
 
 
-class ApplicationAttachment(models.Model):
-    """A PDF appended to the exported application (cert, transcript, reference letter). Merged in
-    `position` order client-side (pdf-lib) at export time. Validated as a PDF on upload."""
+class CvAttachment(models.Model):
+    """A user-owned PDF kept in the career DB and reused across applications (diploma,
+    transcript, Arbeitszeugnis / reference letter, certificate, portfolio).
 
-    application = models.ForeignKey(
-        JobApplication, on_delete=models.CASCADE, related_name="attachments"
+    Optionally linked to exactly one career entry (job / education / certification) so it
+    travels with that entry's story — standalone when no link is set. Applications reference
+    the attachments they want by id in `JobApplication.attachments` (ordered); the export
+    merges them client-side (pdf-lib). `SET_NULL` on the links keeps a file alive as a
+    standalone attachment when its entry is deleted."""
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="cv_attachments"
     )
-    file = models.FileField(upload_to="application_attachments")
+    file = models.FileField(upload_to="cv_attachments")
     label = models.CharField(max_length=120, blank=True)
-    position = models.PositiveIntegerField(default=0)
+    job = models.ForeignKey(
+        Job, null=True, blank=True, on_delete=models.SET_NULL, related_name="attachments"
+    )
+    education = models.ForeignKey(
+        Education,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="attachments",
+    )
+    certification = models.ForeignKey(
+        Certification,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="attachments",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["position", "id"]
+        ordering = ["id"]
 
     def __str__(self) -> str:
         return self.label or f"attachment {self.pk}"

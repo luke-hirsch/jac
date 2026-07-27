@@ -39,9 +39,9 @@ from rest_framework.views import APIView
 from jac.cv import CV
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
-    ApplicationAttachment,
     ApplicationLayout,
     Certification,
+    CvAttachment,
     Domain,
     Education,
     GenerationRun,
@@ -55,9 +55,9 @@ from jac.models import (
     TransitionError,
 )
 from jac.serializers import (
-    ApplicationAttachmentSerializer,
     ApplicationLayoutSerializer,
     CertificationSerializer,
+    CvAttachmentSerializer,
     CvSerializer,
     DomainSerializer,
     EducationSerializer,
@@ -654,17 +654,16 @@ class GenerationRunViewSet(
         return Response(GenerationRunSerializer(run).data)
 
 
-class ApplicationAttachmentViewSet(viewsets.ModelViewSet):
-    """User's application attachments. Owner-scoped through the parent application; list is
-    filterable by `?application=<pk>`."""
+class CvAttachmentViewSet(viewsets.ModelViewSet):
+    """The user's reusable attachment library. Owner-scoped; filterable by entry link
+    (`?job=<pk>` / `?education=<pk>` / `?certification=<pk>`) so an entry form can list its
+    own files. Multipart for the file upload."""
 
-    serializer_class = ApplicationAttachmentSerializer
+    serializer_class = CvAttachmentSerializer
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
-    filterset_fields = ["application"]
-    ordering_fields = ["position", "created_at"]
+    filterset_fields = ["job", "education", "certification"]
+    ordering_fields = ["created_at", "label"]
 
     def get_queryset(self):
-        return ApplicationAttachment.objects.filter(
-            application__user=self.request.user
-        ).order_by("position", "id")
+        return CvAttachment.objects.filter(user=self.request.user).order_by("id")

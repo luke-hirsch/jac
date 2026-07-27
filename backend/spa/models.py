@@ -48,6 +48,7 @@ class UserProfile(models.Model):
     display_name = models.CharField(max_length=100, blank=True)
     avatar = models.ImageField(upload_to=_avatar_path, blank=True)
     bio = models.TextField(max_length=500, blank=True)
+    signature = models.ImageField(upload_to="signatures", blank=True)
 
     # Professional contact — also used to pre-fill job applications in JAC
     phone = models.CharField(max_length=30, blank=True)
