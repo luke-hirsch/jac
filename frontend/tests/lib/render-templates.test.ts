@@ -3,7 +3,8 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import type { CvContent } from "@/lib/cv-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import { FALLBACK_SPEC, type LayoutSpec } from "@/lib/render/spec";
-import { CvDocument, cvStyles } from "@/lib/render/templates";
+import { CvDocument, cvStyles, pdfPages } from "@/lib/render/templates";
+import { qrDataUrl } from "@/lib/portfolio/qr";
 import { flat, pdfTextRuns } from "./_pdf-text";
 
 /**
@@ -109,4 +110,44 @@ describe("CV header order", () => {
     expect(bio).toBeGreaterThan(name);
     expect(contact).toBeGreaterThan(bio);
   });
+});
+
+describe("portfolio QR ([fullstack]-portfolio-cv-qr)", () => {
+  const db = {
+    skills: [],
+    jobs: [],
+    educations: [],
+    certifications: [],
+    projects: [],
+    languages: [],
+  } as unknown as CvEntriesResponse;
+  const content: CvContent = {};
+  const url = "https://lukehirsch.com/portfolio/acme-x7f3";
+
+  const base = () =>
+    ({
+      spec: spec9,
+      name: "Ada Lovelace",
+      content,
+      db,
+      contact: `ada@example.com · ${url}`,
+      summary: "Bio.",
+    }) as Parameters<typeof CvDocument>[0];
+
+  // NOTE: the text-layer belt (the URL rides in the contact line) is asserted at the
+  // unit level in letter-doc.test.ts — pdfTextRuns can't cleanly extract page text once
+  // an image XObject (the QR) shares the stream pool, so it's not re-asserted here.
+
+  it("renders a CvDocument carrying the QR without throwing", async () => {
+    const qr = await qrDataUrl(url);
+    const buf = await renderToBuffer(CvDocument({ ...base(), portfolio: { qr } }));
+    expect(buf.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("is layout-invariant: page count matches with and without the QR block", async () => {
+    const qr = await qrDataUrl(url);
+    const without = await pdfPages(CvDocument(base()));
+    const withQr = await pdfPages(CvDocument({ ...base(), portfolio: { qr } }));
+    expect(withQr).toBe(without);
+  }, 30_000);
 });

@@ -82,10 +82,12 @@ export function senderFromProfile(p: {
 
 export function contactLine(
   sender: Record<string, string>,
-  opts: { socials: boolean },
+  opts: { socials: boolean; portfolioUrl?: string },
 ): string {
   const parts = [sender.email, sender.phone];
   if (opts.socials) parts.push(sender.website, sender.linkedin, sender.github);
+  // Text-layer belt for the QR: ATS parsers and image-stripping viewers keep the link.
+  if (opts.portfolioUrl) parts.push(opts.portfolioUrl);
   return parts.filter(Boolean).join(" · ");
 }
 

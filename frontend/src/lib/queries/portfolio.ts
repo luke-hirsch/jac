@@ -66,6 +66,38 @@ export function useNativePortfolio(search: ExploreSearch) {
   });
 }
 
+/** Mirrors spa PortfolioLinkSerializer (owner-side). `content` is `{}` on a fresh
+ *  application link (before the sent-freeze), so its keys are optional. */
+export type PortfolioLinkRow = {
+  id: number;
+  slug: string;
+  kind: "manual" | "application";
+  title: string;
+  intro: string;
+  application: number | null;
+  content: { featured?: string[]; domains?: string[]; hide_explore?: boolean };
+  revoked_at: string | null;
+  url: string; // absolute, FRONTEND_URL-based — the QR encodes exactly this
+  visits: number;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Idempotent get-or-create — safe to call again after a reload. */
+export function createApplicationLink(applicationId: number) {
+  return api<PortfolioLinkRow>(
+    `/api/jac/applications/${applicationId}/portfolio-link/`,
+    { method: "POST" },
+  );
+}
+
+export function revokePortfolioLink(id: number) {
+  return api<PortfolioLinkRow>(
+    `/api/spa/portfolio/manage/links/${id}/revoke/`,
+    { method: "POST" },
+  );
+}
+
 /** The embed finale — POST but semantically a read; cached per (q, d) and never
  *  retried: the 6/h throttle makes retries actively harmful. */
 export function usePortfolioRank(search: ExploreSearch) {

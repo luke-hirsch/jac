@@ -52,6 +52,9 @@ import {
 } from "@/lib/export";
 
 import { docMetadata, hiddenPayload } from "@/lib/render/hidden";
+import { PortfolioLinkSection } from "@/components/applications/portfolio-link-section";
+import { qrDataUrl } from "@/lib/portfolio/qr";
+import { type PortfolioLinkRow } from "@/lib/queries/portfolio";
 
 type BuiltPdf = {
   blob: Blob;
@@ -68,6 +71,8 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   const library = useAttachments();
   const [scope, setScope] = useState<ExportScope>("complete");
   const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState<PortfolioLinkRow | null>(null);
+  const [includeQr, setIncludeQr] = useState(false);
   const [preview, setPreview] = useState<{
     url: string;
     info: BuiltPdf;
@@ -92,7 +97,13 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     const s = spec.data;
     const db = careerDb.data;
     const socials = profile.data?.show_socials ?? false;
-    const contact = contactLine(meta.sender, { socials });
+    const portfolioUrl = includeQr && link ? link.url : undefined;
+    const contact = contactLine(meta.sender, { socials, portfolioUrl });
+    // Raster QR for react-pdf's <Image> (absolute block, layout-invariant); included in
+    // the fit-measuring render below too, for measure/export parity.
+    const portfolio = portfolioUrl
+      ? { qr: await qrDataUrl(portfolioUrl) }
+      : undefined;
     const summary = profile.data?.bio ?? "";
     // Template entry budget first (hard editorial cap), page fit second. `full` (pre-cap)
     // sticks around: everything it has that the fitted content lacks — cap cuts and page
@@ -115,6 +126,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
                   db={db}
                   contact={contact}
                   summary={summary}
+                  portfolio={portfolio}
                 />,
               ),
             isFavouriteLookup(db),
@@ -157,6 +169,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
           contact={contact}
           summary={summary}
           hidden={hidden}
+          portfolio={portfolio}
         />
       ) : scope === "letter" ? (
         <LetterDocument
@@ -178,6 +191,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             contact,
             summary,
             hidden,
+            portfolio,
           }}
           letter={{
             spec: s,
@@ -298,6 +312,13 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
           is auto-fitted to the layout's page budget by dropping the
           lowest-ranked entries; the letter is never cut, only flagged.
         </p>
+        <PortfolioLinkSection
+          app={app}
+          link={link}
+          onLink={setLink}
+          includeQr={includeQr}
+          onIncludeQr={setIncludeQr}
+        />
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label className="text-xs">Scope</Label>

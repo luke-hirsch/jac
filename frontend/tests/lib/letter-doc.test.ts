@@ -230,6 +230,29 @@ describe("contactLine (CV contact header)", () => {
   it("drops blank fields", () => {
     expect(contactLine({ email: "a@b.c" }, { socials: true })).toBe("a@b.c");
   });
+
+  // Guide [fullstack]-portfolio-cv-qr: the portfolio URL rides in the text layer as a
+  // belt for the QR image (ATS parsers / image-stripping viewers keep the link).
+  it("appends the portfolio URL after socials", () => {
+    const line = contactLine(sender, {
+      socials: true,
+      portfolioUrl: "https://lukehirsch.com/portfolio/acme-x7f3",
+    });
+    expect(line.endsWith("https://lukehirsch.com/portfolio/acme-x7f3")).toBe(true);
+  });
+
+  it("omits the portfolio URL when absent or blank", () => {
+    expect(contactLine(sender, { socials: false })).toBe("ada@x.com · +49 123");
+    expect(contactLine(sender, { socials: false, portfolioUrl: "" })).toBe(
+      "ada@x.com · +49 123",
+    );
+  });
+
+  it("includes the portfolio URL even with socials off", () => {
+    expect(
+      contactLine(sender, { socials: false, portfolioUrl: "https://x.dev/p/y" }),
+    ).toBe("ada@x.com · +49 123 · https://x.dev/p/y");
+  });
 });
 
 /**

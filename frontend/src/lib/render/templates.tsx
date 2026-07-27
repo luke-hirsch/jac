@@ -127,6 +127,16 @@ export function cvStyles(spec: LayoutSpec) {
     meta: { color: spec.colors.muted, fontSize: small },
     body: { marginTop: base * 0.15 },
     compact: { fontSize: small, marginBottom: base / 3 },
+    // Portfolio QR: absolute (zero layout impact — the fit loop and page counts are
+    // invariant, same argument as HiddenInk) inside the page margins, top-right.
+    qr: {
+      position: "absolute",
+      top: spec.page.margin[0],
+      right: spec.page.margin[1],
+      alignItems: "center",
+    },
+    qrImage: { width: mm(18), height: mm(18) },
+    qrCaption: { fontSize: small * 0.9, color: spec.colors.muted, marginTop: 2 },
   });
 }
 function CvSectionView({
@@ -204,6 +214,7 @@ export function CvPages({
   summary,
   subtitle,
   hidden,
+  portfolio,
 }: {
   spec: LayoutSpec;
   name: string;
@@ -213,10 +224,17 @@ export function CvPages({
   summary?: string;
   subtitle?: string;
   hidden?: string;
+  portfolio?: { qr: string };
 }) {
   const styles = cvStyles(spec);
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
+      {portfolio ? (
+        <View style={styles.qr}>
+          <Image src={portfolio.qr} style={styles.qrImage} />
+          <Text style={styles.qrCaption}>online portfolio</Text>
+        </View>
+      ) : null}
       <Text style={styles.name}>{name}</Text>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
