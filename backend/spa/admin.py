@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from spa.models import PersonalityQuestion, UserProfile
+from spa.models import (
+    PersonalityQuestion,
+    PortfolioBlock,
+    PortfolioLink,
+    PortfolioVisit,
+    UserProfile,
+)
 
 
 @admin.register(UserProfile)
