@@ -1,0 +1,17 @@
+# Ruff configuration for the Django backend.
+#
+# Ruff 0.16 ships a much larger *default* rule set than older versions. One of
+# the newly-default rules is RUF012 ("mutable default value for class
+# attribute"), which is noise in Django/DRF: `Meta.ordering`, serializer
+# `fields`, view `permission_classes`, etc. are declarative class attributes by
+# design. They can't be moved to `__init__` (Django introspects them at class
+# definition time), and blanket-annotating them `ClassVar` is churn, not a fix.
+#
+# This file also pins config resolution to the backend/ project root, so the
+# rule set stops drifting on the next Ruff bump. Add more codes to `ignore`
+# (or switch to an explicit `select`) as needed.
+
+[lint]
+ignore = [
+    "RUF012",  # mutable default class attribute — Django/DRF declarative attrs
+]

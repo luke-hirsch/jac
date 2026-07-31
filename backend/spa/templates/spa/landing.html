@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% if owner %}{{ owner.display_name }} — Portfolio{% else %}Portfolio{% endif %}</title>
+    <meta name="description" content="{% if owner and owner.bio %}{{ owner.bio }}{% else %}A personal portfolio & CV automation showcase.{% endif %}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{% if owner %}{{ owner.display_name }}{% endif %}" />
+    <meta property="og:description" content="{% if owner and owner.bio %}{{ owner.bio }}{% endif %}" />
+    {% if owner and owner.avatar_url %}
+    <meta property="og:image" content="{{ owner.avatar_url }}" />
+    {% endif %}
+    <style>
+      :root {
+        --bg: #fafafa;
+        --fg: #18181b;
+        --muted: #71717a;
+        --card: #fff;
+        --border: #e4e4e7;
+        --accent: #4f46e5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --fg: #fafafa;
+          --muted: #a1a1aa;
+          --card: #18181b;
+          --border: #27272a;
+          --accent: #818cf8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+        text-align: center;
+      }
+      img.avatar {
+        width: 96px;
+        height: 96px;
+        border-radius: 50%;
+        object-fit: cover;
+        margin: 0 auto 1rem;
+        display: block;
+        border: 1px solid var(--border);
+      }
+      h1 {
+        font-size: 1.9rem;
+        margin: 0 0 0.25rem;
+        letter-spacing: -0.02em;
+      }
+      p.bio {
+        color: var(--muted);
+        margin: 0 auto 1.75rem;
+        max-width: 28rem;
+      }
+      .links {
+        display: grid;
+        gap: 0.75rem;
+      }
+      a.card {
+        display: block;
+        padding: 0.9rem 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        background: var(--card);
+        color: inherit;
+        text-decoration: none;
+        font-weight: 600;
+        transition: border-color 0.15s;
+      }
+      a.card:hover {
+        border-color: var(--accent);
+      }
+      a.card.primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      .socials {
+        margin-top: 1.25rem;
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+      }
+      .socials a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 0.9rem;
+      }
+      .socials a:hover {
+        color: var(--accent);
+      }
+      .chips {
+        margin-top: 1.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        justify-content: center;
+      }
+      .chip {
+        font-size: 0.78rem;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.15rem 0.6rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      {% if owner %}
+        {% if owner.avatar_url %}
+        <img class="avatar" src="{{ owner.avatar_url }}" alt="{{ owner.display_name }}" />
+        {% endif %}
+        <h1>{{ owner.display_name }}</h1>
+        {% if owner.bio %}
+        <p class="bio">{{ owner.bio }}</p>
+        {% endif %}
+      {% else %}
+        <h1>Portfolio</h1>
+      {% endif %}
+
+      <div class="links">
+        <a class="card primary" href="{{ explore_url }}">Explore my work →</a>
+        <a class="card" href="{{ signup_url }}">Build your own CV with JAC</a>
+      </div>
+
+      {% if owner.website or owner.linkedin_url or owner.github_url %}
+      <div class="socials">
+        {% if owner.website %}
+        <a href="{{ owner.website }}">Website</a>
+        {% endif %}
+        {% if owner.linkedin_url %}
+        <a href="{{ owner.linkedin_url }}">LinkedIn</a>
+        {% endif %}
+        {% if owner.github_url %}
+        <a href="{{ owner.github_url }}">GitHub</a>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if domains %}
+      <div class="chips">
+        {% for d in domains %}<span class="chip">{{ d }}</span>{% endfor %}
+      </div>
+      {% endif %}
+    </main>
+  </body>
+</html>

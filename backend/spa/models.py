@@ -7,12 +7,13 @@ notification settings that don't belong on the auth.User model itself.
 
 from pathlib import Path
 
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
 from lukehirsch.managers import SystemScopedManager
-from django.core.exceptions import ValidationError
-from django.db.models import Q
 from spa.distill import StyleDistiller
 from spa.personality_questions import MAX_ANSWER_LEN
 
@@ -284,6 +285,7 @@ class PortfolioLink(models.Model):
     kind = models.CharField(max_length=12, choices=Kind, default=Kind.manual)
     title = models.CharField(max_length=200, blank=True)
     intro = models.TextField(blank=True)
+    is_default = models.BooleanField(default=False)
     application = models.ForeignKey(
         "jac.JobApplication",
         on_delete=models.SET_NULL,  # a frozen page survives application deletion
@@ -306,7 +308,12 @@ class PortfolioLink(models.Model):
                 fields=["application"],
                 condition=Q(revoked_at__isnull=True, application__isnull=False),
                 name="one_active_link_per_application",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(is_default=True, revoked_at__isnull=True),
+                name="one_default_link_per_user",
+            ),
         ]
 
     def __str__(self):
@@ -316,6 +323,19 @@ class PortfolioLink(models.Model):
     @property
     def active(self) -> bool:
         return self.revoked_at is None
+
+    def save(self, *args, **kwargs):
+        """Enforce one active default link per user: promoting this row demotes the
+        others FIRST (before super().save()), so the partial-unique constraint never
+        trips mid-flight. A revoked link never holds defaulthood."""
+        if self.is_default and self.revoked_at is None:
+            others = PortfolioLink.objects.filter(
+                user=self.user, is_default=True, revoked_at__isnull=True
+            )
+            if self.pk:
+                others = others.exclude(pk=self.pk)
+            others.update(is_default=False)
+        super().save(*args, **kwargs)
 
     def revoke(self) -> None:
         """Idempotent soft-kill: the public path 404s from the next request on."""

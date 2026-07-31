@@ -8,9 +8,11 @@ from spa.views import (
     PersonalityQuestionListCreateView,
     PortfolioBlockDetailView,
     PortfolioBlockListCreateView,
+    PortfolioIntroView,
     PortfolioLinkDetailView,
     PortfolioLinkListCreateView,
     PortfolioLinkRevokeView,
+    PortfolioMetaView,
     PortfolioNativeView,
     PortfolioRankView,
     PortfolioResolveView,
@@ -75,5 +77,15 @@ urlpatterns = [
         "portfolio/native/rank/",
         PortfolioRankView.as_view(),
         name="portfolio-rank",
+    ),
+    path(
+        "portfolio/native/meta/",
+        PortfolioMetaView.as_view(),
+        name="portfolio-meta",
+    ),
+    path(
+        "portfolio/native/intro/",
+        PortfolioIntroView.as_view(),
+        name="portfolio-intro",
     ),
 ]

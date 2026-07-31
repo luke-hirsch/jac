@@ -128,10 +128,14 @@ class DrfDefaultPermissionTests(TestCase):
 
     def test_index_stays_public(self):
         # The portfolio is a PUBLIC site — deny-by-default must not lock out anonymous
-        # visitors from the root. Public endpoints opt in via explicit AllowAny.
+        # visitors from the root. `/` is now the Django-rendered landing (HTML, SEO
+        # front door); the JSON liveness check moved to `/health/`.
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"message": "I am alive!"})
+        self.assertIn("text/html", r["Content-Type"])
+        h = self.client.get("/health/")
+        self.assertEqual(h.status_code, 200)
+        self.assertEqual(h.json(), {"message": "I am alive!"})
 
     def test_schema_stays_public(self):
         # drf-spectacular serves the schema under its own SERVE_PERMISSIONS default

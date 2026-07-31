@@ -232,6 +232,7 @@ REST_FRAMEWORK = {
         "llm-chat": "20/min",
         "portfolio": "60/hour",
         "portfolio-rank": "6/hour",
+        "portfolio-intro": "6/hour",
     },
 }
 
@@ -291,4 +292,4 @@ verify_production_secrets(
 )
 
 
-PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "Lukas")
+PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "lukas")

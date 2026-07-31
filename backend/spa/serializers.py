@@ -236,7 +236,11 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get("request")
-        if request is not None:
+        # `is_authenticated` guard: drf-spectacular introspects this serializer with an
+        # AnonymousUser request when generating /api/schema/, and `for_user(AnonymousUser)`
+        # casts to int and crashes. Anonymous never POSTs a block (IsAuthenticated), so the
+        # default queryset is fine for them.
+        if request is not None and request.user.is_authenticated:
             from jac.models import Domain  # runtime-only; models use string refs
 
             fields["domains"].child_relation.queryset = Domain.objects.for_user(
@@ -281,6 +285,7 @@ class PortfolioLinkSerializer(serializers.ModelSerializer):
             "revoked_at",
             "url",
             "visits",
+            "is_default",
             "created_at",
             "updated_at",
         )
@@ -335,4 +340,26 @@ class PortfolioRankSerializer(serializers.Serializer):
     query = serializers.CharField(max_length=MAX_ANSWER_LEN)
     domains = serializers.ListField(
         child=serializers.CharField(max_length=100), required=False, max_length=10
+    )
+
+
+class PortfolioIntroSerializer(serializers.Serializer):
+    """Input for the AI-intro endpoint — same caps as the rank finale, plus the style
+    axis (reusing the personality tone/focus vocab)."""
+
+    query = serializers.CharField(
+        max_length=MAX_ANSWER_LEN, required=False, allow_blank=True
+    )
+    domains = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, max_length=10
+    )
+    tone = serializers.ChoiceField(
+        choices=PersonalityProfile.Tone.choices,
+        required=False,
+        default=PersonalityProfile.Tone.neutral,
+    )
+    focus = serializers.ChoiceField(
+        choices=PersonalityProfile.Focus.choices,
+        required=False,
+        default=PersonalityProfile.Focus.balanced,
     )

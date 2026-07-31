@@ -1,20 +1,22 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
+from django.http import JsonResponse
+from django.shortcuts import render
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.views import APIView
+
+from spa.portfolio import landing_context
 
 
-class IndexView(APIView):
-    # The site root is public (portfolio visitors land here anonymously); the global DRF
-    # default is IsAuthenticated, so public endpoints must opt in explicitly.
-    permission_classes = [AllowAny]
+def landing(request):
+    # The site root is public + server-rendered (SEO front door / link-tree). The SPA
+    # owns /me and /portfolio/* (dev: Vite; prod: nginx routes / here, the rest to the SPA).
+    return render(request, "spa/landing.html", landing_context())
 
-    def get(self, request):
-        return Response({"message": "I am alive!"})
+
+def health(request):
+    return JsonResponse({"message": "I am alive!"})
 
 
 urlpatterns = [
@@ -29,7 +31,8 @@ urlpatterns = [
         SpectacularSwaggerView.as_view(url_name="schema"),
         name="swagger-ui",
     ),
-    path("", IndexView.as_view(), name="index"),
+    path("health/", health, name="health"),
+    path("", landing, name="index"),
 ]
 
 if settings.DEBUG:

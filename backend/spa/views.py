@@ -4,13 +4,13 @@ from allauth.account.internal.flows.reauthentication import did_recently_authent
 from django.contrib.auth import logout
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from llm_connector.conf import ExecutorError, resolve_executor
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from llm_connector.conf import ExecutorError, resolve_executor
 from spa.models import (
     PersonalityProfile,
     PersonalityQuestion,
@@ -18,11 +18,19 @@ from spa.models import (
     PortfolioLink,
     UserProfile,
 )
-from spa.portfolio import build_payload, bump_visit, get_owner, rank_for_query
+from spa.portfolio import (
+    build_intro,
+    build_payload,
+    bump_visit,
+    get_owner,
+    owner_domains,
+    rank_for_query,
+)
 from spa.serializers import (
     PersonalityProfileSerializer,
     PersonalityQuestionSerializer,
     PortfolioBlockSerializer,
+    PortfolioIntroSerializer,
     PortfolioLinkSerializer,
     PortfolioRankSerializer,
     UserProfileSerializer,
@@ -234,7 +242,15 @@ class PortfolioNativeView(PublicPortfolioAPIView):
             if d.strip()
         ]
         lucky = request.query_params.get("lucky") in ("1", "true")
-        return Response(build_payload(owner, domains=domains, lucky=lucky))
+        return Response(
+            build_payload(
+                owner,
+                domains=domains,
+                lucky=lucky,
+                focus=request.query_params.get("focus") or "balanced",
+                tone=request.query_params.get("tone") or "neutral",
+            )
+        )
 
 
 class PortfolioRankView(PublicPortfolioAPIView):
@@ -255,3 +271,49 @@ class PortfolioRankView(PublicPortfolioAPIView):
             ser.validated_data.get("domains") or [],
         )
         return Response({"ranked": ranked})
+
+
+class PortfolioMetaView(PublicPortfolioAPIView):
+    """GET: the questionnaire's building blocks — the owner's REAL domain shortlist (only
+    domains with content, so no branch dead-ends) plus the style-axis vocab."""
+
+    def get(self, request):
+        owner = get_owner()
+        if owner is None:
+            raise Http404
+        return Response(
+            {
+                "domains": owner_domains(owner),
+                "tones": [
+                    {"value": v, "label": str(label)}
+                    for v, label in PersonalityProfile.Tone.choices
+                ],
+                "focuses": [
+                    {"value": v, "label": str(label)}
+                    for v, label in PersonalityProfile.Focus.choices
+                ],
+            }
+        )
+
+
+class PortfolioIntroView(PublicPortfolioAPIView):
+    """POST: the AI intro — the one generative anonymous call (HirschAI-only, tight
+    `portfolio-intro` throttle). Returns `{intro}` ('' when the tower is down / any
+    failure → the page shows the standard portfolio with no intro)."""
+
+    throttle_scope = "portfolio-intro"
+
+    def post(self, request):
+        owner = get_owner()
+        if owner is None:
+            raise Http404
+        ser = PortfolioIntroSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        intro = build_intro(
+            owner,
+            domains=ser.validated_data.get("domains") or [],
+            question=ser.validated_data.get("query") or "",
+            focus=ser.validated_data["focus"],
+            tone=ser.validated_data["tone"],
+        )
+        return Response({"intro": intro})

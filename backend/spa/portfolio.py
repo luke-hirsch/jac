@@ -5,6 +5,7 @@ Guide 2 adds owner resolution, payload assembly, and the embed ranking here. Vie
 stay thin; everything in this module is unit-testable without HTTP.
 """
 
+import logging
 import random
 import secrets
 
@@ -14,9 +15,15 @@ from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 from django.utils.text import slugify
-from jac.llm_prompts import Embed  # no spa import in jac.llm_prompts — cycle-safe
 
+from jac.llm_prompts import Embed  # no spa import in jac.llm_prompts — cycle-safe
+from llm_connector import complete
+from llm_connector.conf import HIRSCHAI_PROVIDER
+from llm_connector.executor import Executor
+from llm_connector.probe import hirschai_reachable
 from spa.models import PortfolioBlock, PortfolioLink, PortfolioVisit
+
+logger = logging.getLogger(__name__)
 
 SLUG_SUFFIX_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 SLUG_SUFFIX_LEN = 4
@@ -101,12 +108,48 @@ def freeze_link(application) -> None:
 
 def get_owner() -> User | None:
     """The public portfolio's owner — an explicit setting, never request-derived and
-    never the system sentinel. None (unset / unknown / inactive) disables the native
-    flow: callers 404."""
-    username = settings.PORTFOLIO_OWNER_USERNAME
-    if not username or username == settings.SYSTEM_USER_USERNAME:
+    never the system sentinel. Case-insensitive: the `"Lukas"` default resolves the
+    `"lukas"` row (the shipped exact-match bug that 404'd every native call). None
+    (unset / sentinel / unknown / inactive) disables the native flow: callers 404."""
+    username = (settings.PORTFOLIO_OWNER_USERNAME or "").strip()
+    if not username or username.lower() == settings.SYSTEM_USER_USERNAME.lower():
         return None
-    return User.objects.filter(username=username, is_active=True).first()
+    return User.objects.filter(username__iexact=username, is_active=True).first()
+
+
+def owner_domains(owner) -> list[str]:
+    """Domain names the owner actually has content under (career entries or active
+    blocks), sorted. Only non-empty domains — so no questionnaire branch dead-ends (the
+    hardcoded-name bug). Language has no domains M2M and is excluded by construction."""
+    names: set[str] = set()
+    for t in ("job", "project", "skill", "education", "certification"):
+        for obj in (
+            _career_models()[t].objects.filter(user=owner).prefetch_related("domains")
+        ):
+            names.update(d.name for d in obj.domains.all())
+    for b in PortfolioBlock.objects.filter(user=owner, is_active=True).prefetch_related(
+        "domains"
+    ):
+        names.update(d.name for d in b.domains.all())
+    return sorted(names)
+
+
+def section_order(focus: str = "balanced") -> list[str]:
+    """Career section order for the style axis' `focus` (soft↔technical). `technical`
+    leads with skills/projects; `soft_skill` leads with roles/education; anything else
+    keeps the default. Language always trails (no domains, thin content)."""
+    if focus == "technical":
+        return ["skill", "project", "job", "certification", "education", "language"]
+    if focus == "soft_skill":
+        return ["job", "education", "language", "project", "certification", "skill"]
+    return list(_SECTION_ORDER)
+
+
+def default_link(owner):
+    """The owner's active `is_default` manual link, or None. The native fallback target."""
+    return owner.portfolio_links.filter(
+        is_default=True, revoked_at__isnull=True
+    ).first()
 
 
 # ── payload assembly ──────────────────────────────────────────────────────────
@@ -229,12 +272,17 @@ def resolve_items(owner, ids: list[str]) -> list[dict]:
 
 
 def _entries(
-    owner, *, domains=None, favourite=False, exclude_ids=frozenset()
+    owner,
+    exclude_ids: set | None = None,
+    domains=None,
+    favourite=False,
+    order=None,
 ) -> list[dict]:
     """Career items in section order; `domains` (Domain rows) scopes, `favourite`
     restricts. Language has no domains M2M — it drops out of any domain-scoped view."""
     out = []
-    for t, model in ((t, _career_models()[t]) for t in _SECTION_ORDER):
+    for t in order or _SECTION_ORDER:
+        model = _career_models()[t]
         qs = model.objects.filter(user=owner)
         if favourite:
             qs = qs.filter(favourite=True)
@@ -244,12 +292,19 @@ def _entries(
             qs = qs.filter(domains__in=domains).distinct()
         if t != "language":
             qs = qs.prefetch_related("domains")
-        out += [_career_item(t, o) for o in qs if f"{t}:{o.pk}" not in exclude_ids]
+        out += [
+            _career_item(t, o)
+            for o in qs
+            if exclude_ids is None or f"{t}:{o.pk}" not in exclude_ids
+        ]
     return out
 
 
 def _blocks(
-    owner, *, domains=None, favourite=False, exclude_ids=frozenset()
+    owner,
+    exclude_ids: set | None = None,
+    domains=None,
+    favourite=False,
 ) -> list[dict]:
     qs = PortfolioBlock.objects.filter(user=owner, is_active=True).prefetch_related(
         "domains"
@@ -258,7 +313,12 @@ def _blocks(
         qs = qs.filter(favourite=True)
     if domains is not None:
         qs = qs.filter(domains__in=domains).distinct()
-    return [_block_item(b) for b in qs if f"block:{b.pk}" not in exclude_ids]
+
+    return [
+        _block_item(b)
+        for b in qs
+        if exclude_ids is None or f"block:{b.pk}" not in exclude_ids
+    ]
 
 
 def _owner_block(owner) -> dict:
@@ -280,16 +340,23 @@ def _owner_block(owner) -> dict:
     return block
 
 
-def build_payload(owner, *, link=None, domains=None, lucky=False, seed=None) -> dict:
+def build_payload(
+    owner,
+    link=None,
+    domains=None,
+    lucky=False,
+    seed=None,
+    focus="balanced",
+    tone="neutral",
+) -> dict:
     """The whole public page in one dict: `{owner, kind, title, intro, featured, more}`.
 
-    Link mode: featured = the link's frozen ids (application links fall back to the
-    live `cv_content` while un-frozen — accurate preview before `sent`); `more` = the
-    link's domain scope, or favourites + blocks when unscoped; `hide_explore` empties it.
-    Native mode: `domains` (names) scope both lists; no/unknown domains = the full
-    portfolio (favourites featured). `lucky` = favourites featured + a seeded random
-    tasting menu (fresh serendipity per request; `seed` keeps tests deterministic).
-    Position IS the featured signal — the favourite flag itself never leaks.
+    Link mode (unchanged): frozen ids, application links preview live `cv_content`.
+    Native mode: `domains` (names) scope; `focus` reorders career sections; `tone`
+    ("personal") floats blocks ahead of career entries. `lucky` = favourites + a seeded
+    random tasting menu. When a native result is EMPTY the flow degrades to the owner's
+    default link (the standard portfolio) — no dead-end. Position IS the featured signal;
+    the favourite flag never leaks.
     """
     if link is not None:
         content = link.content or {}
@@ -336,11 +403,25 @@ def build_payload(owner, *, link=None, domains=None, lucky=False, seed=None) -> 
     else:
         matched = _matched_domains(owner, domains or [])
         scope = matched or None  # nothing matched → the full portfolio
-        featured = _entries(owner, domains=scope, favourite=True)
-        featured += _blocks(owner, domains=scope, favourite=True)
+        order = section_order(focus)
+        blocks_first = tone == "personal"
+        feat_e = _entries(owner, domains=scope, favourite=True, order=order)
+        feat_b = _blocks(owner, domains=scope, favourite=True)
+        featured = (feat_b + feat_e) if blocks_first else (feat_e + feat_b)
         exclude = {i["id"] for i in featured}
-        more = _entries(owner, domains=scope, exclude_ids=exclude)
-        more += _blocks(owner, domains=scope, exclude_ids=exclude)
+        more_e = _entries(owner, domains=scope, exclude_ids=exclude, order=order)
+        more_b = _blocks(owner, domains=scope, exclude_ids=exclude)
+        more = (more_b + more_e) if blocks_first else (more_e + more_b)
+
+    if not featured and not more:
+        default = default_link(owner)
+        if default is not None:
+            payload = build_payload(owner, link=default)
+            payload["kind"] = (
+                "native"  # rendered via the native flow, not a shared link
+            )
+            return payload
+
     return {
         "kind": "native",
         "title": "",
@@ -398,3 +479,96 @@ def rank_for_query(owner, query: str, domains: list[str]) -> list[dict]:
         return []
     ranked = PortfolioEmbed(query, docs, user=None).ranked_entries()
     return [{"id": r["id"], "score": round(r["score"], 4)} for r in ranked]
+
+
+# ------ AI stuff
+
+_INTRO_TONE = {
+    "personal": "Warm, first-person and genuine, as if greeting the visitor directly.",
+    "neutral": "Professional with measured warmth.",
+    "formal": "Reserved and professional.",
+}
+_INTRO_FOCUS = {
+    "technical": "Emphasise concrete technical work.",
+    "soft_skill": "Emphasise motivation, values and working style.",
+    "balanced": "Give craft and character roughly equal weight.",
+}
+
+
+class PortfolioIntroWriter:
+    """One short personalised welcome paragraph for a native portfolio visit."""
+
+    _TARGET_WORDS = (40, 80)
+    _INSTRUCTION = (
+        "Write ONE short welcome paragraph ({lo}-{hi} words) for a visitor to {name}'s "
+        "personal portfolio. The visitor is interested in: {interest}. Write in the first "
+        "person as {name}. Reference ONLY that interest and the HIGHLIGHTS listed below — "
+        "invent no skills, employers, titles, numbers or dates. No header, no sign-off, no "
+        "markdown, no lists — just the paragraph."
+    )
+
+    def __init__(self, name, interest, highlights, focus="balanced", tone="neutral"):
+        self.name = name or "the owner"
+        self.interest = interest or "your work in general"
+        self.highlights = highlights
+        self.focus = focus
+        self.tone = tone
+
+    def write(self) -> str:
+        """The paragraph, or '' (tower unreachable / any failure — the caller then
+        renders the standard portfolio without an intro)."""
+        if not hirschai_reachable():
+            return ""
+        try:
+            raw = complete(prompt=self._prompt(), executor=Executor(HIRSCHAI_PROVIDER))
+        except Exception:
+            logger.exception("PortfolioIntroWriter: LLM call failed")
+            return ""
+        return (raw or "").strip()
+
+    def _prompt(self) -> str:
+        lo, hi = self._TARGET_WORDS
+        flavour = " ".join(
+            v for v in (_INTRO_TONE.get(self.tone), _INTRO_FOCUS.get(self.focus)) if v
+        )
+        highlights = "\n".join(f"- {h}" for h in self.highlights[:12]) or "(none yet)"
+        return (
+            self._INSTRUCTION.format(
+                lo=lo, hi=hi, name=self.name, interest=self.interest
+            )
+            + (f"\n{flavour}" if flavour else "")
+            + f"\n\nHIGHLIGHTS:\n{highlights}\n\nWELCOME PARAGRAPH:"
+        )
+
+
+def build_intro(
+    owner, *, domains=None, question="", focus="balanced", tone="neutral"
+) -> str:
+    """Assemble + run the intro for a native visit. Grounds the writer in the actual
+    featured highlights for this (domains, style) selection."""
+    payload = build_payload(owner, domains=domains, focus=focus, tone=tone)
+    highlights = [
+        i.get("title") or i.get("subtitle") or "" for i in payload["featured"]
+    ]
+    interest = ", ".join(domains or [])
+    if question:
+        interest = f"{interest}; specifically: {question}".strip(" ;")
+    return PortfolioIntroWriter(
+        name=payload["owner"]["display_name"],
+        interest=interest,
+        highlights=[h for h in highlights if h],
+        focus=focus,
+        tone=tone,
+    ).write()
+
+
+def landing_context() -> dict:
+    """Context for the Django-rendered `/` landing. Owner block is None when the owner
+    setting is unset/unknown — the template falls back to a minimal page."""
+    owner = get_owner()
+    return {
+        "owner": _owner_block(owner) if owner else None,
+        "domains": owner_domains(owner) if owner else [],
+        "explore_url": f"{settings.FRONTEND_URL}/me",
+        "signup_url": f"{settings.FRONTEND_URL}/auth/signup",
+    }

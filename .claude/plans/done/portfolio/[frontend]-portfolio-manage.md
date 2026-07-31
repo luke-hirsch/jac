@@ -33,10 +33,10 @@ Decisions this code embodies (from the approved plan + guides 1–4):
   silently, exactly the cv-doc philosophy. The picker never sends labels — those are display-only.
 - **Manual links only, here.** Application links are minted by jac's `portfolio-link` action
   (guide 4's export card); this UI creates `manual` links (kind is server-read-only) and lets the
-  owner *edit* any link's title/intro/content — including a frozen application link, because the
-  freeze guards against *pipeline* rewrites, not owner edits (guide 1 serializer note).
+  owner _edit_ any link's title/intro/content — including a frozen application link, because the
+  freeze guards against _pipeline_ rewrites, not owner edits (guide 1 serializer note).
 - **Domains: names on links, pks on blocks.** A link's `content.domains` is a list of Domain
-  *names* (guide 1 `validate_content`); a block's `domains` M2M is pks (guide 1 serializer). The
+  _names_ (guide 1 `validate_content`); a block's `domains` M2M is pks (guide 1 serializer). The
   two pickers differ accordingly — don't unify them.
 - **Blocks upload multipart; the image is optional except for image blocks.** `api()` gains a
   one-line `FormData` guard so the existing CSRF/credentials path carries the upload.
@@ -51,19 +51,19 @@ link editor rejects those two slugs (trivial, in `validate`), and it's a non-iss
 
 ## Affected files
 
-| file | why |
-| --- | --- |
-| `frontend/src/lib/api.ts` | one-line `FormData` guard so multipart uploads skip the auto-JSON `Content-Type` |
-| `frontend/src/lib/portfolio/link-form.ts` | **new** — pure featured-picker list algebra (the tested surface) |
-| `frontend/src/lib/queries/portfolio.ts` | + `PortfolioBlockRow`, owner block/link CRUD hooks (extends the file guides 3–4 built) |
-| `frontend/src/components/portfolio/featured-picker.tsx` | **new** — mixed career+block picker (uses `link-form.ts`) |
-| `frontend/src/components/portfolio/link-editor.tsx` | **new** — manual-link create/edit dialog |
-| `frontend/src/components/portfolio/block-editor.tsx` | **new** — block create/edit dialog (domains + image) |
-| `frontend/src/routes/_authenticated/portfolio.tsx` | **new** — tab layout (Links / Blocks + `Outlet`), mirrors `account.tsx` |
-| `frontend/src/routes/_authenticated/portfolio/index.tsx` | **new** — redirect `/portfolio` → `/portfolio/links` |
-| `frontend/src/routes/_authenticated/portfolio/links.tsx` | **new** — link list + editor + visits |
-| `frontend/src/routes/_authenticated/portfolio/blocks.tsx` | **new** — block list + editor |
-| `frontend/src/routes/_authenticated.tsx` | + "Portfolio" nav link (L58-73 nav block) |
+| file                                                      | why                                                                                    |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `frontend/src/lib/api.ts`                                 | one-line `FormData` guard so multipart uploads skip the auto-JSON `Content-Type`       |
+| `frontend/src/lib/portfolio/link-form.ts`                 | **new** — pure featured-picker list algebra (the tested surface)                       |
+| `frontend/src/lib/queries/portfolio.ts`                   | + `PortfolioBlockRow`, owner block/link CRUD hooks (extends the file guides 3–4 built) |
+| `frontend/src/components/portfolio/featured-picker.tsx`   | **new** — mixed career+block picker (uses `link-form.ts`)                              |
+| `frontend/src/components/portfolio/link-editor.tsx`       | **new** — manual-link create/edit dialog                                               |
+| `frontend/src/components/portfolio/block-editor.tsx`      | **new** — block create/edit dialog (domains + image)                                   |
+| `frontend/src/routes/_authenticated/portfolio.tsx`        | **new** — tab layout (Links / Blocks + `Outlet`), mirrors `account.tsx`                |
+| `frontend/src/routes/_authenticated/portfolio/index.tsx`  | **new** — redirect `/portfolio` → `/portfolio/links`                                   |
+| `frontend/src/routes/_authenticated/portfolio/links.tsx`  | **new** — link list + editor + visits                                                  |
+| `frontend/src/routes/_authenticated/portfolio/blocks.tsx` | **new** — block list + editor                                                          |
+| `frontend/src/routes/_authenticated.tsx`                  | + "Portfolio" nav link (L58-73 nav block)                                              |
 
 ## The code
 
@@ -73,13 +73,13 @@ The helper force-sets `Content-Type: application/json` on any body (L25-27). A `
 must instead let the browser set `multipart/form-data; boundary=…` itself, so add one clause:
 
 ```ts
-  if (
-    init.body !== undefined &&
-    !headers.has("Content-Type") &&
-    !(init.body instanceof FormData)
-  ) {
-    headers.set("Content-Type", "application/json");
-  }
+if (
+  init.body !== undefined &&
+  !headers.has("Content-Type") &&
+  !(init.body instanceof FormData)
+) {
+  headers.set("Content-Type", "application/json");
+}
 ```
 
 Nothing else changes — CSRF (`X-CSRFToken`) and `credentials: "same-origin"` already apply to the
@@ -135,7 +135,11 @@ export function candidates(
     for (const section of SECTION_ORDER) {
       for (const row of db[section] as AnyRow[]) {
         const id = entryId(section, row.id);
-        out.push({ id, type: parseEntryId(id)!.type, label: labelFor(section, row) });
+        out.push({
+          id,
+          type: parseEntryId(id)!.type,
+          label: labelFor(section, row),
+        });
       }
     }
   }
@@ -210,7 +214,8 @@ export function toggleName(names: string[], name: string): string[] {
 ### 3. `frontend/src/lib/queries/portfolio.ts` — owner CRUD
 
 Append to the file guides 3–4 built (it already exports the public payload types + `PortfolioLinkRow`
-+ `createApplicationLink` + `revokePortfolioLink`). Extend the imports first:
+
+- `createApplicationLink` + `revokePortfolioLink`). Extend the imports first:
 
 ```ts
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -305,7 +310,8 @@ export function useSaveBlock() {
       const body = image ? blockMultipart(input, image) : JSON.stringify(input);
       return api<PortfolioBlockRow>(url, { method, body });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
   });
 }
 
@@ -314,7 +320,8 @@ export function useDeleteBlock() {
   return useMutation({
     mutationFn: (id: number) =>
       api<void>(`${BLOCKS_URL}${id}/`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
   });
 }
 
@@ -412,8 +419,8 @@ export function FeaturedPicker({
         <p className="text-sm font-medium">Featured ({chosen.length})</p>
         {chosen.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nothing featured yet — pick from the right. Empty = the public page falls
-            back to favourites + blocks.
+            Nothing featured yet — pick from the right. Empty = the public page
+            falls back to favourites + blocks.
           </p>
         ) : (
           <ul className="space-y-1">
@@ -1010,7 +1017,8 @@ function LinksTab() {
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (links.data ?? []).length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No links yet. Create a manual link, or add one from an application's export card.
+          No links yet. Create a manual link, or add one from an application's
+          export card.
         </p>
       ) : (
         <Table>
@@ -1025,7 +1033,10 @@ function LinksTab() {
           </TableHeader>
           <TableBody>
             {(links.data ?? []).map((link) => (
-              <TableRow key={link.id} className={link.revoked_at ? "opacity-50" : ""}>
+              <TableRow
+                key={link.id}
+                className={link.revoked_at ? "opacity-50" : ""}
+              >
                 <TableCell className="font-mono">
                   <a
                     href={link.url}
@@ -1058,7 +1069,11 @@ function LinksTab() {
                   >
                     Copy
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(link)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openEdit(link)}
+                  >
                     Edit
                   </Button>
                   {link.revoked_at ? (
@@ -1208,13 +1223,13 @@ function BlocksTab() {
 In the `<nav>` block (L58-73), add a Portfolio link beside CV / Applications:
 
 ```tsx
-            <Link
-              to="/portfolio/links"
-              className="hover:underline"
-              activeProps={{ className: "font-medium underline" }}
-            >
-              Portfolio
-            </Link>
+<Link
+  to="/portfolio/links"
+  className="hover:underline"
+  activeProps={{ className: "font-medium underline" }}
+>
+  Portfolio
+</Link>
 ```
 
 (`to="/portfolio/links"` rather than `/portfolio` so the click lands on a real tab, not the
@@ -1229,7 +1244,7 @@ picker's list algebra is the whole testable surface; the dialogs/routes are clic
 - `frontend/tests/lib/portfolio-link-form.test.ts` — **new**:
   - `candidates`: builds career ids in `SECTION_ORDER` with cv-doc labels + block ids
     (`block:<pk>`, title-or-fallback label); `undefined` db → blocks only; empty everything → `[]`.
-  - `resolveFeatured`: returns candidates in *featured* order (not pool order); ids absent from
+  - `resolveFeatured`: returns candidates in _featured_ order (not pool order); ids absent from
     the pool (deleted row / block) drop silently; empty featured → `[]`.
   - `toggleFeatured`: adds an absent id to the tail, removes a present one, leaves others' order.
   - `moveFeatured`: swaps with the neighbour; no-ops at either boundary and on out-of-range index;
@@ -1255,12 +1270,10 @@ no network, no React.
    Copy → open in a private window → the featured items render in your chosen order (guide 3's
    public page); the "more" section reflects the explore domains. Try slug `links` → rejected.
 5. Edit the link → remove a featured item, toggle "hide explore" → public page updates.
-6. Revoke → public 404 (+ stamp self-clears per guide 3); the row shows *revoked* and offers
+6. Revoke → public 404 (+ stamp self-clears per guide 3); the row shows _revoked_ and offers
    Delete; Delete removes it.
 7. Open an application's export card → Add portfolio link (guide 4) → it appears in this list as
    an `application` link; edit it here → slug field read-only, title/intro/featured editable.
 8. `npx vitest run tests/lib/portfolio-link-form.test.ts` green; `npx tsc -b` clean.
 
 ## Results
-
-_(human fills after testing)_
