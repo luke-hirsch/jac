@@ -56,6 +56,7 @@ class UserProfile(models.Model):
     avatar = models.ImageField(upload_to=_avatar_path, blank=True)
     bio = models.TextField(max_length=500, blank=True)
     signature = models.ImageField(upload_to="signatures", blank=True)
+    handle = models.SlugField(max_length=40, unique=True, blank=True)
 
     # Professional contact — also used to pre-fill job applications in JAC
     phone = models.CharField(max_length=30, blank=True)
@@ -148,7 +149,8 @@ class PersonalityProfile(models.Model):
         from spa.distill import PersonalityDistiller
 
         labels = {
-            q.slug: q.prompt for q in PersonalityQuestion.objects.for_user(self.user)
+            q.slug: q.prompt
+            for q in PersonalityQuestion.objects.for_user(self.user)  # type: ignore
         }
         text = PersonalityDistiller(
             self.answers, labels=labels, executor=executor
@@ -281,7 +283,7 @@ class PortfolioLink(models.Model):
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, related_name="portfolio_links"
     )
-    slug = models.SlugField(max_length=80, unique=True)
+    slug = models.SlugField(max_length=80)
     kind = models.CharField(max_length=12, choices=Kind, default=Kind.manual)
     title = models.CharField(max_length=200, blank=True)
     intro = models.TextField(blank=True)
@@ -293,10 +295,7 @@ class PortfolioLink(models.Model):
         blank=True,
         related_name="portfolio_links",
     )
-    # {"featured": ["job:12", "block:7", …], "domains": [names], "hide_explore": bool}
-    # — ids only, joined against the live career DB at render time (deleted rows drop
-    # silently, the cv-doc philosophy). Application links keep featured empty until the
-    # sent-freeze; the public view falls back to the live cv_content meanwhile.
+
     content = models.JSONField(default=dict, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -313,6 +312,11 @@ class PortfolioLink(models.Model):
                 fields=["user"],
                 condition=Q(is_default=True, revoked_at__isnull=True),
                 name="one_default_link_per_user",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "slug"],
+                condition=Q(revoked_at__isnull=True),
+                name="unique_active_slug_per_user",
             ),
         ]
 

@@ -21,7 +21,7 @@ from llm_connector import complete
 from llm_connector.conf import HIRSCHAI_PROVIDER
 from llm_connector.executor import Executor
 from llm_connector.probe import hirschai_reachable
-from spa.models import PortfolioBlock, PortfolioLink, PortfolioVisit
+from spa.models import PortfolioBlock, PortfolioLink, PortfolioVisit, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +33,49 @@ def slug_suffix() -> str:
     return "".join(secrets.choice(SLUG_SUFFIX_ALPHABET) for _ in range(SLUG_SUFFIX_LEN))
 
 
-def application_slug(application) -> str:
-    """`<company>-<suffix>` — readable but not guessable.
-
-    Company preference: the user-corrected letter recipient
-    (`letter_meta["recipient"]["company"]`, jac/cover_letter.py:366-379) → the extracted
-    posting address → the posting title → a plain fallback. `getattr` on the reverse
-    one-to-one is safe: Django's RelatedObjectDoesNotExist subclasses AttributeError.
-    """
+def _application_company(application) -> str:
+    """Company preference: corrected letter recipient -> extracted posting address ->
+    posting title -> fallback (unchanged from the entropy-slug era)."""
     address = getattr(application.posting, "address", None)
-    company = (
+    return (
         ((application.letter_meta or {}).get("recipient") or {}).get("company")
         or (address.company if address else "")
         or application.posting.title
         or "application"
     )
-    base = slugify(company)[:40].strip("-") or "application"
-    return f"{base}-{slug_suffix()}"
+
+
+def _dedupe_slug(user, base: str, extra: str = "") -> str:
+    """First free slug among the user's ACTIVE links: `base`, then `base-extra`, then a
+    numeric tail. Per-user now — the subdomain carries the user, so no cross-user entropy."""
+    taken = set(
+        PortfolioLink.objects.filter(user=user, revoked_at__isnull=True).values_list(
+            "slug", flat=True
+        )
+    )
+    candidates = [base]
+    if extra and extra != base:
+        candidates.append(f"{base}-{extra}")
+    for c in candidates:
+        if c and c not in taken:
+            return c
+    stem = candidates[-1]
+    n = 2
+    while f"{stem}-{n}" in taken:
+        n += 1
+    return f"{stem}-{n}"
+
+
+def application_slug(application) -> str:
+    """`<company>` or `<company>-<role>` — readable and owner-editable (per-user unique).
+
+    A second application to the same company falls to `<company>-<role>` (e.g.
+    `acme-intern` vs `acme-lead`), then a numeric tail. The owner can rename the link
+    before the sent-freeze via the manage UI.
+    """
+    base = slugify(_application_company(application))[:40].strip("-") or "application"
+    role = slugify(application.posting.title or "")[:20].strip("-")
+    return _dedupe_slug(application.user, base, role)
 
 
 def link_for_application(application) -> PortfolioLink:
@@ -106,15 +132,56 @@ def freeze_link(application) -> None:
     link.save(update_fields=["content", "updated_at"])
 
 
-def get_owner() -> User | None:
-    """The public portfolio's owner — an explicit setting, never request-derived and
-    never the system sentinel. Case-insensitive: the `"Lukas"` default resolves the
-    `"lukas"` row (the shipped exact-match bug that 404'd every native call). None
-    (unset / sentinel / unknown / inactive) disables the native flow: callers 404."""
+def _configured_owner() -> User | None:
+    """The apex owner — the single configured user behind `BASE_DOMAIN` itself (the SEO
+    landing, and the fallback for request-less callers). Case-insensitive; never the system
+    sentinel; None when unset/unknown/inactive."""
     username = (settings.PORTFOLIO_OWNER_USERNAME or "").strip()
     if not username or username.lower() == settings.SYSTEM_USER_USERNAME.lower():
         return None
     return User.objects.filter(username__iexact=username, is_active=True).first()
+
+
+def owner_for_host(host: str) -> User | None:
+    """Resolve the portfolio owner from a raw Host header. `<handle>.<BASE_DOMAIN>` -> that
+    user; the bare `BASE_DOMAIN` (or `www.`) -> the configured apex owner; a reserved or
+    unknown subdomain / foreign host -> None (callers 404). Pure + unit-testable."""
+    host = (host or "").split(":")[0].lower().rstrip(".")
+    base = settings.BASE_DOMAIN.lower()
+    if host in (base, f"www.{base}"):
+        return _configured_owner()
+    suffix = f".{base}"
+    if not host.endswith(suffix):
+        return None
+    handle = host[: -len(suffix)]
+    if not handle or "." in handle or handle in settings.RESERVED_SUBDOMAINS:
+        return None
+    return User.objects.filter(profile__handle__iexact=handle, is_active=True).first()
+
+
+def resolve_owner(request) -> User | None:
+    """The public portfolio's owner for this request, from its Host header."""
+    return owner_for_host(request.get_host())
+
+
+def mint_handle(username: str) -> str:
+    """A DNS-safe, reserved-aware, unique handle seeded from a username."""
+    base = slugify(username)[:40].strip("-") or "user"
+    if base in settings.RESERVED_SUBDOMAINS:
+        base = f"{base}-1"
+    candidate, n = base, 2
+    while UserProfile.objects.filter(handle__iexact=candidate).exists():
+        suffix = f"-{n}"
+        candidate = f"{base[: 40 - len(suffix)]}{suffix}"
+        n += 1
+    return candidate
+
+
+def public_portfolio_url(link) -> str:
+    """The absolute public URL a QR encodes: the owner's origin + the link slug. Built from
+    `PORTFOLIO_ORIGIN_TEMPLATE` so the domain lives in exactly one env var."""
+    origin = settings.PORTFOLIO_ORIGIN_TEMPLATE.format(handle=link.user.profile.handle)
+    return f"{origin.rstrip('/')}/{link.slug}"
 
 
 def owner_domains(owner) -> list[str]:
@@ -562,13 +629,12 @@ def build_intro(
     ).write()
 
 
-def landing_context() -> dict:
-    """Context for the Django-rendered `/` landing. Owner block is None when the owner
-    setting is unset/unknown — the template falls back to a minimal page."""
-    owner = get_owner()
+def landing_context(request) -> dict:
+    """Context for the Django-rendered landing at the apex/handle host."""
+    owner = resolve_owner(request)
     return {
         "owner": _owner_block(owner) if owner else None,
         "domains": owner_domains(owner) if owner else [],
-        "explore_url": f"{settings.FRONTEND_URL}/me",
+        "explore_url": settings.FRONTEND_URL,  # guide 3: the handle-root questionnaire
         "signup_url": f"{settings.FRONTEND_URL}/auth/signup",
     }

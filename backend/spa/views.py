@@ -22,9 +22,9 @@ from spa.portfolio import (
     build_intro,
     build_payload,
     bump_visit,
-    get_owner,
     owner_domains,
     rank_for_query,
+    resolve_owner,
 )
 from spa.serializers import (
     PersonalityProfileSerializer,
@@ -118,7 +118,7 @@ class PersonalityQuestionListCreateView(generics.ListCreateAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        return PersonalityQuestion.objects.for_user(self.request.user)
+        return PersonalityQuestion.objects.for_user(self.request.user)  # type: ignore
 
 
 class PersonalityQuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -219,10 +219,13 @@ class PortfolioResolveView(PublicPortfolioAPIView):
     own link."""
 
     def get(self, request, slug):
+        owner = resolve_owner(request)
+        if owner is None:
+            raise Http404
         link = get_object_or_404(
-            PortfolioLink.objects.filter(revoked_at__isnull=True), slug=slug
+            PortfolioLink.objects.filter(revoked_at__isnull=True, user=owner), slug=slug
         )
-        if request.user.pk != link.user_id:
+        if request.user.pk != link.user_id:  # type: ignore
             bump_visit(link)
         return Response(build_payload(link.user, link=link))
 
@@ -233,7 +236,7 @@ class PortfolioNativeView(PublicPortfolioAPIView):
     menu. Stateless — bots create zero rows."""
 
     def get(self, request):
-        owner = get_owner()
+        owner = resolve_owner(request)
         if owner is None:
             raise Http404
         domains = [
@@ -260,15 +263,15 @@ class PortfolioRankView(PublicPortfolioAPIView):
     throttle_scope = "portfolio-rank"
 
     def post(self, request):
-        owner = get_owner()
+        owner = resolve_owner(request)
         if owner is None:
             raise Http404
         ser = PortfolioRankSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         ranked = rank_for_query(
             owner,
-            ser.validated_data["query"],
-            ser.validated_data.get("domains") or [],
+            ser.validated_data["query"],  # type: ignore
+            ser.validated_data.get("domains") or [],  # type: ignore
         )
         return Response({"ranked": ranked})
 
@@ -278,7 +281,7 @@ class PortfolioMetaView(PublicPortfolioAPIView):
     domains with content, so no branch dead-ends) plus the style-axis vocab."""
 
     def get(self, request):
-        owner = get_owner()
+        owner = resolve_owner(request)
         if owner is None:
             raise Http404
         return Response(
@@ -304,16 +307,16 @@ class PortfolioIntroView(PublicPortfolioAPIView):
     throttle_scope = "portfolio-intro"
 
     def post(self, request):
-        owner = get_owner()
+        owner = resolve_owner(request)
         if owner is None:
             raise Http404
         ser = PortfolioIntroSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         intro = build_intro(
             owner,
-            domains=ser.validated_data.get("domains") or [],
-            question=ser.validated_data.get("query") or "",
-            focus=ser.validated_data["focus"],
-            tone=ser.validated_data["tone"],
+            domains=ser.validated_data.get("domains") or [],  # type: ignore
+            question=ser.validated_data.get("query") or "",  # type: ignore
+            focus=ser.validated_data["focus"],  # type: ignore
+            tone=ser.validated_data["tone"],  # type: ignore
         )
         return Response({"intro": intro})

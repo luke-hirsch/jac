@@ -18,13 +18,17 @@ export default defineConfig({
     },
   },
   server: {
+    host: true, // listen on 0.0.0.0 so jane.localhost:5173 resolves
+    allowedHosts: [".localhost"],
     proxy: {
-      "/api": BACKEND,
-      "/_allauth": BACKEND,
-      "/admin": BACKEND,
-      "/media": BACKEND,
-      "/static": BACKEND,
-      "/ws": { target: BACKEND, ws: true },
+      // changeOrigin:false (the default) forwards the ORIGINAL Host to Django, so
+      // jane.localhost:5173 -> Django sees Host: jane.localhost:5173 -> owner = jane.
+      "/api": { target: BACKEND, changeOrigin: false },
+      "/_allauth": { target: BACKEND, changeOrigin: false },
+      "/admin": { target: BACKEND, changeOrigin: false },
+      "/media": { target: BACKEND, changeOrigin: false },
+      "/static": { target: BACKEND, changeOrigin: false },
+      "/ws": { target: BACKEND, ws: true, changeOrigin: false },
     },
   },
 });

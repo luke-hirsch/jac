@@ -1,6 +1,5 @@
 import re
 
-from django.conf import settings
 from django.db.models import Sum
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -20,7 +19,7 @@ def _unique_question_slug(user, prompt: str) -> str:
     system defaults) so a user's key can never collide with — and shadow — a default's."""
     base = slugify(prompt)[:40] or "question"
     taken = set(
-        PersonalityQuestion.objects.for_user(user).values_list("slug", flat=True)
+        PersonalityQuestion.objects.for_user(user).values_list("slug", flat=True)  # type: ignore
     )
     slug, n = base, 2
     while slug in taken:
@@ -126,7 +125,7 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
 
     def get_questions(self, obj):
         rows = sorted(
-            PersonalityQuestion.objects.for_user(obj.user),
+            PersonalityQuestion.objects.for_user(obj.user),  # type: ignore
             key=lambda q: (q.user_id == obj.user_id, q.order, q.pk),
         )
         return [
@@ -264,8 +263,8 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
 class PortfolioLinkSerializer(serializers.ModelSerializer):
     """Owner-side link CRUD. Manage-created links are always `manual` (kind/application
     are read-only — application links come from jac's portfolio-link action); `url` is
-    the absolute public URL the QR encodes, built from FRONTEND_URL so the frontend
-    never hardcodes the domain."""
+    the absolute public URL the QR encodes, built from the owner's handle via
+    PORTFOLIO_ORIGIN_TEMPLATE so the domain lives in exactly one env var."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     url = serializers.SerializerMethodField()
@@ -299,7 +298,9 @@ class PortfolioLinkSerializer(serializers.ModelSerializer):
         )
 
     def get_url(self, obj) -> str:
-        return f"{settings.FRONTEND_URL}/portfolio/{obj.slug}"
+        from spa.portfolio import public_portfolio_url
+
+        return public_portfolio_url(obj)
 
     def get_visits(self, obj) -> int:
         # Small owner lists — the per-row aggregate is fine; revisit if links grow.
@@ -309,6 +310,19 @@ class PortfolioLinkSerializer(serializers.ModelSerializer):
         slug = slugify(value)[:80]
         if not slug:
             raise serializers.ValidationError("Slug can't be empty.")
+        # Per-user active-slug uniqueness. The partial DB constraint
+        # (`unique_active_slug_per_user`) isn't enforced by DRF's auto-validators, so
+        # mirror it here on the *normalized* slug — the value that actually gets saved.
+        user = self.instance.user if self.instance else self.context["request"].user
+        clash = PortfolioLink.objects.filter(
+            user=user, slug=slug, revoked_at__isnull=True
+        )
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                "You already have an active portfolio with this slug."
+            )
         return slug
 
     def validate_content(self, value):

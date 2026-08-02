@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as MeRouteImport } from './routes/me'
 import { Route as ExploreRouteImport } from './routes/explore'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
@@ -44,6 +45,11 @@ import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authentic
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
 import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
 
+const MeRoute = MeRouteImport.update({
+  id: '/me',
+  path: '/me',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ExploreRoute = ExploreRouteImport.update({
   id: '/explore',
   path: '/explore',
@@ -233,6 +239,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
   '/explore': typeof ExploreRoute
+  '/me': typeof MeRoute
   '/account': typeof AuthenticatedAccountRouteWithChildren
   '/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/cv': typeof AuthenticatedCvRouteWithChildren
@@ -268,6 +275,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
   '/explore': typeof ExploreRoute
+  '/me': typeof MeRoute
   '/account': typeof AuthenticatedAccountRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
@@ -302,6 +310,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/auth': typeof AuthRouteWithChildren
   '/explore': typeof ExploreRoute
+  '/me': typeof MeRoute
   '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
   '/_authenticated/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/_authenticated/cv': typeof AuthenticatedCvRouteWithChildren
@@ -339,6 +348,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/explore'
+    | '/me'
     | '/account'
     | '/applications'
     | '/cv'
@@ -374,6 +384,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/explore'
+    | '/me'
     | '/account'
     | '/auth/login'
     | '/auth/mfa-challenge'
@@ -407,6 +418,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/auth'
     | '/explore'
+    | '/me'
     | '/_authenticated/account'
     | '/_authenticated/applications'
     | '/_authenticated/cv'
@@ -444,11 +456,19 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
   ExploreRoute: typeof ExploreRoute
+  MeRoute: typeof MeRoute
   PortfolioSlugRoute: typeof PortfolioSlugRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/me': {
+      id: '/me'
+      path: '/me'
+      fullPath: '/me'
+      preLoaderRoute: typeof MeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/explore': {
       id: '/explore'
       path: '/explore'
@@ -815,6 +835,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
   ExploreRoute: ExploreRoute,
+  MeRoute: MeRoute,
   PortfolioSlugRoute: PortfolioSlugRoute,
 }
 export const routeTree = rootRouteImport

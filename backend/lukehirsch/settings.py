@@ -1,3 +1,10 @@
+"""Django settings for the lukehirsch project.
+
+Section order, top to bottom:
+    Core · Security · Application · Database · Redis · Django misc ·
+    LLM · API · Auth · Email · Portfolio · Production guard
+"""
+
 import os
 from pathlib import Path
 
@@ -10,15 +17,20 @@ from lukehirsch.prod import (
     verify_production_secrets,
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Core: paths & environment
+# ─────────────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "localhost")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Security & secrets
+# ─────────────────────────────────────────────────────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", DEV_SECRET_KEY)
 
 DEBUG = env_bool("DEBUG", True)
 
-ALLOWED_HOSTS = [os.getenv("ALLOWED_HOST", "localhost")]
-
-SITE_ID = 1
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", [f".{BASE_DOMAIN}"])
 
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
@@ -27,11 +39,15 @@ SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = "Lax"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Application definition
+# ─────────────────────────────────────────────────────────────────────────────
+SITE_ID = 1
+
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
     "allauth.account.auth_backends.AuthenticationBackend",
 ]
-
 
 INSTALLED_APPS = [
     # asgi server for WebSockets
@@ -97,7 +113,9 @@ TEMPLATES = [
 WSGI_APPLICATION = "lukehirsch.wsgi.application"
 ASGI_APPLICATION = "lukehirsch.asgi.application"
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────────────────────────────────────────
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -115,7 +133,9 @@ DATABASES = {
     }
 }
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Redis: Channels, cache, Celery
+# ─────────────────────────────────────────────────────────────────────────────
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 CHANNEL_LAYERS = {
@@ -151,7 +171,9 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Django misc: passwords, i18n, static & media
+# ─────────────────────────────────────────────────────────────────────────────
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -167,7 +189,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 LANGUAGE_CODE = "en-us"
 
 TIME_ZONE = "UTC"
@@ -176,12 +197,13 @@ USE_I18N = True
 
 USE_TZ = True
 
-
 STATIC_URL = "static/"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM: HirschAI & connector
+# ─────────────────────────────────────────────────────────────────────────────
 HIRSCHAI = {
     "url": os.getenv("HIRSCHAI_URL", "http://localhost:11434"),
     "model": os.getenv("HIRSCHAI_MODEL", "qwen3.5:9b"),
@@ -192,7 +214,6 @@ HIRSCHAI = {
 
 LLM_LOGGING = True
 
-
 LLM_URL_ALLOWLIST = env_list(
     "LLM_URL_ALLOWLIST", ["localhost", "127.0.0.1", "::1"] if DEBUG else []
 )
@@ -202,16 +223,27 @@ LLM_ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", DEV_ENCRYPTION_KEY)
 
 VECTOR_STORE = os.getenv("VECTOR_STORE", "")
 
+# Owner of the system-owned rows (HirschAI LLMConfig, etc.).
 SYSTEM_USER_USERNAME = "system"
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+# ─────────────────────────────────────────────────────────────────────────────
+# API: frontend origin, CORS/CSRF, DRF, schema
+# ─────────────────────────────────────────────────────────────────────────────
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173" if DEBUG else f"https://app.{BASE_DOMAIN}",
+)
 
 # CORS — allow the React dev server to send credentialed requests
 CORS_ALLOWED_ORIGINS = [FRONTEND_URL]
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^http://[a-z0-9-]+\.localhost:5173$"]
 CORS_ALLOW_CREDENTIALS = True
 
 # CSRF — trust the frontend origin so the CSRF middleware accepts its requests
-CSRF_TRUSTED_ORIGINS = [FRONTEND_URL]
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    [FRONTEND_URL, f"https://*.{BASE_DOMAIN}"],
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -243,6 +275,9 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Auth: allauth & MFA
+# ─────────────────────────────────────────────────────────────────────────────
 # allauth account settings
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_LOGIN_METHODS = {"email"}
@@ -271,7 +306,9 @@ MFA_PASSKEY_SIGNUP_ENABLED = True
 # fido2 ≤1.1.3 does not treat localhost as a secure origin; set True for local dev only
 MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = DEBUG
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Email
+# ─────────────────────────────────────────────────────────────────────────────
 EMAIL_BACKEND = (
     "lukehirsch.debug_email_backends.ReadableConsoleEmailBackend"
     if DEBUG
@@ -285,11 +322,27 @@ EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@luke-hirsch.de")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SPA / portfolio
+# ─────────────────────────────────────────────────────────────────────────────
+PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "lukas")
+
+RESERVED_SUBDOMAINS = set(
+    env_list(
+        "RESERVED_SUBDOMAINS",
+        ["app", "api", "www", "admin", "static", "media", "mail", "ns", "ns1", "ns2"],
+    )
+)
+PORTFOLIO_ORIGIN_TEMPLATE = os.getenv(
+    "PORTFOLIO_ORIGIN_TEMPLATE",
+    "http://{handle}.localhost:5173" if DEBUG else f"https://{{handle}}.{BASE_DOMAIN}",
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Production guard — must run last
+# ─────────────────────────────────────────────────────────────────────────────
 verify_production_secrets(
     debug=DEBUG,
     secret_key=SECRET_KEY,
     encryption_key=LLM_ENCRYPTION_KEY,
 )
-
-
-PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "lukas")

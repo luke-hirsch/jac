@@ -10,9 +10,7 @@ from spa.portfolio import landing_context
 
 
 def landing(request):
-    # The site root is public + server-rendered (SEO front door / link-tree). The SPA
-    # owns /me and /portfolio/* (dev: Vite; prod: nginx routes / here, the rest to the SPA).
-    return render(request, "spa/landing.html", landing_context())
+    return render(request, "spa/landing.html", landing_context(request))
 
 
 def health(request):
