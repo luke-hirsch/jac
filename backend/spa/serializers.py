@@ -42,6 +42,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
     last_name = serializers.CharField(
         source="user.last_name", required=False, allow_blank=True, max_length=150
     )
+    # Explicit CharField overrides the model's SlugField auto-mapping: DRF would otherwise
+    # attach a slug-regex validator that 400s on free-form input ("Jane Doe") *before*
+    # validate_handle runs. We want the raw value to reach validate_handle and be slugified.
+    # Uniqueness is enforced there (case-insensitive), so no auto UniqueValidator either.
+    handle = serializers.CharField(max_length=100, required=False)
 
     class Meta:
         model = UserProfile
@@ -49,6 +54,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "username",
+            "handle",
             "email",
             "first_name",
             "last_name",
@@ -87,6 +93,22 @@ class UserProfileSerializer(serializers.ModelSerializer):
                 setattr(instance.user, attr, value)
             instance.user.save(update_fields=list(user_data))
         return super().update(instance, validated_data)
+
+    def validate_handle(self, value):
+        from django.conf import settings
+        from django.utils.text import slugify
+
+        handle = slugify(value)[:40].strip("-")
+        if len(handle) < 2:
+            raise serializers.ValidationError("Handle must be at least 2 characters.")
+        if handle in settings.RESERVED_SUBDOMAINS:
+            raise serializers.ValidationError("That handle is reserved.")
+        clash = UserProfile.objects.filter(handle__iexact=handle)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("That handle is already taken.")
+        return handle
 
 
 class PersonalityProfileSerializer(serializers.ModelSerializer):

@@ -25,8 +25,6 @@ from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from django.http import StreamingHttpResponse
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
-from llm_connector.conf import ExecutorError, default_executor, resolve_executor
-from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -35,8 +33,6 @@ from rest_framework.response import Response
 from rest_framework.settings import api_settings as drf_api_settings
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from spa.portfolio import freeze_link, link_for_application
-from spa.serializers import PortfolioLinkSerializer
 
 from jac.cv import CV
 from jac.llm_prompts import LetterChat, ParagraphRewrite
@@ -73,13 +69,17 @@ from jac.serializers import (
     SkillSerializer,
 )
 from jac.tasks import GENERATION_EXPIRES_S, generate_run, publish_event
+from llm_connector.conf import ExecutorError, default_executor, resolve_executor
+from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
+from spa.portfolio import freeze_link, link_for_application
+from spa.serializers import PortfolioLinkSerializer
 
 logger = logging.getLogger(__name__)
 
 
 def _enqueue_run(run: GenerationRun) -> None:
     """Queue the Celery task and remember its id (what cancel() revokes)."""
-    async_result = generate_run.apply_async(args=[run.pk], expires=GENERATION_EXPIRES_S)
+    async_result = generate_run.apply_async(args=[run.pk], expires=GENERATION_EXPIRES_S)  # type: ignore[no-untyped-call]
     run.task_id = async_result.id
     run.save(update_fields=["task_id"])
 
@@ -122,7 +122,7 @@ class BulkActionMixin:
 
         if op == "delete":
             with transaction.atomic():
-                count, _ = qs.delete()
+                _count, _ = qs.delete()  # type: ignore[unused-variable]
             return Response({"deleted": len(found)})
 
         if op == "patch_domains":
@@ -634,6 +634,12 @@ class GenerationRunViewSet(
         return GenerationRun.objects.filter(
             job_application__user=self.request.user
         ).select_related("job_application__posting")
+
+    def get_throttles(self):
+        if self.action == "create":
+            self.throttle_scope = "generation"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_serializer_class(self):
         if self.action == "create":

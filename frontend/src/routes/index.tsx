@@ -1,85 +1,73 @@
 import { useEffect, useState } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { z } from "zod";
 import { Questionnaire } from "@/components/portfolio/questionnaire";
-import { useAuth } from "@/lib/auth";
-import { readStamp, writeStamp, nativeStamp } from "@/lib/portfolio/stamp";
-import { Button } from "@/components/ui/button";
+import { ExploreResult } from "@/components/portfolio/explore-result";
+import { hasAnswer } from "@/lib/portfolio/questionnaire";
+import { appOrigin, siteHost } from "@/lib/host";
+import { nativeStamp, readStamp, writeStamp } from "@/lib/portfolio/stamp";
 
-export const Route = createFileRoute("/")({
-  component: Home,
+const exploreSearch = z.object({
+  d: z.array(z.string()).optional(),
+  lucky: z.boolean().optional(),
+  q: z.string().optional(),
+  focus: z.string().optional(),
+  tone: z.string().optional(),
 });
 
-function Home() {
-  const { status, isPending } = useAuth();
+export const Route = createFileRoute("/")({
+  validateSearch: exploreSearch,
+  head: () => ({ meta: [{ name: "robots", content: "noindex" }] }),
+  beforeLoad: () => {
+    const host = siteHost();
+    if (host.kind === "app") throw redirect({ to: "/applications" });
+    if (host.kind === "apex") {
+      // Dev only — prod apex is Django-rendered and never loads the SPA.
+      window.location.replace(appOrigin());
+      throw redirect({ to: "/" }); // unreachable; satisfies the type
+    }
+    // handle host → render the questionnaire/result below
+  },
+  component: HandleHome,
+});
+
+function HandleHome() {
+  const search = Route.useSearch();
   const navigate = useNavigate();
-  // Only render content once the stamp check has run — avoids a welcome-page flash
-  // before a stamped visitor is redirected.
   const [checked, setChecked] = useState(false);
 
+  // Return-visitor dispatch - Origin-scoped
+
   useEffect(() => {
-    if (isPending) return; // session unknown — authenticated users are never redirected
-    if (status !== "anonymous") {
+    // only when there's no answer in the URL yet
+    if (hasAnswer(search)) {
       setChecked(true);
       return;
     }
     const stamp = readStamp();
-    if (stamp?.kind === "link") {
-      navigate({
-        to: "/portfolio/$slug",
-        params: { slug: stamp.slug },
-        replace: true,
-      });
-    } else if (stamp?.kind === "native") {
-      navigate({ to: "/explore", search: stamp.search, replace: true });
+    if (
+      stamp?.kind === "link" //jumps to that slug
+    ) {
+      navigate({ to: "/$slug", params: { slug: stamp.slug }, replace: true });
+    } else if (
+      stamp?.kind === "native" &&
+      hasAnswer(stamp.search) //restores the result
+    ) {
+      navigate({ to: "/", search: stamp.search, replace: true });
     } else {
       setChecked(true);
     }
-  }, [isPending, status, navigate]);
+  }, [search, navigate]);
 
   if (!checked) return null;
+  if (hasAnswer(search)) return <ExploreResult search={search} />;
 
-  const authenticated = status === "authenticated";
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 text-center">
-      <div className="max-w-xl space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">
-          Welcome to my portfolio
-        </h1>
-        <p className="text-lg text-muted-foreground">
-          Tell me what you're here for and I'll show you the right side of me.
-        </p>
-      </div>
-
-      {authenticated ? (
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <Button asChild>
-            <Link to="/cv">Go to your CV</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link to="/account/profile">Profile</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link to="/explore" search={{}}>
-              Preview the public portfolio
-            </Link>
-          </Button>
-        </div>
-      ) : (
-        <>
-          <Questionnaire
-            onDone={(search) => {
-              writeStamp(nativeStamp(search));
-              navigate({ to: "/explore", search });
-            }}
-          />
-          <p className="text-sm text-muted-foreground">
-            Here for the CV tool?{" "}
-            <Link to="/auth/login" className="underline">
-              Sign in
-            </Link>
-          </p>
-        </>
-      )}
-    </main>
+    <Questionnaire
+      onDone={(s) => {
+        writeStamp(nativeStamp(s)); // written ONCE, at answer time
+        navigate({ to: "/", search: s });
+      }}
+    />
   );
 }

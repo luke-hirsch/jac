@@ -8,7 +8,7 @@ import {
   type ExportFormat,
   type ExportScope,
 } from "@/lib/export";
-import { PERSONAL_STUB } from "@/lib/letter-doc";
+import { LETTER_STUB } from "@/lib/letter-doc";
 import type { CvContent } from "@/lib/cv-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 
@@ -179,14 +179,16 @@ describe("exportJson", () => {
 });
 
 describe("exportBlocker (send-time stub safeguard)", () => {
-  const stubbed = `Intro.\n\n${PERSONAL_STUB}\n\nOutro.`;
+  // The gate fires on the hard failure marker (the writer produced nothing), not on
+  // the soft company stub — that one is stripped from the output at export time.
+  const stubbed = `Intro.\n\n${LETTER_STUB}\n\nOutro.`;
   const scopes: ExportScope[] = ["complete", "cv", "letter"];
   const formats: ExportFormat[] = ["pdf", "md", "json"];
 
-  it("blocks letter-bearing pdf/md exports while the stub is in the body", () => {
+  it("blocks letter-bearing pdf/md exports while the failure stub is in the body", () => {
     for (const scope of ["complete", "letter"] as ExportScope[]) {
       for (const format of ["pdf", "md"] as ExportFormat[]) {
-        expect(exportBlocker(scope, format, stubbed)).toMatch(/stub/);
+        expect(exportBlocker(scope, format, stubbed)).toMatch(/regenerate/i);
       }
     }
   });

@@ -1,10 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   toPayload,
-  aiShareBadge,
   groundingBadge,
   knobParams,
-  qualityBadge,
   isStalePending,
   pendingAgeSeconds,
   runReducer,
@@ -86,19 +84,6 @@ describe("result meta / cv row shapes (compile-time contract)", () => {
   });
 });
 
-describe("aiShareBadge", () => {
-  it("is green at or below 25%", () => {
-    expect(aiShareBadge(0.1).tone).toBe("green");
-    expect(aiShareBadge(0.25).tone).toBe("green");
-  });
-  it("is amber above 25%", () => {
-    expect(aiShareBadge(0.4).tone).toBe("amber");
-  });
-  it("labels a rounded percentage", () => {
-    expect(aiShareBadge(0.37).label).toBe("37% AI");
-  });
-});
-
 describe("groundingBadge", () => {
   it("muted when not checked (null)", () => {
     expect(groundingBadge({ count: null, claims: [] }).tone).toBe("muted");
@@ -125,32 +110,6 @@ describe("groundingBadge", () => {
     expect(
       groundingBadge({ count: 1, claims: ["a"], repaired: false }).label,
     ).toBe("1 claim");
-  });
-});
-
-describe("qualityBadge", () => {
-  // The critique is advisory (letter-quality phase): when the critic did not run
-  // there is nothing to say — no badge, unlike grounding's explicit "not checked".
-  it("hidden when the critic did not run", () => {
-    expect(qualityBadge(undefined)).toBeNull();
-    expect(qualityBadge({ count: null, claims: [] })).toBeNull();
-  });
-  it("green when the prose came back clean", () => {
-    expect(qualityBadge({ count: 0, claims: [] })).toEqual({
-      tone: "green",
-      label: "quality ok",
-    });
-  });
-  it("amber with a pluralised count and a repair suffix", () => {
-    expect(qualityBadge({ count: 1, claims: ["a"] })?.label).toBe("1 issue");
-    expect(
-      qualityBadge({ count: 2, claims: ["a", "b"], repaired: true })?.label,
-    ).toBe("2 issues · repaired");
-  });
-  it("a failed repair adds no suffix", () => {
-    expect(
-      qualityBadge({ count: 1, claims: ["a"], repaired: false })?.label,
-    ).toBe("1 issue");
   });
 });
 

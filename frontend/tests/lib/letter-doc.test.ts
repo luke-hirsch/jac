@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  PERSONAL_STUB,
-  appendParagraph,
+  COMPANY_STUB,
+  LETTER_STUB,
   contactLine,
   editableBody,
   emptyLetterMeta,
@@ -10,16 +10,18 @@ import {
   letterMetaFromResult,
   normalizeLetterMeta,
   replaceRange,
-  replaceStub,
   senderFromProfile,
+  stripSoftStub,
 } from "@/lib/letter-doc";
 import type { CoverLetterResult } from "@/lib/queries/generations";
 
 /**
  * Pure letter logic (guide [frontend]-letter-editor). The letter lives in two application
- * fields: `cover_letter` = editable body (woven snippets + personal paragraph or stub),
- * `letter_meta` = furniture (subject/salutation/date/closing/sender/recipient). The stub
- * marker must match backend jac/cover_letter.py PERSONAL_STUB byte for byte.
+ * fields: `cover_letter` = the editable body (the woven letter text — the backend folds any
+ * personal paragraph straight into it), `letter_meta` = furniture (subject/salutation/date/
+ * closing/sender/recipient). Two markers must match the backend (jac/cover_letter.py) byte for
+ * byte: LETTER_STUB (the writer produced nothing → blocks export) and COMPANY_STUB (the soft
+ * "why this company" placeholder → stripped from exports until filled).
  */
 
 const letter = {
@@ -31,8 +33,6 @@ const letter = {
   recipient: { company: "ACME", contact_name: "Jane Doe" },
   date: "2026-07-09",
   closing: "Mit freundlichen Grüßen,",
-  personal_paragraph: "",
-  personal_paragraph_is_stub: false,
 } as unknown as CoverLetterResult;
 
 describe("letterMetaFromResult", () => {
@@ -74,64 +74,38 @@ describe("normalizeLetterMeta", () => {
 });
 
 describe("editableBody", () => {
-  it("is the body alone when there is no personal paragraph", () => {
+  it("is the letter body verbatim — the backend already wove any personal paragraph in", () => {
     expect(editableBody(letter)).toBe("Ich baue Dinge.");
   });
 
-  it("opens with the personal paragraph (letter-quality: paragraph-as-opener)", () => {
-    expect(
-      editableBody({ ...letter, personal_paragraph: "Ich bewundere ACME." }),
-    ).toBe("Ich bewundere ACME.\n\nIch baue Dinge.");
-  });
-
-  it("keeps a stub paragraph loud, right at the top", () => {
-    expect(
-      editableBody({ ...letter, personal_paragraph: PERSONAL_STUB }).startsWith(
-        PERSONAL_STUB,
-      ),
-    ).toBe(true);
+  it("passes a failure stub straight through so the editor shows it loud", () => {
+    expect(editableBody({ ...letter, body: LETTER_STUB })).toBe(LETTER_STUB);
   });
 });
 
-describe("hasStub / replaceStub", () => {
-  const withStub = `Intro.\n\n${PERSONAL_STUB}\n\nOutro.`;
-
-  it("detects the marker", () => {
-    expect(hasStub(withStub)).toBe(true);
+describe("hasStub (export gate on the failure marker)", () => {
+  it("detects the failure stub and ignores a clean body", () => {
+    expect(hasStub(`Intro.\n\n${LETTER_STUB}\n\nOutro.`)).toBe(true);
     expect(hasStub("clean letter")).toBe(false);
   });
-
-  it("swaps the marker for the user's paragraph", () => {
-    expect(replaceStub(withStub, "My own words.")).toBe(
-      "Intro.\n\nMy own words.\n\nOutro.",
-    );
-  });
-
-  it("replaces every occurrence", () => {
-    const twice = `${PERSONAL_STUB}\n\n${PERSONAL_STUB}`;
-    const out = replaceStub(twice, "Once.");
-    expect(out).not.toContain(PERSONAL_STUB);
-    expect(out.match(/Once\./g)).toHaveLength(2);
-  });
-
-  it("an empty paragraph removes the stub and collapses its padding", () => {
-    expect(replaceStub(withStub, "  ")).toBe("Intro.\n\nOutro.");
-  });
 });
 
-describe("appendParagraph", () => {
-  it("appends as a new block, trimming trailing whitespace", () => {
-    expect(appendParagraph("Body.\n\n", "Snippet text.")).toBe(
-      "Body.\n\nSnippet text.",
+describe("stripSoftStub (drops the 'why this company' placeholder from exports)", () => {
+  it("removes the stub block and collapses its padding", () => {
+    expect(stripSoftStub(`Intro.\n\n${COMPANY_STUB}\n\nOutro.`)).toBe(
+      "Intro.\n\nOutro.",
     );
   });
 
-  it("starts the text when empty", () => {
-    expect(appendParagraph("", "Snippet text.")).toBe("Snippet text.");
+  it("removes every stub block", () => {
+    const twice = `${COMPANY_STUB}\n\nMiddle.\n\n${COMPANY_STUB}`;
+    const out = stripSoftStub(twice);
+    expect(out).not.toContain(COMPANY_STUB);
+    expect(out).toBe("Middle.");
   });
 
-  it("ignores blank paragraphs", () => {
-    expect(appendParagraph("Body.", "   ")).toBe("Body.");
+  it("leaves a clean body untouched (bar trimming)", () => {
+    expect(stripSoftStub("A finished letter.")).toBe("A finished letter.");
   });
 });
 

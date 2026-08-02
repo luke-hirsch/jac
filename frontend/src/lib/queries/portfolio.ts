@@ -57,6 +57,8 @@ export function useNativePortfolio(search: ExploreSearch) {
   const params = new URLSearchParams();
   if (search.d?.length) params.set("domains", search.d.join(","));
   if (search.lucky) params.set("lucky", "1");
+  if (search.focus) params.set("focus", search.focus);
+  if (search.tone) params.set("tone", search.tone);
   const qs = params.toString();
   return useQuery({
     queryKey: ["portfolio", "native", qs],
@@ -66,6 +68,48 @@ export function useNativePortfolio(search: ExploreSearch) {
   });
 }
 
+export type NativeMeta = {
+  domains: string[];
+  tones: { value: string; label: string }[];
+  focuses: { value: string; label: string }[];
+};
+
+export function useNativeMeta() {
+  return useQuery({
+    queryKey: ["portfolio", "meta"],
+    queryFn: () => api<NativeMeta>("/api/spa/portfolio/native/meta/"),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** The AI intro — POST but a read; skipped for lucky ("a reshuffle mustn't burn the
+ *  budget"); '' / failure degrades silently to no intro. */
+export function useNativeIntro(search: ExploreSearch) {
+  return useQuery({
+    queryKey: [
+      "portfolio",
+      "intro",
+      search.d ?? [],
+      search.q ?? "",
+      search.focus,
+      search.tone,
+    ],
+    queryFn: () =>
+      api<{ intro: string }>("/api/spa/portfolio/native/intro/", {
+        method: "POST",
+        body: JSON.stringify({
+          domains: search.d ?? [],
+          query: search.q ?? "",
+          focus: search.focus ?? "balanced",
+          tone: search.tone ?? "neutral",
+        }),
+      }),
+    enabled: !search.lucky,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
 /** Mirrors spa PortfolioLinkSerializer (owner-side). `content` is `{}` on a fresh
  *  application link (before the sent-freeze), so its keys are optional. */
 export type PortfolioLinkRow = {
@@ -199,7 +243,8 @@ export function useSaveBlock() {
       const body = image ? blockMultipart(input, image) : JSON.stringify(input);
       return api<PortfolioBlockRow>(url, { method, body });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
   });
 }
 
@@ -208,7 +253,8 @@ export function useDeleteBlock() {
   return useMutation({
     mutationFn: (id: number) =>
       api<void>(`${BLOCKS_URL}${id}/`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),
   });
 }
 

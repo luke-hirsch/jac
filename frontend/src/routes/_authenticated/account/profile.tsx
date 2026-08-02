@@ -26,6 +26,7 @@ import {
 type Profile = {
   id: number;
   username: string;
+  handle: string;
   first_name: string;
   last_name: string;
   display_name: string;
@@ -51,6 +52,7 @@ const schema = z.object({
   first_name: z.string().max(150),
   last_name: z.string().max(150),
   display_name: z.string().max(100),
+  handle: z.string().max(30),
   bio: z.string().max(500),
   phone: z.string().max(30),
   website: z.string().url().or(z.literal("")),
@@ -121,6 +123,7 @@ function ProfilePage() {
         contrast: p.contrast,
         email_reminders: p.email_reminders,
         show_socials: p.show_socials,
+        handle: p.handle,
       }}
       onSubmit={(v) =>
         patch
@@ -238,6 +241,33 @@ function ProfileForm({
         {text("last_name", "Last name")}
       </div>
       {text("display_name", "Display name")}
+      <form.Field name="handle">
+        {(field) => (
+          <div className="space-y-1">
+            <Label htmlFor={field.name}>Portfolio handle</Label>
+            <Input
+              id={field.name}
+              value={field.state.value}
+              onChange={(e) => field.handleChange(e.target.value)}
+              onBlur={() =>
+                save("handle", field.state.value, field.state.meta.errors)
+              }
+            />
+            <LineSaveHint s={fieldStates.handle} />
+            <p className="text-xs text-muted-foreground">
+              Your portfolio:{" "}
+              <code>
+                {field.state.value || "your-handle"}.
+                {import.meta.env.VITE_BASE_DOMAIN}
+              </code>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              You're building on Lukas's domain. jac is open source — you can
+              self-host or move to your own domain any time.
+            </p>
+          </div>
+        )}
+      </form.Field>
       {textarea("bio", "Bio")}
       {text("phone", "Phone")}
       {text("website", "Website", "url")}
@@ -386,7 +416,9 @@ function SignatureField({ initialUrl }: { initialUrl: string }) {
     const file = fileRef.current?.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      toast.error("Image files only — a transparent-background PNG works best.");
+      toast.error(
+        "Image files only — a transparent-background PNG works best.",
+      );
       return;
     }
     upload.mutate(file);
@@ -407,12 +439,7 @@ function SignatureField({ initialUrl }: { initialUrl: string }) {
         />
       ) : null}
       <div className="flex items-center gap-2">
-        <Input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="w-56"
-        />
+        <Input ref={fileRef} type="file" accept="image/*" className="w-56" />
         <Button
           type="button"
           size="sm"

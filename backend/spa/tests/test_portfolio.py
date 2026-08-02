@@ -10,6 +10,7 @@ LLM calls are always mocked (`spa.portfolio.complete`, `spa.portfolio.hirschai_r
 no live tower in tests, mirroring the rank discipline.
 """
 
+import json
 from datetime import date
 from unittest import mock
 
@@ -128,6 +129,58 @@ class MintHandleTests(TestCase):
     def test_collision_increments(self):
         _owner("lukas")  # the signal takes handle "lukas"
         self.assertEqual(mint_handle("lukas"), "lukas-2")
+
+
+class HandleClaimTests(TestCase):
+    """Authed `PATCH /api/spa/profile/` claiming a portfolio handle — the writable
+    `handle` field routed through `validate_handle` (normalize → reserved guard →
+    case-insensitive uniqueness → min length)."""
+
+    PROFILE_URL = "/api/spa/profile/"
+
+    def setUp(self):
+        self.user = _owner("claimer")  # the signal mints handle "claimer"
+        self.client.force_login(self.user)
+
+    def _patch(self, handle):
+        return self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"handle": handle}),
+            content_type="application/json",
+        )
+
+    def test_free_handle_is_normalized_and_saved(self):
+        # The headline promise: a display-name-shaped input becomes a slug. Requires the
+        # serializer CharField override — the model's SlugField would 400 on the space.
+        r = self._patch("Jane Doe")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["handle"], "jane-doe")
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.handle, "jane-doe")
+
+    @override_settings(RESERVED_SUBDOMAINS={"app"})
+    def test_reserved_handle_is_rejected(self):
+        r = self._patch("app")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("handle", r.json())
+
+    def test_handle_taken_by_another_user_is_rejected(self):
+        _owner("jane")  # the signal takes handle "jane"
+        r = self._patch("Jane")  # normalizes to "jane" → clash
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("handle", r.json())
+
+    def test_too_short_handle_is_rejected(self):
+        r = self._patch("a")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("handle", r.json())
+
+    def test_keeping_own_handle_is_allowed(self):
+        # Re-submitting the handle you already hold must not trip the uniqueness guard
+        # (the validator excludes self.instance).
+        r = self._patch("claimer")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["handle"], "claimer")
 
 
 class PerUserSlugTests(TestCase):

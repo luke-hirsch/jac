@@ -125,6 +125,11 @@ function Signup() {
               </div>
             )}
           </form.Field>
+          <p className="text-xs text-muted-foreground">
+            Signing up creates a portfolio at{" "}
+            <code>you.{import.meta.env.VITE_BASE_DOMAIN}</code>, hosted on
+            Lukas's domain. Open source — self-host any time.
+          </p>
           <Button type="submit" className="w-full" disabled={signup.isPending}>
             {signup.isPending ? "Creating…" : "Create account"}
           </Button>

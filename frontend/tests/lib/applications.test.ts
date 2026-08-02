@@ -20,9 +20,9 @@ describe("toApplicationPayload", () => {
 });
 
 describe("runToApplicationPatch", () => {
-  it("maps the run result onto cv_content + body-only letter + letter_meta", () => {
+  it("maps the run result onto cv_content + body-only letter + letter_meta + pins", () => {
     const result = {
-      meta: { grade: "light", alias: "default" },
+      meta: { mode: "standard", provider: "ollama", model: "" },
       cv: { skills: [{ id: "skill:1", label: "Python", relevance_score: 0.9 }] },
       cover_letter: {
         language: "en",
@@ -33,18 +33,16 @@ describe("runToApplicationPatch", () => {
         recipient: { company: "ACME" },
         date: "2026-07-09",
         closing: "Kind regards,",
-        personal_paragraph: "I admire ACME.",
         text: "…full furnished text (not what gets stored)…",
-        ai_share: 0.1,
       },
     } as unknown as TailoredResult;
 
     const patch = runToApplicationPatch(result);
     expect(patch).toEqual({
       cv_content: result.cv,
-      // The editable body: personal paragraph first (it opens the letter), then the
-      // letter body — never the furnished text.
-      cover_letter: "I admire ACME.\n\nI build things.",
+      // The editable body is the letter body verbatim — never the furnished `text`.
+      // Any personal paragraph is already woven into `body` by the backend.
+      cover_letter: "I build things.",
       letter_meta: {
         language: "en",
         subject: "Application for Dev",
@@ -54,6 +52,8 @@ describe("runToApplicationPatch", () => {
         sender: { name: "Ada" },
         recipient: { company: "ACME" },
       },
+      // No entry carried a pin, so nothing is force-kept for the next run.
+      pinned_entries: [],
     });
   });
 

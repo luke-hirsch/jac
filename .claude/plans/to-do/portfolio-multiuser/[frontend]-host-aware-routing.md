@@ -27,18 +27,18 @@ handle needs to go into the stamp.
 
 ## Affected files
 
-| File | Change |
-| --- | --- |
-| `frontend/src/lib/host.ts` | **New.** Pure host parsing: `parseHost`, `siteHost`, `appOrigin`, `currentHandle`. |
-| `frontend/src/routes/index.tsx` | **Rewrite.** Host-branch: handle→questionnaire/result, app→redirect home, apex→redirect app. Absorbs `/me` + `/explore`. |
-| `frontend/src/routes/$slug.tsx` | **New.** Portfolio view at the subdomain root (host-scoped resolve). |
-| `frontend/src/components/portfolio/explore-result.tsx` | **Fill** (currently empty): the native result view (ports `explore.tsx` + adds focus/tone + AI intro). |
-| `frontend/src/lib/portfolio/stamp.ts` | Native stamp carries `focus`/`tone`; drop the handle idea (origin-scoped). |
-| `frontend/src/lib/queries/portfolio.ts` | `useNativePortfolio` sends `focus`/`tone`; add `useNativeMeta` + `useNativeIntro`; `usePortfolioLink` unchanged (host-scoped server-side). |
-| `frontend/src/routes/explore.tsx`, `frontend/src/routes/me.tsx` | **Delete** (folded into `/`). |
-| `frontend/src/routes/auth.tsx`, `frontend/src/routes/_authenticated.tsx` | Optional guard: redirect to the app origin when not on the app host. |
-| `frontend/src/routes/portfolio.$slug.tsx` | Keep as an in-SPA alias of `$slug` (or delete + repoint callers). |
-| `frontend/.env` | `VITE_BASE_DOMAIN` (from guide 2). |
+| File                                                                     | Change                                                                                                                                     |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `frontend/src/lib/host.ts`                                               | **New.** Pure host parsing: `parseHost`, `siteHost`, `appOrigin`, `currentHandle`.                                                         |
+| `frontend/src/routes/index.tsx`                                          | **Rewrite.** Host-branch: handle→questionnaire/result, app→redirect home, apex→redirect app. Absorbs `/me` + `/explore`.                   |
+| `frontend/src/routes/$slug.tsx`                                          | **New.** Portfolio view at the subdomain root (host-scoped resolve).                                                                       |
+| `frontend/src/components/portfolio/explore-result.tsx`                   | **Fill** (currently empty): the native result view (ports `explore.tsx` + adds focus/tone + AI intro).                                     |
+| `frontend/src/lib/portfolio/stamp.ts`                                    | Native stamp carries `focus`/`tone`; drop the handle idea (origin-scoped).                                                                 |
+| `frontend/src/lib/queries/portfolio.ts`                                  | `useNativePortfolio` sends `focus`/`tone`; add `useNativeMeta` + `useNativeIntro`; `usePortfolioLink` unchanged (host-scoped server-side). |
+| `frontend/src/routes/explore.tsx`, `frontend/src/routes/me.tsx`          | **Delete** (folded into `/`).                                                                                                              |
+| `frontend/src/routes/auth.tsx`, `frontend/src/routes/_authenticated.tsx` | Optional guard: redirect to the app origin when not on the app host.                                                                       |
+| `frontend/src/routes/portfolio.$slug.tsx`                                | Keep as an in-SPA alias of `$slug` (or delete + repoint callers).                                                                          |
+| `frontend/.env`                                                          | `VITE_BASE_DOMAIN` (from guide 2).                                                                                                         |
 
 ---
 
@@ -54,7 +54,8 @@ export type SiteHost =
   | { kind: "app" }
   | { kind: "handle"; handle: string };
 
-const BASE = (import.meta.env.VITE_BASE_DOMAIN as string | undefined) ?? "localhost";
+const BASE =
+  (import.meta.env.VITE_BASE_DOMAIN as string | undefined) ?? "localhost";
 
 export function parseHost(hostname: string, base: string = BASE): SiteHost {
   const h = hostname.toLowerCase().replace(/\.$/, "");
@@ -281,7 +282,9 @@ export function ExploreResult({ search }: { search: ExploreSearch }) {
     : portfolio.data;
   return (
     <>
-      <EscapeHatch onShuffle={search.lucky ? () => portfolio.refetch() : undefined} />
+      <EscapeHatch
+        onShuffle={search.lucky ? () => portfolio.refetch() : undefined}
+      />
       {search.q && rank.isError ? (
         <p className="text-center text-xs text-muted-foreground pt-2">
           Couldn't rank by your interest just now — showing the natural order.
@@ -332,7 +335,14 @@ export function useNativeMeta() {
  *  budget"); '' / failure degrades silently to no intro. */
 export function useNativeIntro(search: ExploreSearch) {
   return useQuery({
-    queryKey: ["portfolio", "intro", search.d ?? [], search.q ?? "", search.focus, search.tone],
+    queryKey: [
+      "portfolio",
+      "intro",
+      search.d ?? [],
+      search.q ?? "",
+      search.focus,
+      search.tone,
+    ],
     queryFn: () =>
       api<{ intro: string }>("/api/spa/portfolio/native/intro/", {
         method: "POST",
@@ -370,7 +380,12 @@ const nativeSearchSchema = z.object({
 export function nativeStamp(search: ExploreSearch): Stamp {
   return {
     kind: "native",
-    search: { d: search.d, lucky: search.lucky, focus: search.focus, tone: search.tone },
+    search: {
+      d: search.d,
+      lucky: search.lucky,
+      focus: search.focus,
+      tone: search.tone,
+    },
   };
 }
 ```
@@ -382,10 +397,10 @@ existing session logic): if `siteHost().kind !== "app"`, bounce to the app origi
 always happens where the session cookie lives:
 
 ```ts
-    if (siteHost().kind !== "app") {
-      window.location.replace(appOrigin() + location.pathname);
-      throw redirect({ to: "/" });
-    }
+if (siteHost().kind !== "app") {
+  window.location.replace(appOrigin() + location.pathname);
+  throw redirect({ to: "/" });
+}
 ```
 
 Nice-to-have; skip if it fights the existing `_authenticated` guard, and revisit.
@@ -418,4 +433,6 @@ Run: `cd frontend && npx vitest run tests/host.test.ts`
 
 ## Results
 
-_(human fills after testing)_
+- sitehost guards in auth.tsx and \_authenticated.tsx are implemented
+
+Side note: a lot of test fail in the frontend test suite.

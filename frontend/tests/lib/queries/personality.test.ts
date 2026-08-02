@@ -112,9 +112,9 @@ describe("personalityHint", () => {
     expect(personalityHint(false, row())).toBeNull();
     expect(personalityHint(true, undefined)).toBeNull();
   });
-  it("nags when ticked with zero answers — a stub is guaranteed", () => {
+  it("nags when ticked with zero answers — the letter can't reflect them", () => {
     const hint = personalityHint(true, row());
-    expect(hint).toMatch(/stub/i);
+    expect(hint).toMatch(/reflect who you are/i);
     expect(hint).toMatch(/questionnaire/i);
   });
   it("silent once any answer exists", () => {

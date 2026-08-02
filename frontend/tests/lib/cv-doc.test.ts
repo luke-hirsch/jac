@@ -271,14 +271,16 @@ describe("missingEntries", () => {
 });
 
 describe("addEntry", () => {
-  it("appends at the tail with a built label and no score", () => {
+  it("appends at the tail with a built label, no score, pinned by hand", () => {
     const c = removeEntry(content(), "jobs", 0); // drop job:12, then re-add it
     const added = addEntry(c, "jobs", job);
     expect(added.jobs.map((e) => e.id)).toEqual(["job:99", "job:12"]);
+    // A hand-added entry is pinned so the next run's selection can't silently drop it.
     expect(added.jobs[1]).toEqual({
       id: "job:12",
       label: "Senior Dev at ACME (Jan 2021 – present)",
       relevance_score: null,
+      pinned: true,
     });
   });
 

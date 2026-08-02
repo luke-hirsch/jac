@@ -261,10 +261,11 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
-        "llm-chat": "20/min",
-        "portfolio": "60/hour",
-        "portfolio-rank": "6/hour",
-        "portfolio-intro": "6/hour",
+        "llm-chat": os.getenv("LLM_CHAT_RATE", "20/min"),
+        "portfolio": os.getenv("PORTFOLIO_RATE", "60/hour"),
+        "portfolio-rank": os.getenv("PORTFOLIO_RANK_RATE", "6/hour"),
+        "portfolio-intro": os.getenv("PORTFOLIO_INTRO_RATE", "6/hour"),
+        "generation": os.getenv("GENERATION_RATE", "20/day"),
     },
 }
 
@@ -286,7 +287,7 @@ ACCOUNT_EMAIL_VERIFICATION_BY_CODE_ENABLED = True
 ACCOUNT_RATE_LIMITS = {
     "reset_password": "20/m/ip,5/m/key,3/h/key,5/d/key",
 }
-ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", False)
+ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", True)
 
 # Custom adapter dedupes 'account already exists' mails per address;
 ACCOUNT_ADAPTER = "lukehirsch.adapter.HarassmentResistantAccountAdapter"

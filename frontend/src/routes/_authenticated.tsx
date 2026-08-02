@@ -7,11 +7,21 @@ import {
   useNavigate,
 } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
-import { fetchSession, signOut, useAuth, useInvalidateSession } from "@/lib/auth";
+import {
+  fetchSession,
+  signOut,
+  useAuth,
+  useInvalidateSession,
+} from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { appOrigin, siteHost } from "@/lib/host";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ location }) => {
+    if (siteHost().kind !== "app") {
+      window.location.replace(appOrigin() + location.pathname);
+      throw redirect({ to: "/" });
+    }
     try {
       const s = await fetchSession();
       if (s.meta?.is_authenticated) return;
