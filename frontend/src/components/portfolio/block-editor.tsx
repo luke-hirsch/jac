@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ContentPicker } from "@/components/portfolio/content-picker";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,7 @@ function draftFrom(block: PortfolioBlockRow | null): Draft {
     body: block?.body ?? "",
     alt_text: block?.alt_text ?? "",
     domains: block?.domains ?? [],
+    links: block?.links ?? [],
     favourite: block?.favourite ?? false,
     order: block?.order ?? 0,
     is_active: block?.is_active ?? true,
@@ -187,7 +189,13 @@ export function BlockEditor({
               ))}
             </div>
           </div>
-
+          <div className="grid gap-2">
+            <Label>Linked content (shown nested under this block)</Label>
+            <ContentPicker
+              selected={draft.links}
+              onChange={(l) => set("links", l)}
+            />
+          </div>
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 text-sm">
               <Checkbox

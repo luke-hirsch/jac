@@ -30,6 +30,7 @@ def _unique_question_slug(user, prompt: str) -> str:
 FEATURED_ID_RE = re.compile(
     r"^(skill|job|education|certification|project|language|block):\d+$"
 )
+MAX_BLOCK_LINKS = 50
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -235,6 +236,7 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
     never calls full_clean."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    links = serializers.ListField(child=serializers.CharField(), required=False)
 
     class Meta:
         model = PortfolioBlock
@@ -247,6 +249,7 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
             "image",
             "alt_text",
             "domains",
+            "links",
             "favourite",
             "order",
             "is_active",
@@ -280,6 +283,20 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
         if kind == PortfolioBlock.Kind.text and not (body or "").strip():
             raise serializers.ValidationError({"body": "A text block needs a body."})
         return attrs
+
+    def validate_links(self, value):
+        """Grammar-only (like `content.featured`): '<type>:<pk>' ids, order-preserving
+        dedupe, capped. Existence is NOT checked — dead ids drop at resolve time."""
+        seen, out = set(), []
+        for i in value:
+            if not FEATURED_ID_RE.match(i):
+                raise serializers.ValidationError(
+                    "links must be a list of '<type>:<pk>' ids."
+                )
+            if i not in seen:
+                seen.add(i)
+                out.append(i)
+        return out[:MAX_BLOCK_LINKS]
 
 
 class PortfolioLinkSerializer(serializers.ModelSerializer):

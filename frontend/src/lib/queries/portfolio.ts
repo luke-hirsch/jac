@@ -25,6 +25,7 @@ export type PortfolioItem = {
   body?: string;
   image_url?: string | null;
   alt_text?: string;
+  links?: PortfolioItem[];
 };
 
 export type PortfolioPayload = {
@@ -174,6 +175,7 @@ export type PortfolioBlockRow = {
   image: string | null;
   alt_text: string;
   domains: number[];
+  links: string[];
   favourite: boolean;
   order: number;
   is_active: boolean;
@@ -186,6 +188,7 @@ export type BlockInput = {
   body: string;
   alt_text: string;
   domains: number[];
+  links: string[];
   favourite: boolean;
   order: number;
   is_active: boolean;
@@ -217,6 +220,7 @@ function blockMultipart(input: BlockInput, image: File): FormData {
   fd.set("order", String(input.order));
   fd.set("is_active", String(input.is_active));
   for (const d of input.domains) fd.append("domains", String(d));
+  for (const l of input.links) fd.append("links", l);
   fd.set("image", image);
   return fd;
 }

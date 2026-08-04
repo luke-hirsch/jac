@@ -241,6 +241,7 @@ class PortfolioBlock(models.Model):
     domains = models.ManyToManyField(
         "jac.Domain", blank=True, related_name="portfolio_blocks"
     )
+    links = models.JSONField(default=list, blank=True)
     favourite = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)

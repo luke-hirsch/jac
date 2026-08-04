@@ -289,8 +289,8 @@ def _career_item(type_name: str, obj) -> dict:
     return item
 
 
-def _block_item(block: PortfolioBlock) -> dict:
-    return {
+def _block_item(block: PortfolioBlock, *, nest: bool = True) -> dict:
+    item = {
         "id": f"block:{block.pk}",
         "type": "block",
         "kind": block.kind,
@@ -300,7 +300,12 @@ def _block_item(block: PortfolioBlock) -> dict:
         "image_url": block.image.url if block.image else None,
         "alt_text": block.alt_text,
         "domains": sorted(d.name for d in block.domains.all()),
+        "links": [],
     }
+    if nest and block.links:
+        ids = [i for i in block.links if i != item["id"]]
+        item["links"] = resolve_items(block.user, ids, nest=False)
+    return item
 
 
 def _matched_domains(owner, names: list[str]) -> list:
@@ -314,7 +319,7 @@ def _matched_domains(owner, names: list[str]) -> list:
     return [d for d in Domain.objects.for_user(owner) if d.name.lower() in lowered]
 
 
-def resolve_items(owner, ids: list[str]) -> list[dict]:
+def resolve_items(owner, ids: list[str], nest: bool = True) -> list[dict]:
     """Join featured ids against the live DB, preserving order. Dead / foreign /
     malformed ids drop silently (the cv-doc philosophy: selection frozen, text live)."""
     wanted: dict[str, list[int]] = {}
@@ -329,7 +334,7 @@ def resolve_items(owner, ids: list[str]) -> list[dict]:
             rows = PortfolioBlock.objects.filter(
                 user=owner, is_active=True, pk__in=pks
             ).prefetch_related("domains")
-            found.update({f"block:{b.pk}": _block_item(b) for b in rows})
+            found.update({f"block:{b.pk}": _block_item(b, nest=nest) for b in rows})
         elif t in models_map:
             qs = models_map[t].objects.filter(user=owner, pk__in=pks)
             if t != "language":
@@ -407,6 +412,22 @@ def _owner_block(owner) -> dict:
     return block
 
 
+def _claimed_ids(items: list[dict]) -> set[str]:
+    """Ids nested under any block in `items` (one level)."""
+    out: set[str] = set()
+    for it in items:
+        if it.get("type") == "block":
+            out.update(sub["id"] for sub in it.get("links", []))
+    return out
+
+
+def _drop_claimed(featured: list[dict], more: list[dict]) -> list[dict]:
+    """Career items nested under a rendered block don't also float loose in `more`;
+    blocks always keep their own slot. `featured` (owner-curated) is left untouched."""
+    claimed = _claimed_ids(featured) | _claimed_ids(more)
+    return [i for i in more if i["type"] == "block" or i["id"] not in claimed]
+
+
 def build_payload(
     owner,
     link=None,
@@ -450,6 +471,7 @@ def build_payload(
             else:
                 more = _entries(owner, favourite=True, exclude_ids=exclude)
                 more += _blocks(owner, exclude_ids=exclude)
+        more = _drop_claimed(featured, more)
         return {
             "kind": link.kind,
             "title": link.title,
@@ -484,11 +506,10 @@ def build_payload(
         default = default_link(owner)
         if default is not None:
             payload = build_payload(owner, link=default)
-            payload["kind"] = (
-                "native"  # rendered via the native flow, not a shared link
-            )
+            payload["kind"] = "native"
             return payload
 
+    more = _drop_claimed(featured, more)
     return {
         "kind": "native",
         "title": "",

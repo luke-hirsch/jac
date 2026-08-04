@@ -8,6 +8,20 @@ function dates(item: PortfolioItem): string {
   const to = item.ended ? item.ended.slice(0, 4) : "today";
   return from ? `${from} – ${to}` : "";
 }
+function LinkedItems({ items }: { items: PortfolioItem[] }) {
+  return (
+    <div className="mt-2 space-y-1 border-l-2 pl-3">
+      {items.map((li) => (
+        <div key={li.id} className="text-sm">
+          <span className="font-medium">{li.title}</span>
+          {li.subtitle ? (
+            <span className="text-muted-foreground"> · {li.subtitle}</span>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function ItemCard({ item }: { item: PortfolioItem }) {
   if (item.type === "block" && item.kind === "image") {
@@ -26,6 +40,7 @@ export function ItemCard({ item }: { item: PortfolioItem }) {
             {item.body ? (
               <p className="text-sm text-muted-foreground">{item.body}</p>
             ) : null}
+            {item.links?.length ? <LinkedItems items={item.links} /> : null}
           </CardContent>
         ) : null}
       </Card>
@@ -70,6 +85,7 @@ export function ItemCard({ item }: { item: PortfolioItem }) {
             ))}
           </div>
         )}
+        {item.links?.length ? <LinkedItems items={item.links} /> : null}
       </CardContent>
     </Card>
   );

@@ -435,7 +435,7 @@ function SignatureField({ initialUrl }: { initialUrl: string }) {
         <img
           src={url}
           alt="Your signature"
-          className="h-16 max-w-[240px] object-contain"
+          className="h-16 max-w-60 object-contain"
         />
       ) : null}
       <div className="flex items-center gap-2">
