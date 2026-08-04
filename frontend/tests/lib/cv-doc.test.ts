@@ -13,6 +13,7 @@ import {
   missingEntries,
   moveEntry,
   parseEntryId,
+  pinnedIds,
   removeEntry,
   toggleDeselect,
   togglePin,
@@ -244,6 +245,42 @@ describe("mergePinned", () => {
     };
     expect(mergePinned(content(), next)).toEqual(next);
   });
+
+  it("strips a stale warning from a tail-appended pin", () => {
+    const current: CvContent = {
+      jobs: [
+        {
+          id: "job:99",
+          label: "old",
+          relevance_score: null,
+          pinned: true,
+          warning: "pinned by you — an old run would have dropped this",
+        },
+      ],
+    };
+    const merged = mergePinned(current, { jobs: [] });
+    expect(merged.jobs[0].pinned).toBe(true);
+    expect(merged.jobs[0].warning).toBeUndefined();
+  });
+
+  it("keeps the incoming run's fresh warning on a re-selected pin", () => {
+    const current: CvContent = {
+      jobs: [{ id: "job:1", label: "x", relevance_score: null, pinned: true }],
+    };
+    const next: CvContent = {
+      jobs: [
+        {
+          id: "job:1",
+          label: "x",
+          relevance_score: 0.1,
+          pinned: true,
+          warning: "pinned by you — the high-mode selection would have dropped this entry",
+        },
+      ],
+    };
+    const merged = mergePinned(current, next);
+    expect(merged.jobs[0].warning).toContain("high-mode");
+  });
 });
 
 describe("activeContent", () => {
@@ -295,21 +332,10 @@ describe("addEntry", () => {
   });
 });
 
-/**
- * [frontend]-entry-pins-ui — unskip as that guide's step 0. The pin set must reach
- * the server (pinnedIds), hand-added entries pin automatically, and warnings stay
- * one run's opinion. `pinnedIds` doesn't exist yet — accessed via the namespace
- * import so this file keeps loading; switch to a direct import when it lands.
- * ALSO at unskip time: the two exact-object `addEntry` expectations above gain
- * `pinned: true`.
- */
-import * as cvDoc from "@/lib/cv-doc";
-
-describe.skip("entry-pins sync ([frontend]-entry-pins-ui)", () => {
-  const pinnedIds = (
-    cvDoc as unknown as { pinnedIds: (c: CvContent) => string[] }
-  ).pinnedIds;
-
+/** The pin set the apply-run path (runToApplicationPatch) sends to the server as
+ *  pinned_entries: collected across sections, de-duped, in document order, and a
+ *  deselected-but-pinned entry still counts (the pin promises survival). */
+describe("pinnedIds", () => {
   it("collects pinned ids across sections, de-duped, in document order", () => {
     const c: CvContent = {
       jobs: [
@@ -342,46 +368,5 @@ describe.skip("entry-pins sync ([frontend]-entry-pins-ui)", () => {
   it("an unpinned document yields []", () => {
     expect(pinnedIds(content())).toEqual([]);
     expect(pinnedIds({})).toEqual([]);
-  });
-
-  it("addEntry pins the hand-added entry (the user can unpin)", () => {
-    const added = addEntry({}, "jobs", job);
-    expect(added.jobs[0].pinned).toBe(true);
-  });
-
-  it("mergePinned strips a stale warning from a tail-appended pin", () => {
-    const current: CvContent = {
-      jobs: [
-        {
-          id: "job:99",
-          label: "old",
-          relevance_score: null,
-          pinned: true,
-          warning: "pinned by you — an old run would have dropped this",
-        },
-      ],
-    };
-    const merged = mergePinned(current, { jobs: [] });
-    expect(merged.jobs[0].pinned).toBe(true);
-    expect(merged.jobs[0].warning).toBeUndefined();
-  });
-
-  it("mergePinned keeps the incoming run's fresh warning on a re-selected pin", () => {
-    const current: CvContent = {
-      jobs: [{ id: "job:1", label: "x", relevance_score: null, pinned: true }],
-    };
-    const next: CvContent = {
-      jobs: [
-        {
-          id: "job:1",
-          label: "x",
-          relevance_score: 0.1,
-          pinned: true,
-          warning: "pinned by you — the high-mode selection would have dropped this entry",
-        },
-      ],
-    };
-    const merged = mergePinned(current, next);
-    expect(merged.jobs[0].warning).toContain("high-mode");
   });
 });

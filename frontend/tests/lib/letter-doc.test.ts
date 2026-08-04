@@ -230,12 +230,11 @@ describe("contactLine (CV contact header)", () => {
 });
 
 /**
- * [frontend]-manual-no-run-mode — unskip as that guide's step 0. A hand-curated
- * application has no run to bring furniture, so the fallback language must come
- * from the POSTING, not blanket "en". Red once unskipped: today the extra
- * argument is silently ignored.
+ * Manual mode: a hand-curated application has no run to bring furniture, so
+ * emptyLetterMeta / normalizeLetterMeta take the POSTING language as the fallback
+ * (not a blanket "en"); a stored language still wins over it.
  */
-describe.skip("manual-mode letter furniture ([frontend]-manual-no-run-mode)", () => {
+describe("letter-meta posting-language fallback", () => {
   it("emptyLetterMeta takes the posting language", () => {
     expect(emptyLetterMeta("de").language).toBe("de");
     expect(emptyLetterMeta().language).toBe("en");

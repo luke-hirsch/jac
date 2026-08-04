@@ -59,7 +59,7 @@ describe("runToApplicationPatch", () => {
 
   it("carries pinned entries from the current cv_content into the new result", () => {
     const result = {
-      meta: { grade: "light", alias: "default" },
+      meta: { mode: "standard", provider: "ollama", model: "" },
       cv: { jobs: [{ id: "job:1", label: "kept", relevance_score: 0.8 }] },
       cover_letter: {
         language: "en",
@@ -91,60 +91,33 @@ describe("runToApplicationPatch", () => {
       ],
     });
   });
-});
 
-/**
- * [frontend]-entry-pins-ui — unskip as that guide's step 0: the apply PATCH must
- * carry the pin set the merged document implies, or the next run force-keeps
- * nothing server-side.
- */
-describe.skip("pin sync on apply ([frontend]-entry-pins-ui)", () => {
-  it("runToApplicationPatch derives pinned_entries from the merged doc", () => {
-    const result = {
-      meta: { mode: "standard", provider: "ollama", model: "" },
-      cv: {
-        jobs: [{ id: "job:1", label: "kept", relevance_score: 0.9 }],
-      },
-      cover_letter: {
-        language: "en",
-        subject: "s",
-        salutation: "Dear",
-        body: "Body.",
-        sender: {},
-        recipient: {},
-        date: "2026-07-18",
-        closing: "Best,",
-        personal_paragraph: "",
-        personal_paragraph_is_stub: false,
-      },
-    } as unknown as Parameters<typeof runToApplicationPatch>[0];
-    const current = {
-      jobs: [{ id: "job:99", label: "mine", relevance_score: null, pinned: true }],
-    };
-    const patch = runToApplicationPatch(result, current) as {
-      pinned_entries?: string[];
-    };
-    expect(patch.pinned_entries).toEqual(["job:99"]);
-  });
-
-  it("no pins → an empty pin set travels (clears stale server pins)", () => {
+  // The empty-pin case is asserted above (pinned_entries: []); here the non-empty
+  // pin set derived from the merged doc must travel, or the next run force-keeps
+  // nothing server-side.
+  it("derives pinned_entries from the merged doc (non-empty pin set travels)", () => {
     const result = {
       meta: { mode: "standard", provider: "ollama", model: "" },
       cv: { jobs: [{ id: "job:1", label: "kept", relevance_score: 0.9 }] },
       cover_letter: {
         language: "en",
-        subject: "",
-        salutation: "",
-        body: "Body.",
+        subject: "s",
+        salutation: "Dear,",
+        body: "b",
         sender: {},
         recipient: {},
-        date: "",
-        closing: "",
+        date: "2026-07-18",
+        closing: "Best,",
         personal_paragraph: "",
-        personal_paragraph_is_stub: false,
+        text: "…",
+        ai_share: 0,
       },
-    } as unknown as Parameters<typeof runToApplicationPatch>[0];
-    const patch = runToApplicationPatch(result) as { pinned_entries?: string[] };
-    expect(patch.pinned_entries).toEqual([]);
+    } as unknown as TailoredResult;
+    const current = {
+      jobs: [{ id: "job:99", label: "mine", relevance_score: null, pinned: true }],
+    };
+    expect(runToApplicationPatch(result, current).pinned_entries).toEqual([
+      "job:99",
+    ]);
   });
 });
