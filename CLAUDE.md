@@ -110,9 +110,8 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   `letter-editor` / `export-card` + a `use-run-lifecycle` hook (reducer + WS + snapshot seed +
   clock + abort); route file is ~70 lines of orchestration. Convention: feature components in
   `src/components/<feature>/`, page hooks live beside them (`lib/queries/` stays toast-free).
-- **portfolio — per-visitor rendering + multi-user hosting** (landed on `portfolio-flow-rework`,
-  **not yet on `main`** — every portfolio phase lives on the branch). Owner is resolved from the
-  **request host** (`<handle>.<BASE_DOMAIN>` → that user; apex → the configured owner): one SPA
+- **portfolio — per-visitor rendering + multi-user hosting** (**on `main`**). Owner is resolved from
+  the **request host** (`<handle>.<BASE_DOMAIN>` → that user; apex → the configured owner): one SPA
   build serves apex / `app.` / `<handle>.`, and per-origin localStorage keeps each owner's visitor
   separate (no handle in the stamp). Anonymous flow = a **flat-form questionnaire** (real domains
   from `/native/meta/` + a technical↔soft / personal↔formal style axis reusing the
@@ -124,6 +123,14 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   (`ACCOUNT_ALLOW_SIGNUPS`) with a soft per-user daily generation cap. Two env knobs move the whole
   thing to a neutral domain (`BASE_DOMAIN` + `PORTFOLIO_ORIGIN_TEMPLATE`). Unit tests green both
   sides; **live/prod verification pending**. See [[portfolio-multiuser]].
+- **portfolio owner-side authoring — creator UX + block links** (implemented, both guides still in
+  `to-do/` pending their Results runs). Owner-side: a reworked create form + a reusable
+  `ContentPicker` (`components/portfolio/content-picker.tsx`). Data side: `PortfolioBlock.links`, a
+  JSON ordered `type:pk` id-list (the `content.featured` grammar reused — no FK, dead ids drop at
+  resolve), resolved **one level deep, self-excluded** and rendered nested beneath the block; a
+  career entry claimed by a rendered block no longer floats loose in `more` (`featured` untouched).
+  Nested titles hyperlink **on-page-first** (anchor to the item's own card), else out to the entry
+  url. See [[portfolio-block-links]].
 
 # roadmap
 
@@ -131,27 +138,34 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
+1. **signup default regression** (one line, do it first) — `settings.py:290` reads
+   `env_bool("ACCOUNT_ALLOW_SIGNUPS", True)`; it must be `False` (flipped in `78c2d4c` during dev
+   click-testing). Today's dev server has signup open to anyone who can reach it, and the two red
+   `spa.tests.test_auth.SignupGateTests` are the guard reporting it — not stale tests. Open signup is
+   an **env** flag in prod/stage, never a code default. See [[public-site-posture]].
+2. **portfolio creator UX + block links — verification** — both guides sit in `to-do/` with the code
+   implemented: guide 1 (`[frontend]-portfolio-creator-ux`) has an empty Results chapter, guide 2
+   (`[fullstack]-block-links`) has one bug fixed (a stray line in a test) plus the unrun §7 hyperlink
+   follow-up (branch `fullstack/block-links-hyperlinks`, verification steps 7–11).
+3. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
    response, so a spurious small-model refusal ("I can't assist…") can become the letter body.
-2. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
+4. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
    (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
-3. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
+5. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
    per-model pricing metadata in the model catalog (see `[fullstack]-model-knobs`).
 
-> **Portfolio generator (roadmap #1) — landed 2026-08-02 on `portfolio-flow-rework`, NOT yet
-> merged to `main`.** Six guides across `portfolio-rework` (flow rework: owner-fix + dynamic
-> flat-form questionnaire + AI intro + Django landing) and `portfolio-multiuser` (host-based owner
-> resolution, wildcard subdomain hosting, host-aware SPA routing, open signup) now sit in
-> `done/portfolio/`. Unit tests green both sides (11 frontend skips are the dormant executor-rework
-> SPA-phase guides, unrelated). **Remaining is live/prod only** — the Results chapters don't yet log
-> it: wildcard DNS + DNS-01 wildcard TLS + the nginx apex/`app.`/`*.` host-split deploy, flipping
-> `ACCOUNT_ALLOW_SIGNUPS=true` at launch, and the manual multi-owner + live-AI-intro (tower up) +
-> signup click-through. main is a strict ancestor of the branch, so the merge is conflict-free
-> whenever Lukas chooses to integrate. See [[portfolio-multiuser]].
+> **Portfolio generator — merged to `main`; six guides in `done/portfolio/`.** Flow rework
+> (owner-fix + dynamic flat-form questionnaire + AI intro + Django landing) and multiuser (host-based
+> owner resolution, wildcard subdomain hosting, host-aware SPA routing, open signup). Unit tests
+> green both sides (11 frontend skips are the dormant executor-rework SPA-phase guides, unrelated).
+> **Remaining is live/prod only** — the Results chapters don't log it: wildcard DNS + DNS-01 wildcard
+> TLS + the nginx apex/`app.`/`*.` host-split deploy, flipping `ACCOUNT_ALLOW_SIGNUPS=true` **in the
+> prod env** at launch (see roadmap #1 — the code default must go back to `False`), and the manual
+> multi-owner + live-AI-intro (tower up) + signup click-through. See [[portfolio-multiuser]].
 
 > **Single-executor redesign — backend landed (`456a72f`…`f738eaf`; rework guides 1–3 in
 > `done/`, Results chapters not yet logged).** A run touches exactly one executor: **HirschAI**

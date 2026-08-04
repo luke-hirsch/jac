@@ -45,6 +45,9 @@ their own slot). The explicitly-curated `featured` list is left exactly as the o
 | `frontend/src/components/portfolio/block-editor.tsx` | a `ContentPicker` for `draft.links`                                                                                                        |
 | `frontend/src/components/portfolio/item-card.tsx`    | render a block's nested `links`                                                                                                            |
 | `backend/spa/tests/test_portfolio.py`                | new: resolve nesting, self/dead-id drop, claimed-exclusion, serializer validation                                                          |
+| _follow-up (§7):_ `frontend/src/lib/portfolio/content.ts` | `anchorId` / `pageAnchors` / `linkTarget` / `outboundUrl` — where a nested link points                                                 |
+| _follow-up (§7):_ `frontend/src/components/portfolio/portfolio-page.tsx` | build the anchor set once, pass it to every card                                                                       |
+| _follow-up (§7):_ `frontend/tests/lib/portfolio/links.test.ts` | new: the link-target algebra                                                                                                     |
 
 ---
 
@@ -407,6 +410,31 @@ In the **general** branch, inside `CardContent` after the domains block:
 }
 ```
 
+### 7. follow-up: hyperlinks on nested links (volatile — AI-typed, 2026-08-04)
+
+The Results remark ("linked entries … would be good if they can have an additional hyperlink either
+to the element on the page … OR a link to the project"). Coded under an explicit volatile phase on
+branch `fullstack/block-links-hyperlinks`; testing still Lukas's. **No backend change** — the payload
+already carries what's needed (`_career_item` sets `url` for job/project/certification).
+
+Rule: **on-page wins.** A nested item's title jumps to that item's own card when it renders on the
+page (a nested _block_ always does — blocks are never claimed away; a nested _career entry_ does only
+when the owner also put it in `featured`, since `_drop_claimed` removes it from `more`). Otherwise the
+title links out to the entry's `url`. Neither ⇒ plain text, never a dead link. An anchored item that
+_also_ has a url keeps a small trailing `↗` so the outbound link isn't lost.
+
+- `lib/portfolio/content.ts` — four pure helpers, unit-tested:
+  - `anchorId("job:12") → "item-job-12"` (colon → dash: fragment/CSS-safe),
+  - `pageAnchors(featured, more) → Set<id>` — ids that own a card (nested items excluded),
+  - `linkTarget(item, anchors) → {kind:"anchor"|"external", href} | null`,
+  - `outboundUrl(item, target)` — the url for the `↗`, `""` when the title already is the url.
+- `item-card.tsx` — `ItemCard` takes an optional `anchors` prop, stamps `id={anchorId(item.id)}` +
+  `scroll-mt-6` on both `Card` branches, and `LinkedItems` renders anchor / external / plain per
+  `linkTarget`. The anchor keeps its `href` (middle-click, a11y) but `preventDefault`s into
+  `scrollIntoView({behavior:"smooth"})`; if the element is missing it lets the browser handle the hash.
+- `portfolio-page.tsx` — computes `pageAnchors(payload.featured, more)` once (post rank-reorder, so
+  `moreOverride` is respected) and passes it to every card.
+
 ---
 
 ## Tests
@@ -415,6 +443,10 @@ Backend-heavy — the new logic (resolution nesting, self/dead-id drop, claimed-
 validation) all lives server-side. The frontend deltas are the recursive type, the reused picker, and
 the nested render — component/click-through per [[frontend-test-layout]], no new frontend unit tests.
 Tests go in the existing per-topic file (see [[tests-split-by-topic-not-feature]]).
+
+The §7 follow-up adds the one frontend exception: its helpers are pure algebra, so they get a
+vitest file (`frontend/tests/lib/portfolio/links.test.ts` — `anchorId`, `pageAnchors` ignoring nested
+items, `linkTarget` anchor-over-url precedence, `outboundUrl`). The rendering stays click-through.
 
 - `backend/spa/tests/test_portfolio.py` — new classes:
   - `BlockLinksResolveTests` — `resolve_items` nests a block's linked entry (one level); a nested
@@ -445,6 +477,17 @@ resolve/payload/serializer assertions fail.
    explore".
 6. Link the block to itself and to a deleted entry id → save; the public render simply omits them (no
    crash, no infinite nesting).
+
+**§7 (hyperlinks) — still unrun, this is the open verification:**
+
+7. `cd frontend && npx vitest run tests/lib/portfolio/links.test.ts` → green, and `npx tsc -b` clean.
+8. Public page, a block linking **another block that also renders** (feature both): the nested title
+   is underlined and scrolls smoothly to that block's card.
+9. Same block linking a **project with a `url`** that is _not_ on the page: the nested title opens the
+   project in a new tab (`↗` in the label).
+10. A **featured** job that a block also links: the nested title jumps to the job's card _and_ a small
+    trailing `↗` still opens the company url.
+11. A linked **skill** (no url, claimed away from `more`): plain text, no dead link.
 
 ## Results
 
@@ -507,3 +550,55 @@ frontend:green
 
 ux followup:
 linked entries in the blocks would be good if they can have an additional hyperlink either to the element on the page (if it is a cv entry for example OR a link to the project)
+
+### Follow-up (AI, 2026-08-04) — answers + fixes
+
+**1. "when is `validate_links` called? seems like dead code."** It isn't — DRF calls
+`validate_<field_name>` from `Serializer.to_internal_value()` for every _declared_ field present in
+the payload, right after that field's own `run_validation`. `links` is declared explicitly
+(`serializers.ListField`, `serializers.py:239`) and listed in `Meta.fields`, so every block
+`POST`/`PUT`/`PATCH` that carries `links` runs it, and its **return value** is what lands in
+`validated_data` (that's how the dedupe + `[:MAX_BLOCK_LINKS]` cap actually persist). Your own run
+proves it: `test_rejects_non_id_links` passed — the 400 on `["not-an-id"]` can only come from
+`validate_links`. Two real caveats, neither making it dead:
+
+- `required=False` ⇒ a payload **without** `links` skips the hook entirely (a `PATCH` that doesn't
+  mention links leaves the stored list untouched — intended),
+- it never runs on `PortfolioBlock.objects.create(...)` / `.save()` in shell or tests — DRF
+  validation is API-path only, and the model field has no validator. That's deliberate here (dead
+  ids drop at resolve time), which is why the resolve tests can seed junk ids directly.
+
+**2a. `NameError: name 'r' is not defined`** — a stray copy-paste line
+(`self.assertEqual(r.json(), {"message": "I am alive!"})`) at the tail of
+`test_accepts_and_order_dedupes_ids`. My test bug; **fixed** — line deleted, nothing else in that
+test changed.
+
+**2b. The two `SignupGateTests` failures are not a test bug — they're a real regression, and they
+need a one-line fix from you (non-test source).** `backend/lukehirsch/settings.py:290` currently
+reads:
+
+```python
+ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", True)   # ← default flipped
+```
+
+It should be — as `[backend]-ssrf-signup-gate.md:64`, `done/portfolio/[fullstack]-open-signup.md:38`
+("keep it `False` in dev unless testing the flow") and the adapter's own docstring
+(`lukehirsch/adapter.py:23`, "default False") all say:
+
+```python
+ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", False)
+```
+
+`git log -S` pins the flip to `78c2d4c` ("portfolio flow rework frontend done") — leftover from
+click-testing the open-signup flow. One root cause explains both failures: the adapter reports open
+(`assertFalse` fails), and the headless signup endpoint accepts the registration and answers `401`
+(session pending email verification) instead of `403`. Per [[public-site-posture]] the default must
+stay **closed** — open signup is a launch toggle set in the prod/stage env, never a code default, and
+your `.env` doesn't set the var at all, so today's dev server has signup open to anyone who can reach
+it. Flip that one character and both tests go green; no test change is warranted (the test is the
+thing that caught it).
+
+**3. The hyperlink UX follow-up is implemented** — see §7 above (volatile phase, branch
+`fullstack/block-links-hyperlinks`): on-page anchor wins, entry `url` is the fallback, `↗` keeps the
+outbound link when the title is already an anchor; four pure helpers in `lib/portfolio/content.ts`
+with a vitest file, no backend change. **Unrun** — verification steps 7–11 above are yours.

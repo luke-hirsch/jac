@@ -567,4 +567,3 @@ class BlockLinksSerializerTests(TestCase):
         self.assertEqual(self._post(["job:1", "job:1", "block:2"]).status_code, 201)
         block = PortfolioBlock.objects.get(user=self.user)
         self.assertEqual(block.links, ["job:1", "block:2"])
-        self.assertEqual(r.json(), {"message": "I am alive!"})
