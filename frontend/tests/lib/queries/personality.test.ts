@@ -34,6 +34,12 @@ function row(over: Partial<PersonalityRow> = {}): PersonalityRow {
     ],
     answers_updated_at: null,
     dossier_built_at: null,
+    letter_tone: "neutral",
+    letter_focus: "balanced",
+    writing_sample: "",
+    style_dossier: "",
+    sample_updated_at: null,
+    style_built_at: null,
     updated_at: "2026-07-12T00:00:00Z",
     ...over,
   };

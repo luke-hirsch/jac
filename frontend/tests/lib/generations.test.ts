@@ -23,7 +23,7 @@ import {
 function form(over: Partial<GenerationForm> = {}): GenerationForm {
   return {
     job_application: 7,
-    mode: "",
+    mode: "standard",
     provider: "",
     model: "",
     ...over,
@@ -38,8 +38,8 @@ const RESULT = {
 } as unknown as TailoredResult;
 
 describe("toPayload", () => {
-  it("sends only the application pk when everything is blank — the server owns every default", () => {
-    expect(toPayload(form())).toEqual({ job_application: 7 });
+  it("omits every blank field — the server owns those defaults (mode always travels)", () => {
+    expect(toPayload(form())).toEqual({ job_application: 7, mode: "standard" });
   });
 
   it("passes an explicit executor pick through verbatim", () => {
