@@ -12,7 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { FeaturedPicker } from "@/components/portfolio/featured-picker";
+import { ContentPicker } from "@/components/portfolio/content-picker";
 import { useFullList, type DomainRow } from "@/lib/queries/jac";
 import {
   useCreateLink,
@@ -97,12 +97,12 @@ export function LinkEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="grid max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{link ? "Edit link" : "New portfolio link"}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto px-1">
           <div className="grid gap-2">
             <Label htmlFor="slug">Slug</Label>
             <Input
@@ -135,8 +135,8 @@ export function LinkEditor({
 
           <div className="grid gap-2">
             <Label>Featured content</Label>
-            <FeaturedPicker
-              featured={draft.featured}
+            <ContentPicker
+              selected={draft.featured}
               onChange={(f) => set("featured", f)}
             />
           </div>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   candidates,
+  filterCandidates,
   moveFeatured,
   pruneFeatured,
   resolveFeatured,
@@ -18,7 +19,13 @@ import type { PortfolioBlockRow } from "@/lib/queries/portfolio";
 
 const db = {
   skills: [
-    { id: 5, name: "TypeScript", proficiency: "expert", category: "lang" },
+    {
+      id: 5,
+      name: "TypeScript",
+      proficiency: "expert",
+      category: "lang",
+      domains: [2],
+    },
   ],
   jobs: [
     {
@@ -27,6 +34,7 @@ const db = {
       company: "ACME",
       started: "2021-01-01",
       ended: null,
+      domains: [1, 2],
     },
   ],
   educations: [],
@@ -53,8 +61,8 @@ function block(over: Partial<PortfolioBlockRow>): PortfolioBlockRow {
 }
 
 const blocks = [
-  block({ id: 7, title: "Award", kind: "text" }),
-  block({ id: 8, title: "", kind: "image" }),
+  block({ id: 7, title: "Award", kind: "text", domains: [1] }),
+  block({ id: 8, title: "", kind: "image", domains: [2] }),
 ];
 
 describe("candidates", () => {
@@ -83,6 +91,28 @@ describe("candidates", () => {
       "block:8",
     ]);
     expect(candidates(undefined, [])).toEqual([]);
+  });
+
+  it("attaches domainIds from the row/block tags", () => {
+    const byId = new Map(candidates(db, blocks).map((c) => [c.id, c.domainIds]));
+    expect(byId.get("job:12")).toEqual([1, 2]);
+    expect(byId.get("skill:5")).toEqual([2]);
+    expect(byId.get("block:7")).toEqual([1]);
+    expect(byId.get("block:8")).toEqual([2]);
+  });
+
+  it("languages carry no domainIds (no domains M2M)", () => {
+    const langDb = {
+      skills: [],
+      jobs: [],
+      educations: [],
+      certifications: [],
+      projects: [],
+      languages: [{ id: 3, name: "German", fluency: "native" }],
+    } as unknown as CvEntriesResponse;
+    const [lang] = candidates(langDb, []);
+    expect(lang).toMatchObject({ id: "language:3", type: "language" });
+    expect(lang.domainIds).toEqual([]);
   });
 });
 
@@ -149,5 +179,52 @@ describe("toggleName", () => {
   it("adds an absent name and removes a present one", () => {
     expect(toggleName(["ai"], "music")).toEqual(["ai", "music"]);
     expect(toggleName(["ai", "music"], "ai")).toEqual(["music"]);
+  });
+});
+
+describe("filterCandidates", () => {
+  // pool: job:12 [1,2], skill:5 [2], block:7 [1], block:8 [2]
+  const pool = candidates(db, blocks);
+  const ids = (cs: ReturnType<typeof filterCandidates>) => cs.map((c) => c.id);
+
+  it("no filters / empty filters is the identity", () => {
+    expect(ids(filterCandidates(pool))).toEqual(ids(pool));
+    expect(ids(filterCandidates(pool, { search: "", types: [], domainIds: [] }))).toEqual(
+      ids(pool),
+    );
+  });
+
+  it("search matches the label case-insensitively", () => {
+    expect(ids(filterCandidates(pool, { search: "senior" }))).toEqual(["job:12"]);
+    expect(ids(filterCandidates(pool, { search: "AWARD" }))).toEqual(["block:7"]);
+    expect(filterCandidates(pool, { search: "nope" })).toEqual([]);
+  });
+
+  it("type facet keeps only the listed types", () => {
+    expect(ids(filterCandidates(pool, { types: ["block"] }))).toEqual([
+      "block:7",
+      "block:8",
+    ]);
+    expect(ids(filterCandidates(pool, { types: ["job", "skill"] }))).toEqual([
+      "job:12",
+      "skill:5",
+    ]);
+  });
+
+  it("domain facet is OR within, keeping any candidate carrying a selected domain", () => {
+    expect(ids(filterCandidates(pool, { domainIds: [1] }))).toEqual([
+      "job:12",
+      "block:7",
+    ]);
+    expect(ids(filterCandidates(pool, { domainIds: [1, 2] }))).toEqual(ids(pool));
+  });
+
+  it("ANDs the three filters together", () => {
+    // job type AND domain 2 → job:12 only (skill:5 excluded by type)
+    expect(ids(filterCandidates(pool, { types: ["job"], domainIds: [2] }))).toEqual([
+      "job:12",
+    ]);
+    // skill type AND domain 1 → skill has only domain 2 → empty
+    expect(filterCandidates(pool, { types: ["skill"], domainIds: [1] })).toEqual([]);
   });
 });

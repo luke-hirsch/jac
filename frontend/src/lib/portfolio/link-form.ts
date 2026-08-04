@@ -20,8 +20,8 @@ export type FeaturedCandidate = {
   id: string; // "job:12" | "block:7"
   type: string; // career singular ("job", "skill", …) or "block"
   label: string;
+  domainIds: number[]; // Domain pks this candidate is tagged with (languages: [])
 };
-
 /** Group heading a candidate falls under in the picker (matches cv-doc section titles
  *  where it can; blocks get their own group). */
 export const CANDIDATE_GROUPS = [
@@ -35,7 +35,9 @@ export const CANDIDATE_GROUPS = [
 ] as const;
 
 /** The full pool: every career entry (section order, cv-doc labels) then every block.
- *  A block's label is its title, falling back to "<kind> block" for untitled ones. */
+ *  A block's label is its title, falling back to "<kind> block" for untitled ones.
+ *  `domainIds` = the row's Domain-pk tags (empty for languages, which have no domains M2M);
+ *  they drive the picker's category facet. */
 export function candidates(
   db: CvEntriesResponse | undefined,
   blocks: PortfolioBlockRow[],
@@ -45,7 +47,18 @@ export function candidates(
     for (const section of SECTION_ORDER) {
       for (const row of db[section] as AnyRow[]) {
         const id = entryId(section, row.id);
-        out.push({ id, type: parseEntryId(id)!.type, label: labelFor(section, row) });
+        // Languages have no domains M2M; other rows do. Soft-cast keeps the untyped
+        // test fixtures (which omit `domains`) safe.
+        const domainIds =
+          section === "languages"
+            ? []
+            : ((row as { domains?: number[] }).domains ?? []);
+        out.push({
+          id,
+          type: parseEntryId(id)!.type,
+          label: labelFor(section, row),
+          domainIds,
+        });
       }
     }
   }
@@ -54,6 +67,7 @@ export function candidates(
       id: `block:${b.id}`,
       type: "block",
       label: b.title || `${b.kind} block`,
+      domainIds: b.domains,
     });
   }
   return out;
@@ -114,4 +128,23 @@ export function toggleName(names: string[], name: string): string[] {
   return names.includes(name)
     ? names.filter((n) => n !== name)
     : [...names, name];
+}
+
+/** Narrow the pool for the picker's search + facets. All three filters AND together;
+ *  within `domainIds` the match is OR (a candidate passes if it carries ANY selected
+ *  domain). An empty filter is a no-op — so `{}` returns the pool untouched. Pure and
+ *  immutable, like the rest of this module. */
+export function filterCandidates(
+  pool: FeaturedCandidate[],
+  f: { search?: string; types?: string[]; domainIds?: number[] } = {},
+): FeaturedCandidate[] {
+  const q = (f.search ?? "").trim().toLowerCase();
+  const typeSet = new Set(f.types ?? []);
+  const domSet = new Set(f.domainIds ?? []);
+  return pool.filter((c) => {
+    if (q && !c.label.toLowerCase().includes(q)) return false;
+    if (typeSet.size && !typeSet.has(c.type)) return false;
+    if (domSet.size && !c.domainIds.some((d) => domSet.has(d))) return false;
+    return true;
+  });
 }

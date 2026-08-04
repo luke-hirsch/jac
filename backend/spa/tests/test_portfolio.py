@@ -31,6 +31,7 @@ from spa.portfolio import (
     owner_domains,
     owner_for_host,
     public_portfolio_url,
+    resolve_items,
     section_order,
 )
 
@@ -468,4 +469,102 @@ class LandingTests(TestCase):
     def test_health_endpoint(self):
         r = self.client.get("/health/")
         self.assertEqual(r.status_code, 200)
+
+
+# ── block links (guide [fullstack]-block-links) ─────────────────────────────────
+
+
+class BlockLinksResolveTests(TestCase):
+    """`resolve_items` nests a block's `links` one level deep, self-excluded, dead-id-safe."""
+
+    def test_block_nests_linked_entry_one_level(self):
+        owner = _owner()
+        job = _job(owner)
+        block = PortfolioBlock.objects.create(
+            user=owner, kind="text", body="hi", links=[f"job:{job.pk}"]
+        )
+        [item] = resolve_items(owner, [f"block:{block.pk}"])
+        self.assertEqual([sub["id"] for sub in item["links"]], [f"job:{job.pk}"])
+
+    def test_nested_block_link_is_a_leaf(self):
+        owner = _owner()
+        job = _job(owner)
+        inner = PortfolioBlock.objects.create(
+            user=owner, kind="text", body="inner", links=[f"job:{job.pk}"]
+        )
+        outer = PortfolioBlock.objects.create(
+            user=owner, kind="text", body="outer", links=[f"block:{inner.pk}"]
+        )
+        [item] = resolve_items(owner, [f"block:{outer.pk}"])
+        [nested] = item["links"]
+        self.assertEqual(nested["id"], f"block:{inner.pk}")
+        # leaf: the inner block's own link is not expanded (bounds nesting to one level)
+        self.assertEqual(nested["links"], [])
+
+    def test_self_link_is_dropped(self):
+        owner = _owner()
+        block = PortfolioBlock.objects.create(
+            user=owner, kind="text", body="hi", links=[]
+        )
+        block.links = [f"block:{block.pk}"]
+        block.save(update_fields=["links"])
+        [item] = resolve_items(owner, [f"block:{block.pk}"])
+        self.assertEqual(item["links"], [])
+
+    def test_dead_link_ids_drop(self):
+        owner = _owner()
+        block = PortfolioBlock.objects.create(
+            user=owner, kind="text", body="hi", links=["job:99999", "block:88888"]
+        )
+        [item] = resolve_items(owner, [f"block:{block.pk}"])
+        self.assertEqual(item["links"], [])
+
+
+class BuildPayloadClaimedTests(TestCase):
+    """An entry nested under a rendered block isn't also floated loose in `more`."""
+
+    def test_linked_entry_not_repeated_in_more(self):
+        owner = _owner()
+        job = _job(owner)  # not favourite -> would otherwise land in `more`
+        block = PortfolioBlock.objects.create(
+            user=owner,
+            kind="text",
+            body="hi",
+            favourite=True,
+            links=[f"job:{job.pk}"],
+        )
+        payload = build_payload(owner)
+        featured_ids = [i["id"] for i in payload["featured"]]
+        more_ids = [i["id"] for i in payload["more"]]
+        self.assertIn(f"block:{block.pk}", featured_ids)
+        self.assertNotIn(f"job:{job.pk}", more_ids)
+        feat_block = next(
+            i for i in payload["featured"] if i["id"] == f"block:{block.pk}"
+        )
+        self.assertEqual([s["id"] for s in feat_block["links"]], [f"job:{job.pk}"])
+
+
+class BlockLinksSerializerTests(TestCase):
+    """`links` is grammar-validated ('<type>:<pk>'), order-deduped, on block CRUD."""
+
+    URL = "/api/spa/portfolio/manage/blocks/"
+
+    def setUp(self):
+        self.user = _owner("blocker")
+        self.client.force_login(self.user)
+
+    def _post(self, links):
+        return self.client.post(
+            self.URL,
+            data=json.dumps({"kind": "text", "body": "hi", "links": links}),
+            content_type="application/json",
+        )
+
+    def test_rejects_non_id_links(self):
+        self.assertEqual(self._post(["not-an-id"]).status_code, 400)
+
+    def test_accepts_and_order_dedupes_ids(self):
+        self.assertEqual(self._post(["job:1", "job:1", "block:2"]).status_code, 201)
+        block = PortfolioBlock.objects.get(user=self.user)
+        self.assertEqual(block.links, ["job:1", "block:2"])
         self.assertEqual(r.json(), {"message": "I am alive!"})
