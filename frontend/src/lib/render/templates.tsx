@@ -213,6 +213,7 @@ function CvSectionView({
   db,
   styles,
   compact,
+  detailed,
   demoted,
 }: {
   section: SectionKey;
@@ -220,6 +221,9 @@ function CvSectionView({
   db: CvEntriesResponse | undefined;
   styles: ReturnType<typeof cvStyles>;
   compact?: boolean;
+  /** The layout's `cv.detailed` budget. Passed instead of the whole spec so this
+   *  function keeps the narrow signature it has today. */
+  detailed?: Record<string, number>;
   demoted?: Set<string>;
 }) {
   const entries = content[section] ?? [];
@@ -258,14 +262,17 @@ function CvSectionView({
       <Text style={styles.sectionTitle} minPresenceAhead={mm(14)}>
         {SECTION_TITLES[section]}
       </Text>
-           {entries.map((e, i) => {
+      {entries.map((e, i) => {
         const p = entryParts(db, section, e);
         const full =
-          entryDetail(e, i, section, spec.cv.detailed, demoted) === "full";
+          entryDetail(e, i, section, detailed ?? {}, demoted) === "full";
         return (
           <View key={e.id} style={styles.row} wrap={false}>
             <View style={styles.hints}>
-              …
+              {p.dateFrom ? (
+                <Text style={styles.hintLine}>{p.dateFrom}</Text>
+              ) : null}
+              {p.dateTo ? <Text style={styles.hintLine}>{p.dateTo}</Text> : null}
             </View>
             <View style={styles.content}>
               <Text style={styles.heading}>
@@ -278,7 +285,18 @@ function CvSectionView({
                   parser, only to the page. */}
               {full && p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
               {full
-                ? bodyBlocks(p.body).map((b, j) => …)
+                ? bodyBlocks(p.body).map((b, j) =>
+                    b.bullet ? (
+                      <View key={j} style={styles.bulletRow}>
+                        <Text style={styles.bulletDot}>•</Text>
+                        <Text style={styles.bulletText}>{b.text}</Text>
+                      </View>
+                    ) : (
+                      <Text key={j} style={styles.body}>
+                        {b.text}
+                      </Text>
+                    ),
+                  )
                 : null}
             </View>
           </View>
@@ -331,6 +349,7 @@ export function CvPages({
           content={content}
           db={db}
           styles={styles}
+          detailed={spec.cv.detailed}
           demoted={demoted}
         />
       ))}

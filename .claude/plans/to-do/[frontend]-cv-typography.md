@@ -513,9 +513,10 @@ export function entryDetail(
 **d.** `frontend/src/lib/render/templates.tsx` — the detail level reaches the entry loop. Three
 edits:
 
-1. `CvSectionView`'s props gain `demoted?: Set<string>` (it already receives `spec`-derived
-   `styles`, but not `spec` itself — pass `detailed: Record<string, number>` explicitly rather than
-   threading the whole spec, so the function stays as narrow as it is today);
+1. `CvSectionView`'s props gain **two** optionals: `detailed?: Record<string, number>` and
+   `demoted?: Set<string>`. It receives `spec`-derived `styles` but **not `spec` itself, and this
+   step does not change that** — the budget map is passed on its own so the function keeps the
+   narrow signature it has today;
 2. `CvPages` passes both down — `detailed={spec.cv.detailed}` and `demoted={demoted}` — on the
    **main-flow** `CvSectionView` map (line 242) only. The `sidebar` map (line 251) does not: a
    compact section has no per-entry detail to choose. `CvPages` itself takes a new optional
@@ -523,35 +524,93 @@ edits:
    it, and until then every caller renders with rank alone;
 3. the entry loop drops the meta line and the body for a compact entry.
 
-Inside the `entries.map` from step 2d:
+The props (replace the destructuring + type of `CvSectionView`):
 
 ```tsx
-      {entries.map((e, i) => {
-        const p = entryParts(db, section, e);
-        const full =
-          entryDetail(e, i, section, spec.cv.detailed, demoted) === "full";
-        return (
-          <View key={e.id} style={styles.row} wrap={false}>
-            <View style={styles.hints}>
-              …
-            </View>
-            <View style={styles.content}>
-              <Text style={styles.heading}>
-                {p.favourite ? "★ " : ""}
-                {p.heading}
-              </Text>
-              {/* A compact entry is the same dated row, minus everything that costs
+function CvSectionView({
+  section,
+  content,
+  db,
+  styles,
+  compact,
+  detailed,
+  demoted,
+}: {
+  section: SectionKey;
+  content: CvContent;
+  db: CvEntriesResponse | undefined;
+  styles: ReturnType<typeof cvStyles>;
+  compact?: boolean;
+  /** The layout's `cv.detailed` budget. Passed instead of the whole spec so this
+   *  function keeps the narrow signature it has today. */
+  detailed?: Record<string, number>;
+  demoted?: Set<string>;
+}) {
+```
+
+and the `entries.map` from step 2d, in full — this **replaces** the one written there, it is not a
+second loop:
+
+```tsx
+{
+  entries.map((e, i) => {
+    const p = entryParts(db, section, e);
+    const full = entryDetail(e, i, section, detailed ?? {}, demoted) === "full";
+    return (
+      <View key={e.id} style={styles.row} wrap={false}>
+        <View style={styles.hints}>
+          {p.dateFrom ? (
+            <Text style={styles.hintLine}>{p.dateFrom}</Text>
+          ) : null}
+          {p.dateTo ? <Text style={styles.hintLine}>{p.dateTo}</Text> : null}
+        </View>
+        <View style={styles.content}>
+          <Text style={styles.heading}>
+            {p.favourite ? "★ " : ""}
+            {p.heading}
+          </Text>
+          {/* A compact entry is the same dated row, minus everything that costs
                   lines. The description is still in the invisible-ink layer — the
                   hidden payload joins the career-DB row, so nothing is lost to a
                   parser, only to the page. */}
-              {full && p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
-              {full
-                ? bodyBlocks(p.body).map((b, j) => …)
-                : null}
-            </View>
-          </View>
-        );
-      })}
+          {full && p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
+          {full
+            ? bodyBlocks(p.body).map((b, j) =>
+                b.bullet ? (
+                  <View key={j} style={styles.bulletRow}>
+                    <Text style={styles.bulletDot}>•</Text>
+                    <Text style={styles.bulletText}>{b.text}</Text>
+                  </View>
+                ) : (
+                  <Text key={j} style={styles.body}>
+                    {b.text}
+                  </Text>
+                ),
+              )
+            : null}
+        </View>
+      </View>
+    );
+  });
+}
+```
+
+and in `CvPages`, the **main-flow** map only:
+
+```tsx
+{
+  spec.cv.sections.map((s) => (
+    <CvSectionView
+      key={s}
+      section={s as SectionKey}
+      content={content}
+      db={db}
+      styles={styles}
+      detailed={spec.cv.detailed}
+      demoted={demoted}
+    />
+  ));
+}
 ```
 
 **e.** `frontend/src/lib/export.ts` — markdown honours **only** the user's explicit override, not
@@ -569,10 +628,13 @@ if (p.body && e.detail !== "compact") lines.push(p.body);
 The invisible-ink payload and the JSON dump stay untouched in either case — both carry the joined
 career-DB row, so a machine reader still gets every description whatever the page decided.
 
-### 4. layout budgets — three files, same edit
+### 4. layout budgets — three files, **same section split, different numbers**
 
-`frontend/src/lib/render/spec.ts` `FALLBACK_SPEC` (lines 31–43), `backend/jac/resources/default_layout.json`
-and `backend/jac/resources/two_page_layout.json`. The one-page shape:
+The section split (certifications out of the main flow, into `sidebar`) is identical in all three.
+The budgets are **not** — the two-page layout keeps its own, bigger set. Each file is spelled out
+below; do not paste one into another.
+
+**a.** `backend/jac/resources/default_layout.json` — the one-page shape:
 
 ```json
   "cv": {
@@ -591,12 +653,47 @@ and `backend/jac/resources/two_page_layout.json`. The one-page shape:
   },
 ```
 
-two-page: `"pages": 2`, same section split, `jobs: 9, educations: 4, projects: 8,
-certifications: 8, skills: 24, languages: 6`, and `"detailed": { "jobs": 4, "projects": 2,
-"educations": 1 }` — twice the page, twice the room to describe things.
+**b.** `backend/jac/resources/two_page_layout.json` — twice the page, twice the room to describe
+things. ⚠️ `"pages"` stays **2**; the whole point of this file is that it is not the one-pager.
+Its `font.base_pt` is 10 and stays 10.
 
-`FALLBACK_SPEC` must match the one-page JSON exactly — it is what renders when the template file
-fails to load, and a mismatch means the preview and the export disagree.
+```json
+  "cv": {
+    "pages": 2,
+    "sections": ["jobs", "educations", "projects"],
+    "sidebar": ["certifications", "skills", "languages"],
+    "max_entries": {
+      "jobs": 9,
+      "educations": 4,
+      "projects": 8,
+      "certifications": 8,
+      "skills": 24,
+      "languages": 6
+    },
+    "detailed": { "jobs": 4, "projects": 2, "educations": 1 }
+  },
+```
+
+**c.** `frontend/src/lib/render/spec.ts` `FALLBACK_SPEC` (lines 31–43) — must match **a** exactly.
+It is what renders when the template file fails to load, and a mismatch means the preview and the
+export disagree. The `sections`/`sidebar`/`max_entries` all move, not just `detailed`:
+
+```ts
+  cv: {
+    pages: 1,
+    sections: ["jobs", "educations", "projects"],
+    sidebar: ["certifications", "skills", "languages"],
+    max_entries: {
+      jobs: 5,
+      educations: 3,
+      projects: 4,
+      certifications: 4,
+      skills: 18,
+      languages: 6,
+    },
+    detailed: { jobs: 2, projects: 1, educations: 1 },
+  },
+```
 
 ## Tests
 
@@ -676,3 +773,64 @@ i had trouble coding 3b.d.
 there is also problems with the spec. i think what happend: yuou wanted the one funciton to stay slim and iused detailed, but in the helper function you expect spec. anyways, amaybe i misunderstood, or the guide was ambigous or wrong, it needs to fixed
 
 four tests fail. nothing commited yet
+
+### AI triage @ 3bc92d0 (2026-08-05)
+
+Lukas's read was right — the guide contradicted itself. **3b.d prose** said pass `detailed`
+explicitly and keep `spec` out of `CvSectionView`; the **3b.d code block** then wrote
+`spec.cv.detailed` inside that same function, where `spec` is not in scope. Both the props block and
+the full loop body are now written out above (no `…` elisions — the two in the old block were typed
+into `templates.tsx` verbatim, and a literal `…` is a parse error, which is why 3 of the 4 suites
+failed to load rather than failing tests).
+
+Verified in a throwaway worktree off `3bc92d0`: with 3b.d written as it now reads plus the two
+items below, `npx vitest run` is **352 passed | 85 skipped, 0 failed** across the whole frontend
+tree.
+
+### AI implementation @ branch `ai/cv-typography-fixes` (volatile phase, Lukas asked)
+
+Lukas opened a volatile phase for the repairs, so the AI typed the remaining source on its own
+branch off `cv_typo`. **Lukas still tests and merges.** Five edits:
+
+1. `templates.tsx` — 3b.d as rewritten above: `detailed?: Record<string, number>` on
+   `CvSectionView`'s props, the full `entries.map` (two-line date column + bullet/plain body
+   blocks, both gated on `full`), and `detailed={spec.cv.detailed}` on the main-flow map in
+   `CvPages`. The sidebar map deliberately gets neither.
+2. `spec.ts` `FALLBACK_SPEC` — step 4c. Only `detailed` had landed; `sections`/`sidebar`/
+   `max_entries` now match `default_layout.json`. This was the one **real** test failure
+   (`render-templates.test.ts:63` wants `max_entries.skills === 18`).
+3. `backend/jac/resources/two_page_layout.json` — step 4b restored: `"pages"` back to **2** and the
+   two-page budgets (`jobs: 9, educations: 4, projects: 8, certifications: 8, skills: 24`,
+   `detailed: { jobs: 4, projects: 2, educations: 1 }`). It had been overwritten with the one-page
+   shape; no test covers this file, so nothing went red.
+4. `export.ts` step 3e — `cvToMarkdown`'s `e.detail !== "compact"` guard, with the rationale
+   comment. No test covers it either.
+5. `components/portfolio/content-picker.tsx` — the pre-existing `tsc` error, out of this guide's
+   scope but fixed on request: `addPlaceholder`'s draft block was missing `links`, required on
+   `BlockInput` since the block-links guide. A placeholder references nothing, so `links: []`.
+
+**Fixed test-side (AI's own):** `tests/lib/_pdf-text.ts` decoded PDF bytes 1:1, which is exact for
+ASCII but wrong for WinAnsi `0x80–0x9F` — where the standard-14 Helvetica keeps `•` (0x95), `–`
+(0x96) and `—` (0x97). So `expect(text).toContain("•")` failed on a bullet that had in fact
+rendered correctly. The extractor now maps that block back to Unicode, which also makes future
+assertions on the en/em dashes writable as real characters.
+
+**Green as of this pass:** `npx vitest run` → `Test Files 33 passed | 4 skipped (37)`,
+`Tests 352 passed | 85 skipped (437)`, 0 failed. `npx tsc -b` → clean, exit 0.
+
+**Not run by the AI — still Lukas's:** everything in `## Verification` from step 3 down. Notably
+`python manage.py seed_system_defaults` (without it the DB serves the old spec and the browser
+shows nothing new), the Preview-PDF eyeball pass, the `pdftotext` check that `skill_names` really
+carries the moved skills, and the two-page footer/page-count check — which now has teeth again,
+since `two_page_layout.json` is a two-pager once more.
+
+### update
+
+system seeds done
+test are green
+
+layout shitty see @.claude/pdf_preview3.png and @.claude/pdf_preview4.png due to the date formatting a lot of whitspace
+
+[shitty layout](/Users/lukas/Projects/jac/.claude/pdf_preview3.png)
+
+[shitty layout](/Users/lukas/Projects/jac/.claude/pdf_preview4.png)

@@ -131,6 +131,7 @@ export function ContentPicker({
           body: "(placeholder — edit later)",
           alt_text: "",
           domains: [],
+          links: [],
           favourite: false,
           order: 0,
           is_active: false,

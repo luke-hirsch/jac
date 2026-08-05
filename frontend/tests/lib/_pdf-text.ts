@@ -13,9 +13,22 @@ import { inflateSync } from "node:zlib";
  *
  * react-pdf/pdfkit renders a kerned run as a `TJ` array of *hex* strings (`<...>`)
  * interleaved with position adjustments, not the plain `(...)` literal `Tj` uses for an
- * unkerned run — both forms show up depending on the text. WinAnsi hex bytes decode
- * 1:1 to chars via `fromCharCode`, which is exact for the ASCII these suites render.
+ * unkerned run — both forms show up depending on the text. Bytes decode 1:1 to chars,
+ * which is exact for ASCII and for WinAnsi ≥ 0xA0 (it agrees with latin1 there), but
+ * NOT for 0x80–0x9F: that is where WinAnsi keeps the typographic punctuation this CV
+ * actually prints — the bullet, the en dash in the date column, the em dash in a
+ * heading. Undo that one divergence so assertions can be written in real characters.
  */
+const WINANSI_HIGH: Record<number, string> = {
+  0x80: "€", 0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†", 0x87: "‡",
+  0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹", 0x8c: "Œ", 0x8e: "Ž", 0x91: "‘",
+  0x92: "’", 0x93: "“", 0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—", 0x98: "˜",
+  0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž", 0x9f: "Ÿ",
+};
+
+const fromWinAnsi = (s: string) =>
+  s.replace(/[\u0080-\u009f]/g, (c) => WINANSI_HIGH[c.charCodeAt(0)] ?? c);
+
 export function pdfTextRuns(buf: Buffer): string {
   const latin1 = buf.toString("latin1");
   const chunks: string[] = [];
@@ -41,7 +54,7 @@ export function pdfTextRuns(buf: Buffer): string {
   }
   const literals =
     chunks.join("\n").match(/\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>/g) ?? [];
-  return literals
+  const text = literals
     .map((s) => {
       if (s[0] === "(") return s.slice(1, -1).replace(/\\(.)/g, "$1");
       const hex = s.slice(1, -1).replace(/\s+/g, "");
@@ -52,6 +65,7 @@ export function pdfTextRuns(buf: Buffer): string {
       return out;
     })
     .join("");
+  return fromWinAnsi(text);
 }
 
 /**

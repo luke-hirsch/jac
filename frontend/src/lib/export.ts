@@ -28,7 +28,12 @@ export function cvToMarkdown(
       lines.push(`### ${p.favourite ? "★ " : ""}${p.heading}`);
       const metaLine = [p.date, p.meta, p.skills].filter(Boolean).join(" · ");
       if (metaLine) lines.push(metaLine);
-      if (p.body) lines.push(p.body);
+      // The three detail signals are not equal. `entry.detail` is editorial — "this job
+      // is a footnote" — and holds in any format. The other two (rank against the
+      // layout budget, and a fit demotion) exist because the PAGE ran out of room, and
+      // markdown has no pages. So markdown reads the override off the entry and ignores
+      // the rest; it needs no `detailed` map and keeps its three-argument signature.
+      if (p.body && e.detail !== "compact") lines.push(p.body);
       lines.push("");
     }
   }
