@@ -3,7 +3,9 @@ import {
   COMPANY_STUB,
   LETTER_STUB,
   contactLine,
+  countWords,
   editableBody,
+  formatLetterDate,
   emptyLetterMeta,
   fillBlanks,
   hasStub,
@@ -247,5 +249,46 @@ describe("letter-meta posting-language fallback", () => {
 
   it("a stored language always wins over the fallback", () => {
     expect(normalizeLetterMeta({ language: "en" }, "de").language).toBe("en");
+  });
+});
+
+/**
+ * `[fullstack]-letter-fit`. SKIP-MARKED — not the active guide.
+ * **Step 0: delete the `.skip` below**, and add `formatLetterDate` + `countWords` to the
+ * import list at the top of this file.
+ *
+ * The date is currently the raw ISO string, which reads as machine output on a business
+ * letter. Long form per language; an unknown language falls back to ISO — unambiguous
+ * everywhere, and never the US month-first form.
+ */
+describe.skip("formatLetterDate / countWords", () => {
+  it("writes the German business-letter form", () => {
+    expect(formatLetterDate("2026-07-27", "de")).toBe("27. Juli 2026");
+    expect(formatLetterDate("2026-01-05", "de")).toBe("5. Januar 2026");
+  });
+
+  it("writes the English long form, day first", () => {
+    expect(formatLetterDate("2026-07-27", "en")).toBe("27 July 2026");
+  });
+
+  it("falls back to ISO for a language it has no month names for", () => {
+    expect(formatLetterDate("2026-07-27", "fr")).toBe("2026-07-27");
+  });
+
+  it("never produces a month-first date", () => {
+    for (const lang of ["de", "en", "fr", ""]) {
+      expect(formatLetterDate("2026-07-27", lang)).not.toMatch(/^(July|Juli|07)/);
+    }
+  });
+
+  it("passes a malformed date straight through instead of inventing one", () => {
+    expect(formatLetterDate("not a date", "de")).toBe("not a date");
+    expect(formatLetterDate("", "de")).toBe("");
+  });
+
+  it("counts words the way the shorten budget does", () => {
+    expect(countWords("one two  three\nfour")).toBe(4);
+    expect(countWords("   ")).toBe(0);
+    expect(countWords("")).toBe(0);
   });
 });

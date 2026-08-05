@@ -7,6 +7,7 @@ the task_id CharField); the tower probe is mocked wherever resolution consults i
 """
 
 import json
+from unittest import skip
 from unittest.mock import patch
 
 from django.conf import settings as dj_settings
@@ -465,3 +466,149 @@ class LetterChatStreamTests(APITestCase):
             self.assertEqual(self._chat(messages=[]).status_code, 400)
             self.assertEqual(self._chat(messages=[]).status_code, 400)
             self.assertEqual(self._chat(messages=[]).status_code, 429)
+
+
+# --- [fullstack]-education-degree ---------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+
+
+@skip("[fullstack]-education-degree — step 0: unskip")
+class EducationDegreeApiTests(APITestCase):
+    """The two new fields have to reach the SPA form — the user classifies their own
+    education; nothing infers a degree level from free text."""
+
+    EDU_URL = "/api/jac/education/"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _create(self, **kw):
+        return self.client.post(
+            self.EDU_URL,
+            {
+                "institution": "FU Berlin",
+                "field_of_study": "Physics",
+                "started": "2012-10-01",
+                **kw,
+            },
+            format="json",
+        )
+
+    def test_defaults_come_back_on_create(self):
+        r = self._create()
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["degree_level"], 0)
+        self.assertIs(r.data["completed"], True)
+
+    def test_both_fields_round_trip(self):
+        r = self._create(degree_level=2, completed=True)
+        self.assertEqual(r.status_code, 201, r.data)
+        pk = r.data["id"]
+        patched = self.client.patch(
+            f"{self.EDU_URL}{pk}/", {"completed": False}, format="json"
+        )
+        self.assertEqual(patched.status_code, 200, patched.data)
+        self.assertEqual(patched.data["degree_level"], 2)
+        self.assertIs(patched.data["completed"], False)
+
+    def test_an_out_of_range_level_is_rejected(self):
+        r = self._create(degree_level=9)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("degree_level", r.data)
+
+
+# --- [fullstack]-cv-section-toggles -------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+
+
+@skip("[fullstack]-cv-section-toggles — step 0: unskip")
+class SectionsOffApiTests(APITestCase):
+    """Whole sections switched off for one application. Unknown keys are a 400, not a
+    silent no-op: a typo that quietly does nothing is the worst failure mode here."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/"
+
+    def _patch(self, sections):
+        return self.client.patch(self.url, {"sections_off": sections}, format="json")
+
+    def test_defaults_to_every_section_on(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["sections_off"], [])
+
+    def test_round_trips_and_dedupes(self):
+        r = self._patch(["certifications", "languages", "certifications"])
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["sections_off"], ["certifications", "languages"])
+
+    def test_unknown_sections_are_rejected(self):
+        # "certification" (singular) is the plausible typo — cv_content uses the plural.
+        self.assertEqual(self._patch(["certification"]).status_code, 400)
+        self.assertEqual(self._patch(["hobbies"]).status_code, 400)
+
+    def test_a_bare_string_is_not_a_list(self):
+        self.assertEqual(self._patch("certifications").status_code, 400)
+
+    def test_can_be_cleared_again(self):
+        self._patch(["certifications"])
+        r = self._patch([])
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["sections_off"], [])
+
+
+# --- [fullstack]-letter-fit ---------------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+
+
+@skip("[fullstack]-letter-fit — step 0: unskip")
+class ShortenLetterViewTests(APITestCase):
+    """The page fit is measured in the BROWSER (react-pdf); the server only does the
+    language part, so the word budget arrives from the client."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/shorten/"
+
+    def _post(self, **body):
+        return self.client.post(
+            self.url,
+            {"body": "One.\n\nTwo.", "target_words": 120, **body},
+            format="json",
+        )
+
+    def test_round_trip(self):
+        with (
+            patch("jac.views.resolve_executor", return_value=Executor("ollama")),
+            patch("jac.views.ShortenLetter") as cls,
+        ):
+            cls.return_value.shorten.return_value = "Tighter.\n\nStill two."
+            cls._MAX_CHARS = 8000
+            r = self._post()
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["body"], "Tighter.\n\nStill two.")
+
+    def test_the_budget_is_required_and_sane(self):
+        self.assertEqual(self.client.post(self.url, {"body": "x"}, format="json").status_code, 400)
+        self.assertEqual(self._post(target_words=2).status_code, 400)
+        self.assertEqual(self._post(target_words=100000).status_code, 400)
+
+    def test_another_users_application_is_not_reachable(self):
+        self.client.force_login(self.other)
+        self.assertIn(self._post().status_code, (403, 404))

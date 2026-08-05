@@ -8,6 +8,7 @@ AdminRequireMfaMiddleware gate.
 import json
 import re
 import time
+from unittest import skip
 
 from django.contrib.auth import get_user_model
 from django.core import mail
@@ -407,6 +408,54 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.alice.profile.refresh_from_db()
         self.assertTrue(self.alice.profile.show_socials)
+
+    # --- [fullstack]-appearance-settings ------------------------------------------
+    # SKIP-MARKED: not the active guide. Step 0 of that guide is to delete the three
+    # @skip decorators below and watch these go red.
+
+    @skip("[fullstack]-appearance-settings — step 0: unskip")
+    def test_accent_color_round_trips(self):
+        """The CV accent lives on the profile, not in the layout template — one place a
+        user changes their colour instead of uploading a new spec."""
+        self.client.force_login(self.alice)
+        self.assertEqual(self.client.get(self.PROFILE_URL).json()["accent_color"], "")
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"accent_color": "#1a7f56"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.alice.profile.refresh_from_db()
+        self.assertEqual(self.alice.profile.accent_color, "#1a7f56")
+        self.assertEqual(resp.json()["accent_color"], "#1a7f56")
+
+    @skip("[fullstack]-appearance-settings — step 0: unskip")
+    def test_accent_color_rejects_non_hex(self):
+        """A bad colour is a 400 with a field error, never a 500 and never a value the
+        renderer would have to defend against."""
+        self.client.force_login(self.alice)
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"accent_color": "red"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("accent_color", resp.json())
+
+    @skip("[fullstack]-appearance-settings — step 0: unskip")
+    def test_accent_color_may_be_cleared(self):
+        """Blank is meaningful: fall back to whatever the layout template ships."""
+        self.alice.profile.accent_color = "#1a7f56"
+        self.alice.profile.save(update_fields=["accent_color"])
+        self.client.force_login(self.alice)
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"accent_color": ""}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.alice.profile.refresh_from_db()
+        self.assertEqual(self.alice.profile.accent_color, "")
 
 
 # Deliberately NOT `**_TEST_SETTINGS` — that pins ACCOUNT_ALLOW_SIGNUPS, and the shipped

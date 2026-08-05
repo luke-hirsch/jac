@@ -17,6 +17,7 @@ import {
   removeEntry,
   toggleDeselect,
   togglePin,
+  toggleSection,
   type CvContent,
 } from "@/lib/cv-doc";
 import type { CvEntriesResponse, EducationRow, JobRow } from "@/lib/queries/jac";
@@ -368,5 +369,79 @@ describe("pinnedIds", () => {
   it("an unpinned document yields []", () => {
     expect(pinnedIds(content())).toEqual([]);
     expect(pinnedIds({})).toEqual([]);
+  });
+});
+
+/**
+ * `[fullstack]-education-degree`. SKIP-MARKED — not the active guide.
+ * **Step 0: delete the `.skip` below.**
+ *
+ * An unfinished study period must read as one honest line of coursework. Today the CV
+ * says "Drop Out Education Physics" because that is what the free-text degree field
+ * holds; with a `completed` flag the renderer composes the phrasing instead.
+ */
+describe.skip("labelFor — unfinished education", () => {
+  const dropout = {
+    id: 4,
+    institution: "FU Berlin",
+    degree: "",
+    field_of_study: "Physics",
+    started: "2016-10-01",
+    ended: "2020-09-30",
+    completed: false,
+  } as unknown as EducationRow;
+
+  it("marks it, rather than trusting whatever is in the degree field", () => {
+    expect(labelFor("educations", dropout)).toBe(
+      "Physics @ FU Berlin (Oct 2016 – Sep 2020) — no degree",
+    );
+  });
+
+  it("leaves a completed degree untouched", () => {
+    expect(labelFor("educations", { ...education, completed: true })).toBe(
+      "BSc CS @ TU (Sep 2015 – Aug 2018)",
+    );
+  });
+});
+
+/**
+ * `[fullstack]-cv-section-toggles`. SKIP-MARKED — not the active guide.
+ * **Step 0: delete the `.skip` below.**
+ *
+ * A switched-off section is gone from the CV *on purpose* — different from a deselected
+ * entry, and different again from an entry the page fit had to cut. It must not reach the
+ * export at all, invisible-ink layer included.
+ */
+describe.skip("activeContent / toggleSection — whole sections", () => {
+  const content: CvContent = {
+    jobs: [
+      { id: "job:1", label: "kept", relevance_score: null },
+      { id: "job:2", label: "deselected", relevance_score: null, deselected: true },
+    ],
+    certifications: [{ id: "certification:7", label: "Udemy", relevance_score: null }],
+  };
+
+  it("keeps stripping deselected entries when nothing is switched off", () => {
+    const out = activeContent(content, []);
+    expect(out.jobs.map((e) => e.id)).toEqual(["job:1"]);
+    expect(out.certifications).toHaveLength(1);
+  });
+
+  it("defaults to the old single-argument behaviour", () => {
+    expect(Object.keys(activeContent(content))).toEqual(["jobs", "certifications"]);
+  });
+
+  it("drops a switched-off section whole, key and all", () => {
+    const out = activeContent(content, ["certifications"]);
+    expect(out).not.toHaveProperty("certifications");
+    expect(out.jobs.map((e) => e.id)).toEqual(["job:1"]);
+  });
+
+  it("toggleSection adds and removes without mutating", () => {
+    const off: string[] = [];
+    const on1 = toggleSection(off, "languages");
+    expect(on1).toEqual(["languages"]);
+    expect(off).toEqual([]);
+    expect(toggleSection(on1, "languages")).toEqual([]);
   });
 });

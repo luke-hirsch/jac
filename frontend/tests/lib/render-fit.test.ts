@@ -4,7 +4,9 @@ import {
   capContent,
   countPdfPages,
   dropOrder,
+  effectiveCaps,
   fitCv,
+  MAX_CAP_GROWTH,
   overCapIds,
 } from "@/lib/render/fit";
 import type { CvContent } from "@/lib/cv-doc";
@@ -158,5 +160,66 @@ describe("fitCv", () => {
     expect(fit.droppedIds).toHaveLength(5);
     expect(totalEntries(fit.content)).toBe(5);
     expect(fit.pages).toBe(2);
+  });
+});
+
+/**
+ * `[fullstack]-cv-section-toggles`. SKIP-MARKED — not the active guide.
+ * **Step 0: delete the `.skip` below.**
+ *
+ * Switching a section off frees *page space*, not a slot count — 4 certification slots
+ * are worth about one and a half jobs, not four. So the caps are scaled by the freed
+ * weight rather than traded one for one.
+ */
+describe.skip("effectiveCaps", () => {
+  const CAPS = {
+    jobs: 5,
+    educations: 3,
+    projects: 4,
+    certifications: 4,
+    skills: 18,
+    languages: 6,
+  };
+
+  it("changes nothing when every section is on", () => {
+    expect(effectiveCaps(CAPS, [])).toEqual(CAPS);
+    expect(effectiveCaps(CAPS)).toEqual(CAPS);
+  });
+
+  it("drops the switched-off section from the result entirely", () => {
+    expect(effectiveCaps(CAPS, ["certifications"])).not.toHaveProperty(
+      "certifications",
+    );
+  });
+
+  it("gives the freed budget to the sections that stay", () => {
+    const out = effectiveCaps(CAPS, ["certifications"]);
+    expect(out.jobs).toBeGreaterThan(CAPS.jobs);
+    expect(out.skills).toBeGreaterThanOrEqual(CAPS.skills);
+  });
+
+  it("weighs sections by page space, not by slot count", () => {
+    // skills: 18 slots × weight 1 = 18 lines freed.
+    // certifications: 4 slots × weight 2 = 8 lines freed — fewer, despite 4 vs 18 being
+    // the smaller number only in slots.
+    const offSkills = effectiveCaps(CAPS, ["skills"]);
+    const offCerts = effectiveCaps(CAPS, ["certifications"]);
+    expect(offSkills.jobs).toBeGreaterThan(offCerts.jobs);
+  });
+
+  it("clamps growth so one toggle loosens the layout instead of abolishing it", () => {
+    const out = effectiveCaps(CAPS, [
+      "certifications",
+      "skills",
+      "languages",
+      "projects",
+      "educations",
+    ]);
+    expect(out.jobs).toBeLessThanOrEqual(CAPS.jobs * MAX_CAP_GROWTH);
+  });
+
+  it("never returns a cap below one", () => {
+    const out = effectiveCaps({ jobs: 1, skills: 1 }, ["skills"]);
+    expect(out.jobs).toBeGreaterThanOrEqual(1);
   });
 });

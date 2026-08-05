@@ -5,18 +5,39 @@ prompt tests live in test_prompts.py; view plumbing in test_api.py.
 Target API = `[backend]-pipeline-single-executor` and `[backend]-entry-pins`.
 """
 
+from datetime import date
+from unittest import skip
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 
 from jac.cover_letter import editable_body
+from jac.cv import CV
 from jac.filter import CVFilter, GenerationError
-from jac.llm_prompts import Instruct, LetterChat
-from jac.models import Mode
+from jac.llm_prompts import CoverLetterWriter, Instruct, LetterChat
+from jac.models import Education, Mode
 from llm_connector.executor import Executor
 from llm_connector.tests._helpers import FakeAdapter
 
 from ._helpers import TEST_HIRSCHAI, _muted, fake_row, make_user
+
+from jac.cover_letter import CoverLetter
+
+try:  # [fullstack]-letter-fit — does not exist until that guide lands.
+    from jac.llm_prompts import ShortenLetter
+except ImportError:  # pragma: no cover
+    ShortenLetter = None
+
+try:  # [fullstack]-letter-register-de — likewise.
+    from jac.register import (
+        detect_address_form,
+        register_leaks,
+        resolve_address_form,
+    )
+    from jac.cover_letter import _CLOSING, _SALUTATION_GENERIC, _furniture
+except ImportError:  # pragma: no cover
+    detect_address_form = register_leaks = resolve_address_form = None
+    _CLOSING = _SALUTATION_GENERIC = _furniture = None
 
 POST = "Python backend engineer wanted (Django, PostgreSQL)."
 
@@ -272,3 +293,379 @@ class LetterChatAssistantTests(TestCase):
 
     def test_stream_yields_the_executors_deltas(self):
         self.assertEqual(list(self._chat().stream()), ["Hel", "lo"])
+
+
+# --- [fullstack]-education-degree ---------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+
+
+@skip("[fullstack]-education-degree — step 0: unskip")
+class HighestDegreeTests(TestCase):
+    """The highest COMPLETED degree rides the existing pin mechanism, so every rung
+    force-keeps it — an LLM instruction alone would be honoured about half the time by a
+    1B model, and the German public-service pay grade is not a coin flip."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+
+    def _cv(self):
+        return CV(user_pk=self.user.pk)
+
+    def test_none_without_a_single_completed_degree(self):
+        Education.objects.create(
+            user=self.user,
+            institution="FU Berlin",
+            started=date(2012, 10, 1),
+            degree_level=Education.DegreeLevel.master,
+            completed=False,
+        )
+        self.assertIsNone(self._cv().highest_degree_id())
+
+    def test_picks_the_highest_level(self):
+        bsc = Education.objects.create(
+            user=self.user, institution="TU", started=date(2012, 10, 1),
+            ended=date(2015, 9, 30),
+            degree_level=Education.DegreeLevel.bachelor, completed=True,
+        )
+        msc = Education.objects.create(
+            user=self.user, institution="TU", started=date(2015, 10, 1),
+            ended=date(2017, 9, 30),
+            degree_level=Education.DegreeLevel.master, completed=True,
+        )
+        self.assertEqual(self._cv().highest_degree_id(), f"education:{msc.pk}")
+        self.assertNotEqual(self._cv().highest_degree_id(), f"education:{bsc.pk}")
+
+    def test_ignores_drop_outs_even_at_a_higher_level(self):
+        bsc = Education.objects.create(
+            user=self.user, institution="TU", started=date(2012, 10, 1),
+            ended=date(2015, 9, 30),
+            degree_level=Education.DegreeLevel.bachelor, completed=True,
+        )
+        Education.objects.create(
+            user=self.user, institution="FU", started=date(2016, 10, 1),
+            degree_level=Education.DegreeLevel.doctorate, completed=False,
+        )
+        self.assertEqual(self._cv().highest_degree_id(), f"education:{bsc.pk}")
+
+    def test_ties_go_to_the_most_recently_finished(self):
+        older = Education.objects.create(
+            user=self.user, institution="A", started=date(2010, 10, 1),
+            ended=date(2013, 9, 30),
+            degree_level=Education.DegreeLevel.master, completed=True,
+        )
+        newer = Education.objects.create(
+            user=self.user, institution="B", started=date(2015, 10, 1),
+            ended=date(2018, 9, 30),
+            degree_level=Education.DegreeLevel.master, completed=True,
+        )
+        self.assertEqual(self._cv().highest_degree_id(), f"education:{newer.pk}")
+        self.assertNotEqual(self._cv().highest_degree_id(), f"education:{older.pk}")
+
+    def test_the_flattened_text_states_the_degree_status(self):
+        """The LLM rungs can only weigh what the entry text says, and a free-text
+        "Drop Out Education Physics" degree field says the opposite of the truth."""
+        Education.objects.create(
+            user=self.user, institution="TU", started=date(2012, 10, 1),
+            ended=date(2015, 9, 30), field_of_study="Physics",
+            degree_level=Education.DegreeLevel.bachelor, completed=True,
+        )
+        Education.objects.create(
+            user=self.user, institution="FU", started=date(2016, 10, 1),
+            field_of_study="Maths",
+            degree_level=Education.DegreeLevel.master, completed=False,
+        )
+        texts = [
+            e["text"] for e in self._cv()._flatten_entries() if e["type"] == "education"
+        ]
+        self.assertTrue(any("[completed:" in t for t in texts), texts)
+        self.assertTrue(any("[studied, no degree]" in t for t in texts), texts)
+
+    def test_filter_cv_unions_the_degree_with_the_callers_pins(self):
+        msc = Education.objects.create(
+            user=self.user, institution="TU", started=date(2015, 10, 1),
+            ended=date(2017, 9, 30),
+            degree_level=Education.DegreeLevel.master, completed=True,
+        )
+        seen = {}
+        real = CVFilter.__init__
+
+        def spy(self, *a, **kw):
+            seen.update(kw)
+            return real(self, *a, **kw)
+
+        with patch.object(CVFilter, "__init__", spy):
+            self._cv().filter_cv(POST, Mode.manual, TOWER, pinned={"job:99"})
+        self.assertIn(f"education:{msc.pk}", seen["pinned"])
+        self.assertIn("job:99", seen["pinned"])  # the user's own pin survives
+
+
+# --- [fullstack]-letter-fit ---------------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorators.
+
+
+@skip("[fullstack]-letter-fit — step 0: unskip")
+class LetterLengthTests(TestCase):
+    """The letter is currently *specified* to overflow: the writer targets 200-320 words
+    and a DIN 5008 page 1 holds ~230. Everything downstream of that is a workaround."""
+
+    def test_the_target_band_fits_the_page_it_is_printed_on(self):
+        lo, hi = CoverLetterWriter._TARGET_WORDS
+        self.assertLess(lo, hi)
+        # ~187mm of body at 11pt/1.4, minus the subject/salutation/closing furniture.
+        self.assertLessEqual(hi, 240, "the top of the band must fit one DIN page")
+        self.assertGreaterEqual(lo, 150, "…without turning the letter into a note")
+
+    def test_the_target_is_overridable_per_call(self):
+        w = CoverLetterWriter(
+            executor=TOWER, cv_facts="- did things", target_words=(80, 120)
+        )
+        self.assertIn("80", w._prompt())
+        self.assertIn("120", w._prompt())
+
+
+@skip("[fullstack]-letter-fit — step 0: unskip")
+class ShortenLetterTests(TestCase):
+    """A word budget and a paragraph-count rule — the two things the "shorter" free-text
+    instruction on ParagraphRewrite never gave the model, which is why it returned one
+    paragraph where there were three."""
+
+    BODY = "First para, quite wordy.\n\nSecond para.\n\nThird para, also wordy."
+
+    def _s(self, body=None, target=120):
+        return ShortenLetter(
+            body=BODY_DEFAULT if body is None else body,
+            executor=TOWER,
+            target_words=target,
+        )
+
+    def test_counts_paragraphs_on_blank_lines(self):
+        self.assertEqual(len(self._s(self.BODY).paragraphs), 3)
+
+    def test_the_prompt_states_budget_current_and_structure(self):
+        prompt = self._s(self.BODY, target=90)._prompt()
+        self.assertIn("90", prompt)  # the budget
+        self.assertIn(str(len(self.BODY.split())), prompt)  # the current count
+        self.assertIn("3", prompt)  # keep exactly 3 paragraphs
+        self.assertIn(self.BODY, prompt)  # the passage is authoritative
+
+    def test_the_posting_is_never_in_the_prompt(self):
+        """Same fabrication rule as everywhere else: the body is the only source."""
+        prompt = self._s(self.BODY)._prompt()
+        self.assertNotIn("POSTING", prompt.upper())
+
+    def test_the_budget_has_a_floor(self):
+        self.assertGreaterEqual(self._s(self.BODY, target=5).target_words, 60)
+
+    def test_a_blank_body_short_circuits_without_calling_the_model(self):
+        with patch("jac.llm_prompts.complete") as complete_mock:
+            self.assertEqual(self._s("   ").shorten(), "")
+        complete_mock.assert_not_called()
+
+    def test_an_llm_failure_returns_empty_so_the_caller_keeps_the_original(self):
+        with (
+            _muted(),
+            patch("jac.llm_prompts.complete", side_effect=RuntimeError("boom")),
+        ):
+            self.assertEqual(self._s(self.BODY).shorten(), "")
+
+    def test_a_good_reply_is_returned_stripped(self):
+        with patch("jac.llm_prompts.complete", return_value="  Shorter.\n"):
+            self.assertEqual(self._s(self.BODY).shorten(), "Shorter.")
+
+
+BODY_DEFAULT = "One.\n\nTwo.\n\nThree."
+
+
+# --- [fullstack]-letter-register-de --------------------------------------------------
+# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorators.
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class AddressFormDetectionTests(TestCase):
+    """Which form of "you" a German posting uses. Regex, not LLM: it is a lexical question
+    with an exact answer, and the audit has to be more reliable than the model it audits."""
+
+    def test_detects_the_three_german_forms(self):
+        self.assertEqual(
+            detect_address_form("Du bringst Erfahrung mit. Dein Profil passt zu uns."),
+            "du",
+        )
+        self.assertEqual(
+            detect_address_form("Ihr bringt Erfahrung mit. Wir freuen uns auf euch und eure Bewerbung."),
+            "ihr",
+        )
+        self.assertEqual(
+            detect_address_form("Sie bringen Erfahrung mit. Wir freuen uns auf Ihre Bewerbung."),
+            "sie",
+        )
+
+    def test_no_signal_is_empty_not_a_guess(self):
+        self.assertEqual(detect_address_form("We are hiring a backend engineer."), "")
+        self.assertEqual(detect_address_form(""), "")
+
+    def test_lowercase_sie_is_she_or_they_and_never_counted(self):
+        """The whole letter's register hangs off this call — a false positive here would
+        flip it."""
+        self.assertEqual(
+            detect_address_form("Die Firma wächst, sie hat 200 Mitarbeitende."), ""
+        )
+
+    def test_bare_ihr_is_too_ambiguous_to_count(self):
+        # "ihr Team" = "her/their team", not an address form.
+        self.assertEqual(
+            detect_address_form("Die Leiterin und ihr Team suchen Verstärkung."), ""
+        )
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class ResolveAddressFormTests(TestCase):
+    DU_POST = "Du bist Entwickler:in? Dein Profil passt, wir freuen uns auf dich."
+    SIE_POST = "Sie sind Entwickler:in? Wir freuen uns auf Ihre Bewerbung."
+    IHR_POST = "Ihr sucht ein Team? Wir freuen uns auf euch und eure Ideen."
+
+    def test_personal_always_uses_the_plural_ihr(self):
+        """Lukas's explicit instruction: personal German avoids BOTH 'Du' and 'Sie'."""
+        for posting in (self.DU_POST, self.SIE_POST, self.IHR_POST, ""):
+            self.assertEqual(resolve_address_form("personal", posting, "de"), "ihr")
+
+    def test_formal_always_uses_sie(self):
+        for posting in (self.DU_POST, self.IHR_POST, ""):
+            self.assertEqual(resolve_address_form("formal", posting, "de"), "sie")
+
+    def test_neutral_mirrors_the_company(self):
+        self.assertEqual(resolve_address_form("neutral", self.IHR_POST, "de"), "ihr")
+        self.assertEqual(resolve_address_form("neutral", self.SIE_POST, "de"), "sie")
+
+    def test_neutral_falls_back_to_sie_rather_than_familiarity(self):
+        # A posting that says "du" to one applicant does not make a neutral letter say it.
+        self.assertEqual(resolve_address_form("neutral", self.DU_POST, "de"), "sie")
+        self.assertEqual(resolve_address_form("neutral", "", "de"), "sie")
+
+    def test_english_has_no_such_fork(self):
+        for tone in ("personal", "neutral", "formal"):
+            self.assertEqual(resolve_address_form(tone, "We are hiring.", "en"), "")
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class RegisterLeakTests(TestCase):
+    def test_formal_pronouns_in_an_ihr_letter_are_flagged(self):
+        leaks = register_leaks("Ich freue mich, Sie und Ihr Team zu treffen.", "de", "ihr")
+        self.assertTrue(leaks)
+        self.assertIn("Sie", leaks)
+
+    def test_plural_pronouns_in_a_sie_letter_are_flagged(self):
+        self.assertIn("euch", register_leaks("Ich schreibe euch gerne.", "de", "sie"))
+
+    def test_du_is_wrong_in_both(self):
+        self.assertTrue(register_leaks("Ich schreibe dir.", "de", "ihr"))
+        self.assertTrue(register_leaks("Ich schreibe dir.", "de", "sie"))
+
+    def test_a_clean_letter_reports_nothing(self):
+        self.assertEqual(
+            register_leaks("Ich freue mich auf euch und eure Arbeit.", "de", "ihr"), []
+        )
+
+    def test_english_and_formless_letters_are_never_flagged(self):
+        self.assertEqual(register_leaks("I look forward to meeting you.", "en", ""), [])
+        self.assertEqual(register_leaks("Sie und Ihr Team.", "de", ""), [])
+
+    def test_repeated_hits_are_deduped(self):
+        leaks = register_leaks("Sie, Sie und nochmals Sie.", "de", "ihr")
+        self.assertEqual(len(leaks), len(set(leaks)))
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class LetterFurnitureTests(TestCase):
+    def test_every_german_tone_gets_its_own_greeting_and_closing(self):
+        greetings = {
+            _furniture(_SALUTATION_GENERIC, "de", t)
+            for t in ("personal", "neutral", "formal")
+        }
+        closings = {
+            _furniture(_CLOSING, "de", t) for t in ("personal", "neutral", "formal")
+        }
+        self.assertEqual(len(greetings), 3, greetings)
+        self.assertEqual(len(closings), 3, closings)
+
+    def test_german_closings_take_no_comma(self):
+        """Duden: the Grußformel has no trailing comma. The old map had one."""
+        for tone in ("personal", "neutral", "formal"):
+            self.assertFalse(_furniture(_CLOSING, "de", tone).endswith(","))
+
+    def test_unknown_tone_falls_back_to_neutral(self):
+        self.assertEqual(
+            _furniture(_CLOSING, "de", "sardonic"), _furniture(_CLOSING, "de", "neutral")
+        )
+
+    def test_unknown_language_falls_back_to_english(self):
+        self.assertEqual(
+            _furniture(_CLOSING, "fr", "formal"), _furniture(_CLOSING, "en", "formal")
+        )
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class WriterRegisterAndRefusalTests(TestCase):
+    LETTER = " ".join(["Wort"] * 200)
+
+    def _writer(self, **kw):
+        return CoverLetterWriter(
+            executor=TOWER, cv_facts="- built things", language="de", **kw
+        )
+
+    def test_the_ihr_clause_reaches_the_prompt(self):
+        prompt = self._writer(address_form="ihr")._prompt()
+        self.assertIn("euch", prompt)
+        self.assertNotIn("formal 'Sie'", prompt)
+
+    def test_the_sie_clause_reaches_the_prompt(self):
+        self.assertIn("Sie", self._writer(address_form="sie")._prompt())
+
+    def test_english_letters_get_no_address_clause(self):
+        prompt = CoverLetterWriter(
+            executor=TOWER, cv_facts="- built things", language="en", address_form=""
+        )._prompt()
+        self.assertNotIn("euch", prompt)
+
+    def test_a_refusal_is_not_a_cover_letter(self):
+        for refusal in (
+            "I'm sorry, I can't assist with that.",
+            "I cannot help with writing this letter.",
+            "As an AI language model, I am unable to comply.",
+            "Es tut mir leid, ich kann das nicht.",
+        ):
+            with _muted(), patch("jac.llm_prompts.complete", return_value=refusal):
+                self.assertEqual(self._writer(address_form="ihr").write(), "", refusal)
+
+    def test_a_one_liner_is_not_a_cover_letter_either(self):
+        with _muted(), patch("jac.llm_prompts.complete", return_value="Here you go!"):
+            self.assertEqual(self._writer().write(), "")
+
+    def test_a_real_letter_passes_through(self):
+        with patch("jac.llm_prompts.complete", return_value=f"  {self.LETTER}  "):
+            self.assertEqual(self._writer().write(), self.LETTER)
+
+
+@skip("[fullstack]-letter-register-de — step 0: unskip")
+class RenderMarkdownTests(TestCase):
+    def test_the_closing_appears_exactly_once(self):
+        """It was printed twice — once from the _CLOSING map and once from result['closing'],
+        which holds the same string."""
+        result = {
+            "language": "de",
+            "subject": "Bewerbung",
+            "salutation": "Hallo zusammen,",
+            "body": "Text.",
+            "closing": "Viele Grüße",
+            "date": "2026-07-27",
+            "sender": {
+                "name": "Lukas", "street": "", "address_line2": "", "zip": "",
+                "city": "", "country": "", "email": "", "phone": "",
+            },
+            "recipient": {
+                "company": "Acme", "contact_name": "", "street": "",
+                "address_line2": "", "zip": "", "city": "", "country": "",
+            },
+        }
+        text = CoverLetter.render_markdown(None, result)
+        self.assertEqual(text.count("Viele Grüße"), 1, text)
