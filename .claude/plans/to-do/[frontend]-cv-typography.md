@@ -52,8 +52,9 @@ Plus widow control: a section title landing at the bottom of page 2 with its ent
 | `backend/jac/resources/default_layout.json` | same, for the seeded system layout. |
 | `backend/jac/resources/two_page_layout.json` | same. |
 | `frontend/tests/lib/render-typography.test.ts` | **new** — acceptance tests. |
-| `frontend/tests/lib/export.test.ts` | existing assertion `p.meta === "Python"` moves to `p.skills`. |
+| `frontend/tests/lib/export.test.ts` | existing: `p.meta === "Python"` moves to `p.skills`, and the `toEqual` fallback shape gains the three new `EntryParts` keys. |
 | `frontend/tests/lib/render-moderncv.test.ts` | existing `skillGroups` expectation gains proficiency. |
+| `frontend/tests/lib/render-templates.test.ts` | existing `max_entries.skills === 14` follows the new budget. |
 
 ## The code
 
@@ -428,9 +429,8 @@ no migration**. Note the existing behaviour it inherits: applying a *new* run re
 lists, so an override is lost unless the entry is pinned — exactly what already happens to
 `deselected`.
 
-**b.** `frontend/src/lib/render/spec.ts` — the budget, next to `max_entries` in the `LayoutSpec`
-type, `FALLBACK_SPEC`, and `parseLayoutSpec` (reuse the `maxEntries` parser — it is the same
-shape: positive ints keyed by section, legacy names remapped):
+**b.** `frontend/src/lib/render/spec.ts` — the budget, in three places. In the `LayoutSpec.cv`
+type, next to `max_entries` (line 20):
 
 ```ts
     /** How many entries per section render in full. The rest are one-liners. Sections
@@ -438,9 +438,44 @@ shape: positive ints keyed by section, legacy names remapped):
      *  description to show anyway). */
     detailed: Record<string, number>;
 ```
+
+in `FALLBACK_SPEC.cv`, after `max_entries` (line 42):
+
 ```ts
     detailed: { jobs: 2, projects: 1, educations: 1 },
 ```
+
+and in `parseLayoutSpec`. The existing `maxEntries` helper (lines 62–70) parses exactly the shape
+`detailed` needs — positive ints keyed by section, legacy names remapped — but it hardcodes
+`f.cv.max_entries` as its empty-input fallback, so it can't be called twice as it stands.
+Generalise it (one renamed function, one extra argument, the two call sites below it):
+
+```ts
+  /** Positive ints keyed by section, legacy names remapped. Shared by `max_entries`
+   *  and `detailed` — same shape, different fallback. */
+  const sectionCounts = (
+    raw: Record<string, number> | undefined,
+    fallback: Record<string, number>,
+  ) => {
+    if (!raw) return { ...fallback };
+    const out: Record<string, number> = {};
+    for (const [name, cap] of Object.entries(raw)) {
+      if (typeof cap === "number" && cap > 0)
+        out[LEGACY_SECTIONS[name] ?? name] = Math.floor(cap);
+    }
+    return out;
+  };
+```
+
+```ts
+      max_entries: sectionCounts(r.cv?.max_entries, f.cv.max_entries),
+      detailed: sectionCounts(r.cv?.detailed, f.cv.detailed),
+```
+
+⚠️ Note what the `if (!raw)` branch means for a **stored** layout: a template file written before
+this change has no `detailed` key, so it inherits the fallback's `{ jobs: 2, projects: 1,
+educations: 1 }` rather than an empty map. That is the intended default — but it also means step 4's
+`seed_system_defaults` is not optional for the *budgets*, only for the section split.
 
 **c.** `frontend/src/lib/render/parts.ts` — the resolution rule, in one pure place:
 
@@ -469,9 +504,20 @@ export function entryDetail(
 }
 ```
 
-**d.** `frontend/src/lib/render/templates.tsx` — `CvPages` passes `spec.cv.detailed` and an optional
-`demoted` set into `CvSectionView`, and the entry loop drops the meta line and the body for a
-compact entry. Inside the `entries.map` from step 2d:
+**d.** `frontend/src/lib/render/templates.tsx` — the detail level reaches the entry loop. Three
+edits:
+
+1. `CvSectionView`'s props gain `demoted?: Set<string>` (it already receives `spec`-derived
+   `styles`, but not `spec` itself — pass `detailed: Record<string, number>` explicitly rather than
+   threading the whole spec, so the function stays as narrow as it is today);
+2. `CvPages` passes both down — `detailed={spec.cv.detailed}` and `demoted={demoted}` — on the
+   **main-flow** `CvSectionView` map (line 242) only. The `sidebar` map (line 251) does not: a
+   compact section has no per-entry detail to choose. `CvPages` itself takes a new optional
+   `demoted?: Set<string>` prop; nothing passes it yet — `[frontend]-fit-preflight` is what fills
+   it, and until then every caller renders with rank alone;
+3. the entry loop drops the meta line and the body for a compact entry.
+
+Inside the `entries.map` from step 2d:
 
 ```tsx
       {entries.map((e, i) => {
@@ -502,10 +548,20 @@ compact entry. Inside the `entries.map` from step 2d:
       })}
 ```
 
-**e.** `frontend/src/lib/export.ts` — markdown mirrors the page (it is a sendable artefact, so it
-shows what the PDF shows). `cvToMarkdown` takes the same two arguments and skips `p.body` for a
-compact entry; the invisible-ink payload and the JSON dump are untouched — both already carry the
-full career-DB row, so the description is still there for a machine reader.
+**e.** `frontend/src/lib/export.ts` — markdown honours **only** the user's explicit override, not
+the page's. In `cvToMarkdown`'s entry loop (line 31):
+
+```ts
+      // The three detail signals are not equal. `entry.detail` is editorial — "this job
+      // is a footnote" — and holds in any format. The other two (rank against the
+      // layout budget, and a fit demotion) exist because the PAGE ran out of room, and
+      // markdown has no pages. So markdown reads the override off the entry and ignores
+      // the rest; it needs no `detailed` map and keeps its three-argument signature.
+      if (p.body && e.detail !== "compact") lines.push(p.body);
+```
+
+The invisible-ink payload and the JSON dump stay untouched in either case — both carry the joined
+career-DB row, so a machine reader still gets every description whatever the page decided.
 
 ### 4. layout budgets — three files, same edit
 
@@ -538,12 +594,18 @@ fails to load, and a mismatch means the preview and the export disagree.
 
 ## Tests
 
-**Step 0 — unskip.** This guide is not the active one, so its acceptance tests land on disk
-`describe.skip`-marked (the same convention the executor-rework stack used, so the active guide's
-red set stays unambiguous). Before writing any code: delete every `.skip` in
-`frontend/tests/lib/render-typography.test.ts` and confirm the suite goes red.
+**Step 0 — done at activation.** This guide's tests landed `describe.skip`-marked while guide 1 was
+the active one (the executor-rework convention: the active guide's red set stays unambiguous). The
+`.skip`s are now removed and the three existing assertions below have been flipped to the new
+expectations, so **the red set is this guide** — `25 failed | 31 passed (56)` across the four files,
+before a line of implementation is typed.
 
-`frontend/tests/lib/render-typography.test.ts` — 21 tests. Covers:
+Six of this file's 27 tests pass already, deliberately: they are the regression guards, not weak
+tests. `joinedContent` "omits the key for an entry with no skills" and "suppresses the footer on a
+single-page CV" pass trivially today because neither feature exists yet — they are there to catch
+the implementation going too far (a `skill_names: ""` on every entry, a `page 1 of 1` on a one-pager).
+
+`frontend/tests/lib/render-typography.test.ts` — 27 tests. Covers:
 
 - `dateParts` / `datePoint`: NBSP inside each side, the dash leads line 2, open-ended ranges say
   `present`, a missing start renders `?`, a certification gets one line and no continuation.

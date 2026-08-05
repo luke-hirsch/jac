@@ -10,12 +10,12 @@ The preview dialog renders the real export blob in an `<iframe>`, but the shell 
 in three ways:
 
 1. **Dead height.** `DialogContent` is `grid gap-6 p-6` (`components/ui/dialog.tsx:60`). The route
-   passes `className="h-[85vh] max-w-4xl"`, and the iframe asks for `h-full`. `h-full` on a *grid
-   item* resolves against its grid row, not against the dialog — so the iframe gets an
+   passes `className="h-[85vh] max-w-4xl"`, and the iframe asks for `h-full`. `h-full` on a _grid
+   item_ resolves against its grid row, not against the dialog — so the iframe gets an
    intrinsic-ish height while the dialog keeps its 85vh, and the leftover becomes the whitespace
    band in `pdf_preview1.png`. Fix: flex column + `min-h-0` on the growing child, `p-0`.
 2. **Wrong proportions.** `max-w-4xl` (56rem) with an 85vh height is a landscape box holding a
-   portrait page. Fix: size the dialog *to the A4 aspect* (`0.7071`), clamped to the viewport, and
+   portrait page. Fix: size the dialog _to the A4 aspect_ (`0.7071`), clamped to the viewport, and
    ask the built-in viewer to fit the page width (`#view=FitH`) so the page fills the frame.
 3. **No feedback.** `onPreview()` (`export-card.tsx:245`) builds a `BuiltPdf` — page count, dropped
    entries, letter overflow — and throws all of it away. `notify()` is only called from
@@ -31,12 +31,12 @@ source and can't drift apart.
 
 ## Affected files
 
-| path | why |
-| --- | --- |
-| `frontend/src/lib/render/preview.ts` | **new** — pure preview helpers: viewer URL params, notice list, inline-PDF capability. |
-| `frontend/src/components/applications/pdf-preview-dialog.tsx` | **new** — the overlay itself, extracted from the export card. |
-| `frontend/src/components/applications/export-card.tsx` | use the dialog + notices; `notify()` becomes a thin toast mapper over `fitNotices`. |
-| `frontend/tests/lib/render-preview.test.ts` | **new** — acceptance tests (AI-written, red first). |
+| path                                                          | why                                                                                    |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `frontend/src/lib/render/preview.ts`                          | **new** — pure preview helpers: viewer URL params, notice list, inline-PDF capability. |
+| `frontend/src/components/applications/pdf-preview-dialog.tsx` | **new** — the overlay itself, extracted from the export card.                          |
+| `frontend/src/components/applications/export-card.tsx`        | use the dialog + notices; `notify()` becomes a thin toast mapper over `fitNotices`.    |
+| `frontend/tests/lib/render-preview.test.ts`                   | **new** — acceptance tests (AI-written, red first).                                    |
 
 ## The code
 
@@ -186,12 +186,22 @@ export function PdfPreviewDialog({
           <div className="flex items-center gap-1">
             {url && (
               <Button variant="ghost" size="icon-sm" asChild>
-                <a href={url} target="_blank" rel="noreferrer" title="Open in a new tab">
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open in a new tab"
+                >
                   <ExternalLink />
                 </a>
               </Button>
             )}
-            <Button variant="ghost" size="icon-sm" onClick={onDownload} title="Download">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onDownload}
+              title="Download"
+            >
               <Download />
             </Button>
             <Button variant="ghost" size="sm" onClick={onClose}>
@@ -263,26 +273,26 @@ import { fitNotices, type BuiltPdf } from "@/lib/render/preview";
 the overlay footer can never disagree:
 
 ```tsx
-  function notify(built: BuiltPdf) {
-    for (const n of fitNotices(built, spec.data?.cv.pages ?? 1)) {
-      if (n.level === "warning") toast.warning(n.text);
-      else toast.info(n.text);
-    }
+function notify(built: BuiltPdf) {
+  for (const n of fitNotices(built, spec.data?.cv.pages ?? 1)) {
+    if (n.level === "warning") toast.warning(n.text);
+    else toast.info(n.text);
   }
+}
 ```
 
 **d. `onPreview()`** (lines 245–252) — keep the built info for the overlay; the notices render in
 the footer, so no toasts here (they'd double up the moment the user hits Download from inside):
 
 ```tsx
-  function onPreview() {
-    if (blockedBy("pdf")) return;
-    void withBusy(async () => {
-      const built = await buildPdf();
-      const blob = await withAttachments(built.blob);
-      setPreview({ url: URL.createObjectURL(blob), info: built });
-    });
-  }
+function onPreview() {
+  if (blockedBy("pdf")) return;
+  void withBusy(async () => {
+    const built = await buildPdf();
+    const blob = await withAttachments(built.blob);
+    setPreview({ url: URL.createObjectURL(blob), info: built });
+  });
+}
 ```
 
 (unchanged — listed so you can confirm it still compiles against the imported `BuiltPdf`.)
@@ -290,31 +300,31 @@ the footer, so no toasts here (they'd double up the moment the user hits Downloa
 **e. a download that reuses the already-built blob** — new function, next to `onDownloadPdf`:
 
 ```tsx
-  // Download from inside the overlay: the blob is already built and merged, so this is a
-  // straight save — no second render pass.
-  function onDownloadPreview() {
-    if (!preview) return;
-    void fetch(preview.url)
-      .then((r) => r.blob())
-      .then((b) => downloadBlob(b, `${stem}.pdf`));
-  }
+// Download from inside the overlay: the blob is already built and merged, so this is a
+// straight save — no second render pass.
+function onDownloadPreview() {
+  if (!preview) return;
+  void fetch(preview.url)
+    .then((r) => r.blob())
+    .then((b) => downloadBlob(b, `${stem}.pdf`));
+}
 ```
 
 **f. the JSX** — replace the whole `<Dialog>…</Dialog>` block (lines 358–379) with:
 
 ```tsx
-      <PdfPreviewDialog
-        open={preview != null}
-        url={preview?.url ?? null}
-        built={preview?.info ?? null}
-        scope={scope}
-        pageBudget={spec.data?.cv.pages ?? 1}
-        onDownload={onDownloadPreview}
-        onClose={() => {
-          if (preview) URL.revokeObjectURL(preview.url);
-          setPreview(null);
-        }}
-      />
+<PdfPreviewDialog
+  open={preview != null}
+  url={preview?.url ?? null}
+  built={preview?.info ?? null}
+  scope={scope}
+  pageBudget={spec.data?.cv.pages ?? 1}
+  onDownload={onDownloadPreview}
+  onClose={() => {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+  }}
+/>
 ```
 
 ## Tests
@@ -322,7 +332,7 @@ the footer, so no toasts here (they'd double up the moment the user hits Downloa
 `frontend/tests/lib/render-preview.test.ts` — written to disk, **red** until `lib/render/preview.ts`
 exists (the import fails). Covers:
 
-- `fitNotices`: clean build → `[]`; overflow → one warning and *no* drop notice (they're
+- `fitNotices`: clean build → `[]`; overflow → one warning and _no_ drop notice (they're
   mutually exclusive, matching the current `else if`); 1 vs N dropped entries → singular/plural
   wording; letter > 1 page → its own warning; overflow + long letter → both, warning first.
 - `previewSrc`: appends the viewer params; idempotent when a fragment is already present.
@@ -360,3 +370,6 @@ Whole suite: `cd frontend && npm test`.
 ## Results
 
 <!-- human: raw test output, observed issues, what works -->
+
+Preview looks good for now, warnings are correctly diplayed, tests are either green or skipped, nothing red.
+i will continue with next guide
