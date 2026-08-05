@@ -53,8 +53,9 @@ _TEST_SETTINGS = {
     "EMAIL_BACKEND": "django.core.mail.backends.locmem.EmailBackend",
     "CACHES": {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
     "ALLOWED_HOSTS": ["localhost", "testserver"],
-    # These flows exercise signup end-to-end; the launch gate (closed by default)
-    # is covered separately in SignupGateTests.
+    # These flows exercise signup end-to-end. Pinned rather than inherited: the
+    # kill-switch (open by default, see SignupGateTests) must not silently decide
+    # whether the auth suite runs at all.
     "ACCOUNT_ALLOW_SIGNUPS": True,
 }
 
@@ -408,25 +409,44 @@ class UserProfileViewTests(TestCase):
         self.assertTrue(self.alice.profile.show_socials)
 
 
+# Deliberately NOT `**_TEST_SETTINGS` — that pins ACCOUNT_ALLOW_SIGNUPS, and the shipped
+# default is exactly what this class is here to assert. Only the infra bits are pinned.
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
+    ALLOWED_HOSTS=["localhost", "testserver"],
+)
 class SignupGateTests(TestCase):
-    """`[backend]-ssrf-signup-gate`: registration is closed unless ACCOUNT_ALLOW_SIGNUPS is set.
-    Red until HarassmentResistantAccountAdapter overrides is_open_for_signup."""
+    """`ACCOUNT_ALLOW_SIGNUPS` is a **kill switch, open by default**: the portfolio hosts
+    jac as a "try it yourself" POC, so a recruiter must be able to sign up without asking.
+    Lukas closes it reactively if abuse shows up — so what needs guarding is that the flag
+    still *works*, not that the door starts locked."""
 
     def _adapter(self):
         from lukehirsch.adapter import HarassmentResistantAccountAdapter
 
         return HarassmentResistantAccountAdapter()
 
-    def test_signup_closed_by_default(self):
-        self.assertFalse(self._adapter().is_open_for_signup(request=None))
-
-    @override_settings(ACCOUNT_ALLOW_SIGNUPS=True)
-    def test_signup_open_when_flag_set(self):
+    def test_signup_open_by_default(self):
         self.assertTrue(self._adapter().is_open_for_signup(request=None))
 
+    @override_settings(ACCOUNT_ALLOW_SIGNUPS=False)
+    def test_signup_closed_when_flag_cleared(self):
+        self.assertFalse(self._adapter().is_open_for_signup(request=None))
+
+    @override_settings(ACCOUNT_ALLOW_SIGNUPS=False)
     def test_signup_endpoint_refuses_when_closed(self):
         resp = _post(
             self.client, SIGNUP, {"email": "gate@example.com", "password": "gate_Xk9!"}
         )
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_signup_endpoint_accepts_when_open(self):
+        """The POC path: no flag set anywhere, a stranger registers. Headless answers 401
+        (session pending email verification), never 403, and the verification mail goes out."""
+        resp = _post(
+            self.client, SIGNUP, {"email": "poc@example.com", "password": "gate_Xk9!"}
+        )
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(len(mail.outbox), 1)

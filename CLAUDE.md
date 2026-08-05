@@ -8,11 +8,14 @@ portfolio is the product; jac feeds it.
   job post; organic visitors introduce themselves via a questionnaire and get content matched to
   their answers. it renders from the **same career-DB entries** jac maintains, and it is public.
 - **jac** (Job Application Creator): a pipeline that digests a job posting and renders a CV +
-  cover letter tailored to it with the help of LLMs. auth-gated **today** (signup closed = launch
-  toggle), but the plan is to open it as part of the portfolio — a "create your own CV here!"
-  showcase. **security posture: treat every authenticated surface as internet-facing**, because
-  open signup is a roadmap destination, not an accident; public endpoints opt in via explicit
-  `AllowAny` on top of the deny-by-default DRF setting, never public-by-omission.
+  cover letter tailored to it with the help of LLMs. it is Lukas's own tool _and_ the portfolio's
+  proof of concept: a recruiter who sees jac as a CV entry and the portfolio rendering itself must
+  be able to **try it on the spot** ("here, try it yourself"), not be sent to GitHub to self-host.
+  so **signups are open by default** — `ACCOUNT_ALLOW_SIGNUPS` is a kill switch Lukas flips _shut_
+  if funky business shows up, never a door that starts locked. **security posture: every
+  authenticated surface is internet-facing, today, for real**; public endpoints opt in via explicit
+  `AllowAny` on top of the deny-by-default DRF setting, never public-by-omission, and abuse control
+  is rate limits + the soft per-user daily generation cap, not the signup door.
 
 # layout
 
@@ -119,8 +122,8 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   generative call in the anonymous path: a HirschAI-only, 6/h-throttled **AI intro** that degrades
   to no-intro (the rest is deterministic/free). Empty native result falls back to the owner's
   `is_default` link. `/` is a Django-rendered SEO landing; each user gets an editable `handle`
-  (subdomain) + per-user-unique descriptive slugs; open signup is an env toggle
-  (`ACCOUNT_ALLOW_SIGNUPS`) with a soft per-user daily generation cap. Two env knobs move the whole
+  (subdomain) + per-user-unique descriptive slugs; signup ships open (`ACCOUNT_ALLOW_SIGNUPS` is the
+  kill switch) with a soft per-user daily generation cap. Two env knobs move the whole
   thing to a neutral domain (`BASE_DOMAIN` + `PORTFOLIO_ORIGIN_TEMPLATE`). Unit tests green both
   sides; **live/prod verification pending**. See [[portfolio-multiuser]].
 - **portfolio owner-side authoring — creator UX + block links** (implemented, both guides still in
@@ -138,24 +141,19 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **signup default regression** (one line, do it first) — `settings.py:290` reads
-   `env_bool("ACCOUNT_ALLOW_SIGNUPS", True)`; it must be `False` (flipped in `78c2d4c` during dev
-   click-testing). Today's dev server has signup open to anyone who can reach it, and the two red
-   `spa.tests.test_auth.SignupGateTests` are the guard reporting it — not stale tests. Open signup is
-   an **env** flag in prod/stage, never a code default. See [[public-site-posture]].
-2. **portfolio creator UX + block links — verification** — both guides sit in `to-do/` with the code
+1. **portfolio creator UX + block links — verification** — both guides sit in `to-do/` with the code
    implemented: guide 1 (`[frontend]-portfolio-creator-ux`) has an empty Results chapter, guide 2
    (`[fullstack]-block-links`) has one bug fixed (a stray line in a test) plus the unrun §7 hyperlink
    follow-up (branch `fullstack/block-links-hyperlinks`, verification steps 7–11).
-3. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
+2. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
    response, so a spurious small-model refusal ("I can't assist…") can become the letter body.
-4. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
+3. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
    (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
-5. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
+4. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
    per-model pricing metadata in the model catalog (see `[fullstack]-model-knobs`).
 
 > **Portfolio generator — merged to `main`; six guides in `done/portfolio/`.** Flow rework
@@ -163,9 +161,9 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > owner resolution, wildcard subdomain hosting, host-aware SPA routing, open signup). Unit tests
 > green both sides (11 frontend skips are the dormant executor-rework SPA-phase guides, unrelated).
 > **Remaining is live/prod only** — the Results chapters don't log it: wildcard DNS + DNS-01 wildcard
-> TLS + the nginx apex/`app.`/`*.` host-split deploy, flipping `ACCOUNT_ALLOW_SIGNUPS=true` **in the
-> prod env** at launch (see roadmap #1 — the code default must go back to `False`), and the manual
-> multi-owner + live-AI-intro (tower up) + signup click-through. See [[portfolio-multiuser]].
+> TLS + the nginx apex/`app.`/`*.` host-split deploy, and the manual multi-owner + live-AI-intro
+> (tower up) + signup click-through. Signup needs no launch flip — it ships **open**
+> ([[public-site-posture]]). See [[portfolio-multiuser]].
 
 > **Single-executor redesign — backend landed (`456a72f`…`f738eaf`; rework guides 1–3 in
 > `done/`, Results chapters not yet logged).** A run touches exactly one executor: **HirschAI**

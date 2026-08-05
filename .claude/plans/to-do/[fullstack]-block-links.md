@@ -573,30 +573,24 @@ proves it: `test_rejects_non_id_links` passed — the 400 on `["not-an-id"]` can
 `test_accepts_and_order_dedupes_ids`. My test bug; **fixed** — line deleted, nothing else in that
 test changed.
 
-**2b. The two `SignupGateTests` failures are not a test bug — they're a real regression, and they
-need a one-line fix from you (non-test source).** `backend/lukehirsch/settings.py:290` currently
-reads:
+**2b. The two `SignupGateTests` failures were stale tests, now rewritten** (corrected 2026-08-05 —
+my first read of this called the open default a regression; it isn't). `settings.py:290`'s
+`env_bool("ACCOUNT_ALLOW_SIGNUPS", True)` is **deliberate**: the portfolio hosts jac as a POC, and a
+recruiter who sees it must be able to try it on the spot rather than be sent to GitHub to self-host.
+The flag is a **kill switch Lukas flips shut if funky business shows up**, not a launch gate. Both
+failures were one stale assumption: the adapter reports open (`assertFalse` fails), and the headless
+endpoint accepts the registration and answers `401` (session pending email verification) instead of
+`403`. `spa/tests/test_auth.py` now asserts the real policy — `test_signup_open_by_default`,
+`test_signup_closed_when_flag_cleared` + `test_signup_endpoint_refuses_when_closed` (both under
+`override_settings(ACCOUNT_ALLOW_SIGNUPS=False)`, i.e. the switch still works), and a new
+`test_signup_endpoint_accepts_when_open` covering the POC path itself (401 + one verification mail).
+The class pins only the infra settings, never the flag, so the shipped default stays under test.
 
-```python
-ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", True)   # ← default flipped
-```
-
-It should be — as `[backend]-ssrf-signup-gate.md:64`, `done/portfolio/[fullstack]-open-signup.md:38`
-("keep it `False` in dev unless testing the flow") and the adapter's own docstring
-(`lukehirsch/adapter.py:23`, "default False") all say:
-
-```python
-ACCOUNT_ALLOW_SIGNUPS = env_bool("ACCOUNT_ALLOW_SIGNUPS", False)
-```
-
-`git log -S` pins the flip to `78c2d4c` ("portfolio flow rework frontend done") — leftover from
-click-testing the open-signup flow. One root cause explains both failures: the adapter reports open
-(`assertFalse` fails), and the headless signup endpoint accepts the registration and answers `401`
-(session pending email verification) instead of `403`. Per [[public-site-posture]] the default must
-stay **closed** — open signup is a launch toggle set in the prod/stage env, never a code default, and
-your `.env` doesn't set the var at all, so today's dev server has signup open to anyone who can reach
-it. Flip that one character and both tests go green; no test change is warranted (the test is the
-thing that caught it).
+**Left for you (one line, non-test source):** `lukehirsch/adapter.py:23`'s docstring still reads
+"Gate registration behind ACCOUNT_ALLOW_SIGNUPS (default False) … a launch toggle". The behaviour is
+fine (`getattr(settings, …, False)` is only a settings-missing fallback); the sentence is now
+misleading — it should say the flag defaults **open** and is a kill switch. See
+[[public-site-posture]].
 
 **3. The hyperlink UX follow-up is implemented** — see §7 above (volatile phase, branch
 `fullstack/block-links-hyperlinks`): on-page anchor wins, entry `url` is the fallback, `↗` keeps the
