@@ -58,8 +58,12 @@ describe("cvStyles density (Compact — 9pt)", () => {
 describe("FALLBACK_SPEC mirrors the compact default layout", () => {
   it("base 9pt with the bumped sidebar budgets", () => {
     expect(FALLBACK_SPEC.font.base_pt).toBe(9);
-    expect(FALLBACK_SPEC.cv.max_entries.skills).toBe(14);
+    // [frontend]-cv-typography: the space the per-entry skill cloud gave back is spent
+    // on budget — and certifications moved from the main flow into the sidebar.
+    expect(FALLBACK_SPEC.cv.max_entries.skills).toBe(18);
     expect(FALLBACK_SPEC.cv.max_entries.languages).toBe(6);
+    expect(FALLBACK_SPEC.cv.sections).not.toContain("certifications");
+    expect(FALLBACK_SPEC.cv.sidebar).toContain("certifications");
   });
 });
 

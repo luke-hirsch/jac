@@ -76,11 +76,14 @@ describe("skillNames / entryParts", () => {
     expect(skillNames(undefined, [1])).toBe("");
   });
 
-  it("splits the date into its own column, leaving skills in meta", () => {
+  it("splits the date into its own column and the skills off the page", () => {
     const p = entryParts(db, "jobs", content.jobs[0]);
     expect(p.heading).toBe("Senior Dev — ACME");
     expect(p.date).toBe("Jan 2021 – present");
-    expect(p.meta).toBe("Python"); // no date in meta any more
+    // [frontend]-cv-typography: the skill cloud left the visible meta line for its own
+    // field — the page stops printing it, the hidden layer picks it up.
+    expect(p.meta).toBe("");
+    expect(p.skills).toBe("Python");
     expect(p.body).toBe("Built the pipeline.");
     expect(p.favourite).toBe(true);
   });
@@ -94,7 +97,10 @@ describe("skillNames / entryParts", () => {
     expect(p).toEqual({
       heading: "a deleted job",
       date: "",
+      dateFrom: "",
+      dateTo: "",
       meta: "",
+      skills: "",
       body: "",
       favourite: false,
     });

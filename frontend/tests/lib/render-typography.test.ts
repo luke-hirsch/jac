@@ -17,8 +17,7 @@ import { countPdfPages } from "@/lib/render/fit";
 import { flat, pdfTextRuns } from "./_pdf-text";
 
 /**
- * `[frontend]-cv-typography`. SKIP-MARKED — this is not the active guide.
- * **Step 0 of the guide: delete every `.skip` in this file** and watch it go red.
+ * `[frontend]-cv-typography` — the ACTIVE guide. Red until the guide is implemented.
  *
  * What it pins: the per-entry skill cloud leaves the visible page but must land in the
  * machine layer (`skill_names`) and in the markdown export — moved, not deleted. Plus the
@@ -94,7 +93,7 @@ const job = { id: "job:12", label: "Senior Dev at ACME", relevance_score: null }
 const project = { id: "project:4", label: "Shopify Uploader", relevance_score: null };
 const cert = { id: "certification:7", label: "Shell Scripting", relevance_score: null };
 
-describe.skip("dateParts / datePoint — the left column stops wrapping", () => {
+describe("dateParts / datePoint — the left column stops wrapping", () => {
   it("keeps each side unbreakable and puts the dash on the second line", () => {
     const d = dateParts("2021-03-01", "2023-01-31");
     expect(d.from).toBe(`Mar${NBSP}2021`);
@@ -117,7 +116,7 @@ describe.skip("dateParts / datePoint — the left column stops wrapping", () => 
   });
 });
 
-describe.skip("bodyBlocks — markdown-ish descriptions", () => {
+describe("bodyBlocks — markdown-ish descriptions", () => {
   it("flags the three bullet markers that appear in the career DB", () => {
     expect(bodyBlocks("- one\n* two\n• three")).toEqual([
       { bullet: true, text: "one" },
@@ -144,7 +143,7 @@ describe.skip("bodyBlocks — markdown-ish descriptions", () => {
   });
 });
 
-describe.skip("entryParts — skills leave the visible meta line", () => {
+describe("entryParts — skills leave the visible meta line", () => {
   it("empties a job's meta and carries the resolved skills separately", () => {
     const p = entryParts(db, "jobs", job);
     expect(p.meta).toBe("");
@@ -169,7 +168,7 @@ describe.skip("entryParts — skills leave the visible meta line", () => {
   });
 });
 
-describe.skip("skillGroups — proficiency in the space the cloud freed", () => {
+describe("skillGroups — proficiency in the space the cloud freed", () => {
   it("qualifies technical and domain skills", () => {
     expect(
       skillGroups(db, [
@@ -195,7 +194,7 @@ describe.skip("skillGroups — proficiency in the space the cloud freed", () => 
   });
 });
 
-describe.skip("the skills are moved, not deleted", () => {
+describe("the skills are moved, not deleted", () => {
   it("joinedContent resolves them into skill_names for the hidden layer", () => {
     const out = joinedContent({ jobs: [job] }, db) as Record<
       string,
@@ -217,7 +216,7 @@ describe.skip("the skills are moved, not deleted", () => {
   });
 });
 
-describe.skip("CV render", () => {
+describe("CV render", () => {
   async function render(content: CvContent) {
     const buf = await renderToBuffer(
       CvDocument({
@@ -268,7 +267,7 @@ describe.skip("CV render", () => {
  * one-liners. This is how a CV gets written by hand — two jobs described, the rest listed —
  * and it gives the page fit a middle gear between "keep in full" and "delete".
  */
-describe.skip("entryDetail", () => {
+describe("entryDetail", () => {
   const detailed = { jobs: 2 };
   const plain = (id: string) => ({ id, label: id, relevance_score: null });
 
@@ -310,7 +309,7 @@ describe.skip("entryDetail", () => {
   });
 });
 
-describe.skip("CV render — detail levels", () => {
+describe("CV render — detail levels", () => {
   it(
     "prints every job's heading but only the budgeted descriptions",
     async () => {

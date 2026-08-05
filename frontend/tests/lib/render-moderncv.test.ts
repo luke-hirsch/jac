@@ -65,8 +65,10 @@ describe("cvStyles — moderncv two-column + rule", () => {
 
 describe("skillGroups", () => {
   it("groups by category with display labels, in category order", () => {
+    // [frontend]-cv-typography: technical/domain names carry their proficiency now that
+    // the per-entry skill cloud freed the room. Soft skills deliberately don't.
     expect(skillGroups(db, content.skills)).toEqual([
-      { label: "Technical", names: "Python" },
+      { label: "Technical", names: "Python (expert)" },
       { label: "Soft", names: "Teamwork" },
     ]);
   });

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { PdfPreviewDialog } from "@/components/applications/pdf-preview-dialog";
+import { fitNotices, type BuiltPdf } from "@/lib/render/preview";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +32,7 @@ import {
 } from "@/lib/letter-doc";
 import { useCvEntries, useFullList, type LayoutRow } from "@/lib/queries/jac";
 import { useProfile } from "@/lib/queries/profile";
-import { capContent, fitCv, type FitResult } from "@/lib/render/fit";
+import { capContent, fitCv } from "@/lib/render/fit";
 import { isFavouriteLookup } from "@/lib/render/parts";
 import { useLayoutSpec } from "@/lib/render/spec";
 import {
@@ -55,12 +57,6 @@ import { docMetadata, hiddenPayload } from "@/lib/render/hidden";
 import { PortfolioLinkSection } from "@/components/applications/portfolio-link-section";
 import { qrDataUrl } from "@/lib/portfolio/qr";
 import { type PortfolioLinkRow } from "@/lib/queries/portfolio";
-
-type BuiltPdf = {
-  blob: Blob;
-  fit: FitResult | null; // null for letter-only
-  letterPages: number | null;
-};
 
 export function ExportCard({ app }: { app: ApplicationRow }) {
   const layouts = useFullList<LayoutRow>("layouts");
@@ -241,6 +237,14 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
       notify(built);
     });
   }
+  // Download from inside the overlay: the blob is already built and merged, so this is a
+  // straight save — no second render pass.
+  function onDownloadPreview() {
+    if (!preview) return;
+    void fetch(preview.url)
+      .then((r) => r.blob())
+      .then((b) => downloadBlob(b, `${stem}.pdf`));
+  }
 
   function onPreview() {
     if (blockedBy("pdf")) return;
@@ -286,17 +290,9 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   }
 
   function notify(built: BuiltPdf) {
-    if (built.fit && !built.fit.fits) {
-      toast.warning("The CV overflows the layout even at minimum content.");
-    } else if (built.fit && built.fit.droppedIds.length > 0) {
-      toast.info(
-        `${built.fit.droppedIds.length} lowest-ranked entr${
-          built.fit.droppedIds.length === 1 ? "y was" : "ies were"
-        } dropped to fit ${spec.data?.cv.pages} page(s). Deselect or reorder to override.`,
-      );
-    }
-    if (built.letterPages != null && built.letterPages > 1) {
-      toast.warning("The cover letter exceeds one page — shorten the body.");
+    for (const n of fitNotices(built, spec.data?.cv.pages ?? 1)) {
+      if (n.level === "warning") toast.warning(n.text);
+      else toast.info(n.text);
     }
   }
 
@@ -355,28 +351,18 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
         </div>
       </CardContent>
 
-      <Dialog
+      <PdfPreviewDialog
         open={preview != null}
-        onOpenChange={(open) => {
-          if (!open && preview) {
-            URL.revokeObjectURL(preview.url);
-            setPreview(null);
-          }
+        url={preview?.url ?? null}
+        built={preview?.info ?? null}
+        scope={scope}
+        pageBudget={spec.data?.cv.pages ?? 1}
+        onDownload={onDownloadPreview}
+        onClose={() => {
+          if (preview) URL.revokeObjectURL(preview.url);
+          setPreview(null);
         }}
-      >
-        <DialogContent className="h-[85vh] max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>PDF preview — {scope}</DialogTitle>
-          </DialogHeader>
-          {preview && (
-            <iframe
-              src={preview.url}
-              title="PDF preview"
-              className="h-full w-full"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      />
     </Card>
   );
 }
