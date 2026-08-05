@@ -12,9 +12,9 @@ import {
   skillGroups,
 } from "@/lib/render/parts";
 import { FALLBACK_SPEC } from "@/lib/render/spec";
-import { CvDocument, bodyBlocks } from "@/lib/render/templates";
+import { CvDocument, bodyBlocks, cvStyles } from "@/lib/render/templates";
 import { countPdfPages } from "@/lib/render/fit";
-import { flat, pdfTextRuns } from "./_pdf-text";
+import { flat, pdfPositionedRuns, pdfTextRuns, runAt } from "./_pdf-text";
 
 /**
  * `[frontend]-cv-typography` — the ACTIVE guide. Red until the guide is implemented.
@@ -94,15 +94,33 @@ const project = { id: "project:4", label: "Shopify Uploader", relevance_score: n
 const cert = { id: "certification:7", label: "Shell Scripting", relevance_score: null };
 
 describe("dateParts / datePoint — the left column stops wrapping", () => {
-  it("keeps each side unbreakable and puts the dash on the second line", () => {
+  it("keeps each side unbreakable, dash included", () => {
     const d = dateParts("2021-03-01", "2023-01-31");
     expect(d.from).toBe(`Mar${NBSP}2021`);
-    expect(d.to).toBe(`– Jan${NBSP}2023`);
-    expect(d.from).not.toContain(" "); // a plain space is a break opportunity
+    expect(d.to).toBe(`–${NBSP}Jan${NBSP}2023`);
+  });
+
+  /**
+   * The bug this pins: `to` used to read "– Jan 2023" with a PLAIN space after the
+   * dash. That space is a break opportunity, so an overflowing column orphaned "– "
+   * onto a line of its own — three line boxes per entry, and every compact one-liner
+   * grew to three lines. Each side must be atomic; the template supplies the single
+   * breakable space between them.
+   */
+  it("leaves no break opportunity inside either side", () => {
+    for (const [a, b] of [
+      ["2021-03-01", "2023-01-31"],
+      ["2021-03-01", null],
+      [null, "2023-01-31"],
+    ] as const) {
+      const d = dateParts(a, b);
+      expect(d.from).not.toContain(" ");
+      expect(d.to).not.toContain(" ");
+    }
   });
 
   it("says present for an open-ended range", () => {
-    expect(dateParts("2021-03-01", null).to).toBe("– present");
+    expect(dateParts("2021-03-01", null).to).toBe(`–${NBSP}present`);
   });
 
   it("marks an unknown start rather than rendering an empty column", () => {
@@ -247,6 +265,135 @@ describe("CV render", () => {
       expect(text).toContain("•");
       expect(text).toContain(flat("migrated the legacy cluster"));
       expect(text).not.toContain("**");
+    },
+    30_000,
+  );
+
+  /**
+   * The column has to hold "Mar 2023 – present" (~71pt at 7.5pt Helvetica) plus its
+   * 4.5pt padding, or the range wraps and every entry pays a whole extra line. Pinned
+   * as a width because that is the knob that broke it.
+   */
+  it("gives the date column room for the whole range on one line", () => {
+    const s = cvStyles(FALLBACK_SPEC);
+    expect(s.hints.width).toBeGreaterThanOrEqual(76);
+  });
+
+  /**
+   * @react-pdf/stylesheet resolves a unitless `lineHeight` against the SAME style
+   * object's `fontSize`, or its own DEFAULT_FONT_SIZE of 18 when that is absent —
+   * inheritance from a parent View does not reach the resolver. So `{ lineHeight: 1.2 }`
+   * on its own silently means a 21.6pt line box, which is what made every compact CV
+   * entry two lines tall. StyleSheet.create resolves eagerly, so the damage is visible
+   * as an absolute number here: any lineHeight far larger than the base font is the bug.
+   */
+  it("resolves every lineHeight against its own font size, not the 18pt default", () => {
+    for (const base of [9, 11]) {
+      const s = cvStyles({
+        ...FALLBACK_SPEC,
+        font: { ...FALLBACK_SPEC.font, base_pt: base },
+      }) as unknown as Record<string, { lineHeight?: number }>;
+      for (const [name, style] of Object.entries(s)) {
+        if (style?.lineHeight === undefined) continue;
+        expect(
+          style.lineHeight,
+          `${name}.lineHeight resolved against the 18pt default`,
+        ).toBeLessThan(base * 1.6);
+      }
+    }
+  });
+
+  /**
+   * One left edge for the whole entry. The bug this pins: the heading carried a
+   * `favourite ? "★ " : ""` prefix, and U+2605 has no glyph in the standard-14
+   * Helvetica — it painted nothing but its trailing space still advanced the pen, so a
+   * favourite's heading started 2.5pt right of its own description and of every
+   * non-favourite heading. Invisible cause, visible jitter. Asserted positionally
+   * rather than as `not.toContain("★")` because the star was never in the text stream
+   * to begin with: the font subset emitted it as glyph 0x05.
+   */
+  it(
+    "starts heading and description on the same left edge, favourite or not",
+    async () => {
+      const favJob = { ...db.jobs[0], favourite: true };
+      const plainJob = {
+        ...db.jobs[0],
+        id: 13,
+        title: "Junior Dev",
+        company: "Initech",
+        description: "Sorted the mail.",
+        favourite: false,
+      };
+      const buf = await renderToBuffer(
+        CvDocument({
+          spec: {
+            ...FALLBACK_SPEC,
+            cv: { ...FALLBACK_SPEC.cv, detailed: { jobs: 2 } },
+          },
+          name: "Ada Lovelace",
+          content: {
+            jobs: [
+              job,
+              { id: "job:13", label: "Junior Dev", relevance_score: null },
+            ],
+          },
+          db: { ...db, jobs: [favJob, plainJob] } as CvEntriesResponse,
+        } as Parameters<typeof CvDocument>[0]),
+      );
+      const runs = pdfPositionedRuns(buf);
+      const favHeading = runAt(runs, "Senior Dev");
+      expect(runAt(runs, "Ran the platform.").x).toBeCloseTo(favHeading.x, 2);
+      expect(runAt(runs, "Junior Dev").x).toBeCloseTo(favHeading.x, 2);
+      expect(runAt(runs, "Sorted the mail.").x).toBeCloseTo(favHeading.x, 2);
+    },
+    30_000,
+  );
+
+  /**
+   * The date's en dash lines up with the em dash in the heading beside it — those two
+   * rules read as one horizontal line, so they are the alignment the eye actually
+   * checks, and flush *baselines* are visibly a touch low.
+   *
+   * A dash's ink sits a fixed fraction of the font size above its own baseline, and the
+   * two fractions differ (the heavier Bold dash rides higher), so the correct baseline
+   * offset is not zero. The fractions below were measured off a 1200dpi raster of a
+   * calibration page rendered through this same pipeline; the assertion re-derives the
+   * offset from them rather than hard-coding a pt value, so it stays honest if the sizes
+   * move. Verified end to end at the ink level: the two dash centres land 0.03pt apart.
+   *
+   * Measured on a MULTI-LINE entry on purpose. The tempting fix is `alignItems` on the
+   * row, and `center` there centres the gutter against the whole entry — with a
+   * description and two bullets the date drops ~16pt, next to the bullets, which a
+   * single-line fixture would never catch.
+   */
+  it(
+    "lines the date's dash up with the dash in the heading",
+    async () => {
+      const EM_DASH_ABOVE_BASELINE = 0.26; // 9pt Helvetica-Bold → 2.340pt
+      const EN_DASH_ABOVE_BASELINE = 0.272; // 7.5pt Helvetica → 2.037pt
+      const base = FALLBACK_SPEC.font.base_pt;
+      const wanted =
+        base * EM_DASH_ABOVE_BASELINE -
+        base * 0.833 * EN_DASH_ABOVE_BASELINE;
+
+      const buf = await renderToBuffer(
+        CvDocument({
+          spec: {
+            ...FALLBACK_SPEC,
+            cv: { ...FALLBACK_SPEC.cv, detailed: { jobs: 1 } },
+          },
+          name: "Ada Lovelace",
+          content: { jobs: [job] },
+          db,
+        } as Parameters<typeof CvDocument>[0]),
+      );
+      const runs = pdfPositionedRuns(buf);
+      const gap = runAt(runs, "Mar 2021").y - runAt(runs, "Senior Dev").y;
+      // Positive = the date's baseline sits above the heading's, which is what puts the
+      // dashes level. Tolerance is a twentieth of a point — far below anything visible.
+      expect(gap).toBeGreaterThan(0);
+      expect(gap).toBeCloseTo(wanted, 1);
+      expect(Math.abs(gap - wanted)).toBeLessThan(0.05);
     },
     30_000,
   );

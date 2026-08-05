@@ -834,3 +834,138 @@ layout shitty see @.claude/pdf_preview3.png and @.claude/pdf_preview4.png due to
 [shitty layout](/Users/lukas/Projects/jac/.claude/pdf_preview3.png)
 
 [shitty layout](/Users/lukas/Projects/jac/.claude/pdf_preview4.png)
+
+### AI triage — the whitespace was two bugs, not the date format
+
+Measured off the PDF content stream (throwaway probe that resolves each text run's absolute
+`y` through the `q`/`Q` + `cm` stack; deleted again). **Two independent defects stacked**, and
+neither was the two-line concept itself.
+
+**Bug 1 — the range overflowed the column and broke at the wrong space.** `"– Apr 2025"` needs
+`31.7 + 6.3 + 30.4 = 68.4pt`; `mm(23)` minus the 4.5pt padding offered `60.7pt`. `nb()` glued
+`Apr 2025` but left the space *after the en dash* breakable — the only break opportunity in the
+string — so react-pdf orphaned `"– "` onto a line of its own. Three line boxes per entry, and the
+"empty line" in the screenshots is that orphan. Fixed in `dateParts`: `nb()` now wraps the whole
+`to` side, dash included.
+
+**Bug 2 — `hintLine: { lineHeight: 1.2 }` was a 21.6pt line box.** `@react-pdf/stylesheet`
+resolves a unitless `lineHeight` against **the same style object's** `fontSize`, or its
+`DEFAULT_FONT_SIZE = 18` when absent (`transformLineHeight`, `lib/index.js:598`) — the parent
+View's `fontSize: small` never reaches the resolver. So `1.2 × 18 = 21.6pt` wrapped every 7.5pt
+date in a double-height box, which is why a **compact one-liner cost the same 24.6pt as a
+two-line entry**. Both `hintLine` and the pre-existing `summary` (`1.4 × 18 = 25.2pt` on a 9pt
+paragraph — latent, `summary` just wasn't in the fixtures) now declare their `fontSize`.
+
+**Design change that follows:** with the dash glued, each side is atomic, so the template renders
+**one** `<Text>` joining them with the single plain space left between — the range sets on one
+line, and a narrower custom layout degrades to the intended two-line split instead of an orphaned
+dash. `hints` widened `mm(23) → mm(27)` (~11pt off a 499pt text column) to hold
+`"Mar 2023 – present"` outright.
+
+**Effect:** the sample CV went from 2 pages to 1 with room to spare; compact entries dropped
+`24.6pt → 12.9pt`.
+
+**Tests added** (`render-typography.test.ts`): each `dateParts` side contains no breakable space;
+`hints.width` is wide enough for the whole range; and a loop over every `cvStyles` key asserting
+no resolved `lineHeight` exceeds `1.6 × base` — the general form of bug 2, at two different
+`base_pt`. Suite `355 passed | 85 skipped`, `tsc -b` clean.
+
+**Open, needs Lukas's call — the favourite star renders as nothing.** `{p.favourite ? "★ " : ""}`
+puts U+2605 in front of the heading, but Helvetica standard-14/WinAnsi has no such glyph: it is
+dropped and only its trailing space survives, so a favourite entry is silently indented 2.5pt
+(measured: `"JAC"` at `x=127.0`, its siblings at `x=124.5`) with no star. Three ways out — drop the
+marker from the PDF (favourites are a ranking/fit signal; arguably a recruiter should not see
+them), swap in a WinAnsi glyph, or register a font that has ★. Recommend dropping it; left
+untouched because it is a product decision, not a layout bug.
+
+### AI triage — the heading/body jitter (`pdf_preview5.png`) was the star, resolved
+
+Lukas: *"the text jitters between title and markdown field"*. Confirmed positionally — a probe
+resolving each run's absolute `x` through the `q`/`Q` + `cm` stack (deleted again):
+
+```
+x=48.00   "Mar 2021 – present"
+x=124.54  ""             ← the ★: font-subset glyph 5, zero advance, no ink
+x=127.04  "Fav Job — ACME"     ← favourite heading
+x=124.54  "Prose line here."   ← its own description
+x=124.54  "Plain Job — Initech"← non-favourite heading
+```
+
+The gap is **2.502pt = one Helvetica-Bold space** (278/1000 × 9pt): the star paints nothing but
+its trailing space still advances the pen. So the entry's own title and body disagreed on the left
+edge, and favourite headings disagreed with non-favourite ones. **Marker dropped from the PDF**
+(`templates.tsx`, heading is now bare `{p.heading}`). Markdown keeps its `★` — it is UTF-8 and has
+no left edge to break; `export.test.ts:127` stands.
+
+**Test + new primitive.** `_pdf-text.ts` gains `pdfPositionedRuns()` / `runAt()` — the text
+extractor with absolute positions, so *alignment* is assertable, not just presence. New test
+"starts heading and description on the same left edge, favourite or not" pins heading ≡ body ≡
+sibling heading. It is positional rather than `not.toContain("★")` on purpose: the star was never
+in the text stream to begin with. Verified red before the fix (`expected 124.535553 to be close to
+127.037553, difference 2.502`). Suite `356 passed | 85 skipped`, `tsc -b` clean.
+
+**Deliberately NOT fixed — belongs to a later guide.** The blank lower third of
+`pdf_preview5.png` is `[frontend]-fit-preflight`'s grow pass (its own header quotes the same
+request: *"if we gain some space because the skill cloud is removed … i would love to use the
+space"*). "Drop Out Education Physics / Mathematics" as a headline is
+`[fullstack]-education-degree` problem 2.
+
+**Two smaller findings** (neither claimed by a guide) — one parked, one fixed:
+
+1. *Sidebar sections without a label hug the page margin.* **Parked by Lukas** — revisit once
+   `[frontend]-fit-preflight` shows what the freed space is worth. `CvSectionView`'s compact branch
+   emits the `hints` Text only when `r.label` is non-empty (`templates.tsx:261`), so Skills — which
+   has `Technical` / `Soft` labels — indents its text to the `x=124.54` content edge while
+   Languages, which has no label, starts at `x=48`, a gutter-width left of every other body line.
+   The fix if it is ever wanted is `<View style={styles.hints} />` as a spacer in the falsy branch:
+   no label, no extra rows, purely an indent costing that line 76.5pt of measure. (Not to be
+   confused with giving Languages `skillGroups`-style fluency *grouping*, which would turn one row
+   into three — a different change, and the one that is not worth it for six words.)
+
+2. *The date rode 1.35pt above the heading baseline* — **fixed**, `hintLine` gains
+   `paddingTop: base * 0.116`. Top-aligned columns put a smaller font's baseline higher inside its
+   line box; both terms of the correction are proportional to `base` (`small` is a fixed
+   `0.833 × base`), so it scales instead of hard-coding 1.05pt.
+
+   **The target is the dashes, not the baselines** (Lukas: *"the dash between the date and the dash
+   in the job title should align"* — flush baselines read a touch low). A dash's ink sits a fixed
+   fraction of the font size above its own baseline, and the two fractions differ, so the right
+   baseline offset is not zero. Measured off a 1200dpi Ghostscript raster of a calibration page
+   rendered through this pipeline:
+
+   | glyph | ink centre above own baseline | as em |
+   | --- | --- | --- |
+   | em dash, 9pt Helvetica-**Bold** (heading) | 2.340pt | 0.260 |
+   | en dash, 7.5pt Helvetica (date) | 2.037pt | 0.272 |
+
+   The heavier dash rides 0.303pt higher off its baseline, so the date's baseline must sit that
+   much **above** the heading's. Hence `base * 0.150` (top-aligned → baselines flush) minus
+   `base * 0.034` (baselines flush → dashes flush) = `base * 0.116`. Verified end to end at the
+   ink level on a real CV render: the two dash centres land **0.030pt** apart, below the 0.06pt
+   resolution of the raster.
+
+   Four variants measured (date `y` vs heading `y`, same fixture):
+
+   | variant | date | heading | baseline gap | dashes |
+   | --- | --- | --- | --- | --- |
+   | original, top-aligned | 725.81 | 724.46 | 1.35 high | 1.05 high ✗ |
+   | `row: alignItems: "baseline"` | 724.91 | 724.46 | 0.45 high | 0.15 high |
+   | `hintLine: paddingTop: base * 0.15` | 724.46 | 724.46 | flush | 0.30 low ✗ |
+   | **`hintLine: paddingTop: base * 0.116`** | 724.77 | 724.46 | 0.31 high | **0.03 — level** |
+   | `row: alignItems: "center"` | 708.49 | 724.46 | 16 low ✗ | 16 low ✗ |
+
+   Both `alignItems` routes are wrong. `center` centres the gutter against the **whole entry**
+   (heading + prose + bullets ≈ 46pt), parking the date next to the second bullet — invisible on a
+   single-line fixture, which is why the new test uses a multi-line entry. `baseline` is supported
+   (`@react-pdf/layout/lib/index.js:2132` → `Yoga.Align.Baseline`) but leaves 0.45pt: Yoga has no
+   font baseline for these nodes and falls back to box height, so it aligns box *bottoms*
+   (9.9 vs 9.0pt) rather than baselines. Centring the line boxes alone would recover only that same
+   0.45 of the 1.35 — the boxes differ far less in height than the baselines do in position.
+
+   Cost: `paddingTop` grows the gutter box 9.0 → 10.04pt, so a **compact** row (content = heading
+   only, 9.9pt) gains 0.14pt. Full entries are unaffected — content dominates the row height.
+
+   Test: "lines the date's dash up with the dash in the heading" — re-derives the expected
+   baseline offset from the two measured em fractions instead of hard-coding a pt value, so it
+   stays honest if the sizes move, and runs on a multi-line entry so the `alignItems: "center"`
+   trap cannot slip past. Suite `357 passed | 85 skipped`, `tsc -b` clean.

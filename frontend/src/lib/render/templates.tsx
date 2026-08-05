@@ -152,7 +152,11 @@ export function cvStyles(spec: LayoutSpec) {
       marginBottom: base * 0.4,
     },
 
-    summary: { marginBottom: base * 0.4, lineHeight: 1.4 },
+    // ⚠️ `fontSize` is not optional next to a unitless `lineHeight`. @react-pdf/stylesheet
+    // resolves the multiplier against THIS object's fontSize or, failing that, its
+    // DEFAULT_FONT_SIZE of 18 — so a bare `lineHeight: 1.4` silently means 25.2pt, not
+    // 12.6pt. Inheritance does not help: the resolver only sees the one style object.
+    summary: { fontSize: base, marginBottom: base * 0.4, lineHeight: 1.4 },
     sectionTitle: {
       fontSize: base * 1.2,
       color: spec.colors.accent,
@@ -164,13 +168,38 @@ export function cvStyles(spec: LayoutSpec) {
     },
     // Two-column entry: fixed date/label column + flexible content column.
     row: { flexDirection: "row", marginBottom: base / 3 },
+    // Wide enough for the whole range on ONE line at `small`: the widest real case,
+    // "Mar 2023 – present", measures ~71pt, so 27mm minus the 4.5pt padding leaves
+    // headroom. Undersizing this does not merely wrap, it wrecks the page — see the
+    // note on `dateParts`.
     hints: {
-      width: mm(23),
+      width: mm(27),
       color: spec.colors.muted,
       fontSize: small,
       paddingRight: base * 0.5,
     },
-    hintLine: { lineHeight: 1.2 },
+    // Same trap as `summary` above — declare the fontSize the multiplier applies to.
+    //
+    // `paddingTop` aligns the en dash in the date with the em dash in the heading beside
+    // it — the eye reads those two rules as one horizontal line, so they, not the
+    // baselines, are what "aligned" means here. Two corrections in one number:
+    //
+    //   base * 0.150   top-aligned → baselines flush. A smaller font's baseline sits
+    //                  higher inside its line box, so the 7.5pt date rode 1.35pt high.
+    //   base * 0.034   baselines flush → DASHES flush, back up again. Measured ink
+    //                  centres above own baseline: the 9pt Bold em dash 2.340pt (0.260
+    //                  em), the 7.5pt regular en dash 2.037pt (0.272 em) — the heavier
+    //                  dash rides higher, so a flush baseline leaves it 0.3pt above.
+    //   = base * 0.116
+    //
+    // Both terms are proportional to `base` (`small` is a fixed 0.833 × base), so this
+    // scales with the layout rather than hard-coding 1.05pt.
+    //
+    // ⚠️ Not `alignItems` on `row`: `center` centres the gutter against the WHOLE entry
+    // (heading + prose + bullets), dropping the date ~16pt down beside the bullets, and
+    // `baseline` leaves 0.45pt because Yoga has no font baseline here and falls back to
+    // the box height. Measured — see this guide's Results.
+    hintLine: { fontSize: small, lineHeight: 1.2, paddingTop: base * 0.116 },
     content: { flex: 1 },
     entry: { marginBottom: base / 3 }, // kept — density decision
     heading: { fontFamily: `${spec.font.family}-Bold` },
@@ -269,16 +298,25 @@ function CvSectionView({
         return (
           <View key={e.id} style={styles.row} wrap={false}>
             <View style={styles.hints}>
+              {/* ONE Text, not two stacked ones: each side is internally unbreakable,
+                  so the single plain space between them is the only break opportunity
+                  in the column — the range sets on one line, and if a narrow custom
+                  layout can't hold it, it splits exactly where we want it to. */}
               {p.dateFrom ? (
-                <Text style={styles.hintLine}>{p.dateFrom}</Text>
+                <Text style={styles.hintLine}>
+                  {p.dateTo ? `${p.dateFrom} ${p.dateTo}` : p.dateFrom}
+                </Text>
               ) : null}
-              {p.dateTo ? <Text style={styles.hintLine}>{p.dateTo}</Text> : null}
             </View>
             <View style={styles.content}>
-              <Text style={styles.heading}>
-                {p.favourite ? "★ " : ""}
-                {p.heading}
-              </Text>
+              {/* No favourite marker here. U+2605 is not in WinAnsi and the standard-14
+                  Helvetica has no glyph for it, so it rendered as a zero-width blank and
+                  left only its trailing space behind — every favourite heading sat 2.5pt
+                  right of its own description while showing nothing for it. Favourites
+                  are a ranking/fit signal anyway (they drop last, see fit.ts): internal,
+                  not something a recruiter should read off the page. Markdown keeps the
+                  star — it is UTF-8 and has no left edge to break. */}
+              <Text style={styles.heading}>{p.heading}</Text>
               {/* A compact entry is the same dated row, minus everything that costs
                   lines. The description is still in the invisible-ink layer — the
                   hidden payload joins the career-DB row, so nothing is lost to a

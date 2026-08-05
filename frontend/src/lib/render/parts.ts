@@ -40,13 +40,23 @@ export type EntryParts = {
 
 const nb = (s: string) => s.replace(/ /g, "\u00A0");
 
+/**
+ * The date column as two atomic units. Each side is NBSP-joined **throughout** — the
+ * dash included: a plain space after it is a break opportunity, and when the range
+ * overflows the column react-pdf takes it, orphaning "– " onto a line of its own and
+ * making every row three lines tall (the whitespace bug in this guide's Results).
+ *
+ * The template joins the two with the one plain space that is left, so the range sets on
+ * a single line when the column fits it and degrades to the deliberate two-line split
+ * ("Mar 2023" / "– Apr 2025") when a narrower custom layout doesn't.
+ */
 export function dateParts(
   started: string | null,
   ended: string | null,
 ): { from: string; to: string } {
   return {
     from: nb(formatMonthYear(started) || "?"),
-    to: `– ${nb(ended ? formatMonthYear(ended) : "present")}`,
+    to: nb(`– ${ended ? formatMonthYear(ended) : "present"}`),
   };
 }
 export function datePoint(iso: string | null): { from: string; to: string } {

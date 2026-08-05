@@ -29,7 +29,8 @@ const WINANSI_HIGH: Record<number, string> = {
 const fromWinAnsi = (s: string) =>
   s.replace(/[\u0080-\u009f]/g, (c) => WINANSI_HIGH[c.charCodeAt(0)] ?? c);
 
-export function pdfTextRuns(buf: Buffer): string {
+/** Every stream in the file, Flate-inflated (raw fallback for the uncompressed ones). */
+function contentStreams(buf: Buffer): string[] {
   const latin1 = buf.toString("latin1");
   const chunks: string[] = [];
   const re = /stream\r?\n/g;
@@ -52,9 +53,13 @@ export function pdfTextRuns(buf: Buffer): string {
     }
     re.lastIndex = end;
   }
-  const literals =
-    chunks.join("\n").match(/\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>/g) ?? [];
-  const text = literals
+  return chunks;
+}
+
+/** `(literal)` and `<hex>` strings in a chunk of content stream, concatenated. */
+function decodeLiterals(chunk: string): string {
+  const literals = chunk.match(/\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>/g) ?? [];
+  return literals
     .map((s) => {
       if (s[0] === "(") return s.slice(1, -1).replace(/\\(.)/g, "$1");
       const hex = s.slice(1, -1).replace(/\s+/g, "");
@@ -65,7 +70,67 @@ export function pdfTextRuns(buf: Buffer): string {
       return out;
     })
     .join("");
-  return fromWinAnsi(text);
+}
+
+export function pdfTextRuns(buf: Buffer): string {
+  return fromWinAnsi(decodeLiterals(contentStreams(buf).join("\n")));
+}
+
+/**
+ * The same runs, but with the absolute page position each one was painted at — the only
+ * way to assert *alignment* rather than presence. Resolves the text matrix (`Tm`) through
+ * the graphics stack (`q`/`Q`/`cm`), because react-pdf wraps every positioned box in its
+ * own `q … cm … Q`, so a bare `Tm` is relative and comparing raw `Tm` values across two
+ * elements compares nothing.
+ *
+ * Origin is PDF's: x grows right, y grows UP from the bottom-left corner.
+ */
+export type PositionedRun = { x: number; y: number; text: string };
+
+export function pdfPositionedRuns(buf: Buffer): PositionedRun[] {
+  const mul = (a: number[], b: number[]) => [
+    a[0] * b[0] + a[1] * b[2],
+    a[0] * b[1] + a[1] * b[3],
+    a[2] * b[0] + a[3] * b[2],
+    a[2] * b[1] + a[3] * b[3],
+    a[4] * b[0] + a[5] * b[2] + b[4],
+    a[4] * b[1] + a[5] * b[3] + b[5],
+  ];
+  const six = String.raw`([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)`;
+  const out: PositionedRun[] = [];
+  for (const stream of contentStreams(buf)) {
+    let ctm = [1, 0, 0, 1, 0, 0];
+    let tm = [1, 0, 0, 1, 0, 0];
+    const stack: number[][] = [];
+    for (const raw of stream.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === "q") {
+        stack.push([...ctm]);
+        continue;
+      }
+      if (line === "Q") {
+        ctm = stack.pop() ?? ctm;
+        continue;
+      }
+      const cm = new RegExp(`^${six} cm$`).exec(line);
+      if (cm) ctm = mul(cm.slice(1).map(Number), ctm);
+      const set = new RegExp(`^${six} Tm$`).exec(line);
+      if (set) tm = set.slice(1).map(Number);
+      if (!/T[Jj]$/.test(line)) continue;
+      const text = fromWinAnsi(decodeLiterals(line));
+      if (!text.trim()) continue;
+      const abs = mul(tm, ctm);
+      out.push({ x: abs[4], y: abs[5], text });
+    }
+  }
+  return out;
+}
+
+/** First run whose text contains `needle` — the anchor for an alignment assertion. */
+export function runAt(runs: PositionedRun[], needle: string): PositionedRun {
+  const hit = runs.find((r) => flat(r.text).includes(flat(needle)));
+  if (!hit) throw new Error(`no text run containing ${JSON.stringify(needle)}`);
+  return hit;
 }
 
 /**
