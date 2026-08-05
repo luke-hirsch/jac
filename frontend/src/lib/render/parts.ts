@@ -24,11 +24,34 @@ import type {
 
 export type EntryParts = {
   heading: string;
-  date: string; // the moderncv left-column date/period; "" for skills/languages
-  meta: string; // secondary line: skills, grade, url — NO date
+  /** Joined range — markdown export only. The PDF uses dateFrom/dateTo. */
+  date: string;
+  /** Left column, line 1 (NBSP-joined, never wraps). */
+  dateFrom: string;
+  /** Left column, line 2 — "– present" / "– Jan 2023"; "" for a point in time. */
+  dateTo: string;
+  /** Secondary line: grade, url. NEVER skills — they belong to the machine layer. */
+  meta: string;
+  /** Resolved skill names. Hidden layer + markdown only; the page never shows them. */
+  skills: string;
   body: string;
   favourite: boolean;
 };
+
+const nb = (s: string) => s.replace(/ /g, "\u00A0");
+
+export function dateParts(
+  started: string | null,
+  ended: string | null,
+): { from: string; to: string } {
+  return {
+    from: nb(formatMonthYear(started) || "?"),
+    to: `– ${nb(ended ? formatMonthYear(ended) : "present")}`,
+  };
+}
+export function datePoint(iso: string | null): { from: string; to: string } {
+  return { from: nb(formatMonthYear(iso)), to: "" };
+}
 export function skillNames(
   db: CvEntriesResponse | undefined,
   ids: number[],
@@ -40,21 +63,7 @@ export function skillNames(
     .join(", ");
 }
 
-export function skillGroups(
-  db: CvEntriesResponse | undefined,
-  entries: CvEntry[],
-): { label: string; names: string }[] {
-  const groups: Record<string, string[]> = {};
-  for (const e of entries) {
-    const row = db ? (joinEntry(db, "skills", e) as SkillRow | null) : null;
-    const cat = row?.category ?? "other";
-    (groups[cat] ??= []).push(row?.name ?? e.label);
-  }
-  return SKILL_CATEGORY_ORDER.filter((c) => groups[c]?.length).map((c) => ({
-    label: SKILL_CATEGORY_LABELS[c] ?? c,
-    names: groups[c].join(", "),
-  }));
-}
+const PROFICIENCY_IN = new Set(["technical", "domain"]);
 const SKILL_CATEGORY_LABELS: Record<string, string> = {
   technical: "Technical",
   soft: "Soft",
@@ -63,28 +72,47 @@ const SKILL_CATEGORY_LABELS: Record<string, string> = {
 };
 const SKILL_CATEGORY_ORDER = ["technical", "soft", "domain", "other"];
 
+export function skillGroups(
+  db: CvEntriesResponse | undefined,
+  entries: CvEntry[],
+): { label: string; names: string }[] {
+  const groups: Record<string, string[]> = {};
+  for (const e of entries) {
+    const row = db ? (joinEntry(db, "skills", e) as SkillRow | null) : null;
+    const cat = row?.category ?? "other";
+    const name = row?.name ?? e.label;
+    (groups[cat] ??= []).push(
+      PROFICIENCY_IN.has(cat) && row?.proficiency
+        ? `${name} (${row.proficiency})`
+        : name,
+    );
+  }
+  return SKILL_CATEGORY_ORDER.filter((c) => groups[c]?.length).map((c) => ({
+    label: SKILL_CATEGORY_LABELS[c] ?? c,
+    names: groups[c].join(", "),
+  }));
+}
 export function entryParts(
   db: CvEntriesResponse | undefined,
   section: SectionKey,
   entry: CvEntry,
 ): EntryParts {
   const row = db ? joinEntry(db, section, entry) : null;
+  const blank = { date: "", dateFrom: "", dateTo: "", meta: "", skills: "" };
   if (!row)
-    return {
-      heading: entry.label,
-      date: "",
-      meta: "",
-      body: "",
-      favourite: false,
-    };
+    return { heading: entry.label, ...blank, body: "", favourite: false };
   const favourite = "favourite" in row ? Boolean(row.favourite) : false;
   switch (section) {
     case "jobs": {
       const j = row as JobRow;
+      const d = dateParts(j.started, j.ended);
       return {
         heading: `${j.title} — ${j.company}`,
         date: dateRange(j.started, j.ended),
-        meta: skillNames(db, j.skills),
+        dateFrom: d.from,
+        dateTo: d.to,
+        meta: "", // was the skill cloud — now machine-layer only
+        skills: skillNames(db, j.skills),
         body: j.description,
         favourite,
       };
@@ -92,20 +120,28 @@ export function entryParts(
     case "educations": {
       const e = row as EducationRow;
       const head = `${e.degree ?? ""} ${e.field_of_study ?? ""}`.trim();
+      const d = dateParts(e.started, e.ended);
       return {
         heading: head ? `${head} @ ${e.institution}` : e.institution,
         date: dateRange(e.started, e.ended),
+        dateFrom: d.from,
+        dateTo: d.to,
         meta: e.grade ? `Grade: ${e.grade}` : "",
+        skills: "",
         body: e.description,
         favourite,
       };
     }
     case "projects": {
       const p = row as ProjectRow;
+      const d = dateParts(p.started, p.ended);
       return {
         heading: p.name,
         date: dateRange(p.started, p.ended),
-        meta: [skillNames(db, p.skills), p.url].filter(Boolean).join(" · "),
+        dateFrom: d.from,
+        dateTo: d.to,
+        meta: p.url, // the link stays visible; the skill cloud does not
+        skills: skillNames(db, p.skills),
         body: p.description,
         favourite,
       };
@@ -114,7 +150,7 @@ export function entryParts(
       const s = row as SkillRow;
       return {
         heading: s.name,
-        date: "",
+        ...blank,
         meta: `${s.proficiency} · ${s.category}`,
         body: "",
         favourite,
@@ -122,10 +158,14 @@ export function entryParts(
     }
     case "certifications": {
       const c = row as CertificationRow;
+      const d = datePoint(c.issued_on);
       return {
         heading: `${c.name} — ${c.issuer}`,
         date: formatMonthYear(c.issued_on),
+        dateFrom: d.from,
+        dateTo: d.to,
         meta: "",
+        skills: skillNames(db, c.skills),
         body: c.description,
         favourite,
       };
@@ -134,7 +174,7 @@ export function entryParts(
       const l = row as LanguageRow;
       return {
         heading: l.name,
-        date: "",
+        ...blank,
         meta: l.fluency,
         body: "",
         favourite,
@@ -155,4 +195,18 @@ export function isFavouriteLookup(
     }
   }
   return (id) => favs.has(id);
+}
+
+export const MIN_DETAILED = 1;
+
+export function entryDetail(
+  entry: CvEntry,
+  index: number,
+  section: string,
+  detailed: Record<string, number>,
+  demoted: Set<string> = new Set(),
+): "full" | "compact" {
+  if (entry.detail) return entry.detail;
+  if (demoted.has(entry.id)) return "compact";
+  return index < (detailed[section] ?? 0) ? "full" : "compact";
 }

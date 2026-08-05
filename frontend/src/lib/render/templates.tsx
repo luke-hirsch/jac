@@ -17,6 +17,7 @@ import {
   Text,
   View,
   pdf,
+  Font,
   type DocumentProps,
 } from "@react-pdf/renderer";
 import type { ReactElement } from "react";
@@ -24,12 +25,19 @@ import { SECTION_TITLES, type CvContent, type SectionKey } from "@/lib/cv-doc";
 import type { LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import { countPdfPages } from "./fit";
-import { entryParts, skillGroups } from "./parts";
+import { entryParts, skillGroups, entryDetail } from "./parts";
 import type { LayoutSpec } from "./spec";
 
 import type { DocMeta } from "./hidden";
 
 export const mm = (n: number) => n * 2.83465;
+
+/**
+ * react-pdf hyphenates by default. That is wrong twice over here: it breaks German
+ * compounds mid-word in the descriptions, and it was half the "weird line breaks" in the
+ * date column. One global opt-out — the layout math below assumes words stay whole.
+ */
+Font.registerHyphenationCallback((word) => [word]);
 
 /* ---------- invisible ink ---------- */
 
@@ -68,6 +76,46 @@ function HiddenInk({ text }: { text?: string }) {
   );
 }
 
+function PageFooter({
+  name,
+  styles,
+}: {
+  name: string;
+  styles: ReturnType<typeof cvStyles>;
+}) {
+  return (
+    <Text
+      fixed
+      style={styles.pageFooter}
+      render={({ pageNumber, totalPages }) =>
+        totalPages > 1 ? `${name} — page ${pageNumber} of ${totalPages}` : null
+      }
+    />
+  );
+}
+export type BodyBlock = { bullet: boolean; text: string };
+
+/**
+ * Career-DB descriptions are typed as markdown-lite. Only what actually appears in them is
+ * honoured: leading "- " / "* " / "• " bullets, and **bold** __bold__ markers, which are
+ * STRIPPED rather than rendered (react-pdf would need a nested Text per span; the emphasis
+ * is not worth it on a 9pt CV line). Everything else passes through verbatim, one block
+ * per non-empty line.
+ */
+export function bodyBlocks(text: string): BodyBlock[] {
+  const strip = (s: string) =>
+    s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1");
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const m = /^[-*•]\s+(.*)$/.exec(l);
+      return m
+        ? { bullet: true, text: strip(m[1]) }
+        : { bullet: false, text: strip(l) };
+    });
+}
 /* ---------- CV ---------- */
 
 /**
@@ -103,6 +151,7 @@ export function cvStyles(spec: LayoutSpec) {
       fontSize: base * 0.9,
       marginBottom: base * 0.4,
     },
+
     summary: { marginBottom: base * 0.4, lineHeight: 1.4 },
     sectionTitle: {
       fontSize: base * 1.2,
@@ -116,16 +165,31 @@ export function cvStyles(spec: LayoutSpec) {
     // Two-column entry: fixed date/label column + flexible content column.
     row: { flexDirection: "row", marginBottom: base / 3 },
     hints: {
-      width: mm(22),
+      width: mm(23),
       color: spec.colors.muted,
       fontSize: small,
       paddingRight: base * 0.5,
     },
+    hintLine: { lineHeight: 1.2 },
     content: { flex: 1 },
     entry: { marginBottom: base / 3 }, // kept — density decision
     heading: { fontFamily: `${spec.font.family}-Bold` },
     meta: { color: spec.colors.muted, fontSize: small },
     body: { marginTop: base * 0.15 },
+    bulletRow: { flexDirection: "row", marginTop: base * 0.15 },
+    bulletDot: { width: base * 0.7 },
+    bulletText: { flex: 1 },
+    // Absolute + fixed = zero layout impact (same argument as HiddenInk); sits above the
+    // ink block at bottom: 6.
+    pageFooter: {
+      position: "absolute",
+      bottom: mm(8),
+      left: spec.page.margin[1],
+      right: spec.page.margin[1],
+      fontSize: small * 0.9,
+      color: spec.colors.muted,
+      textAlign: "center",
+    },
     compact: { fontSize: small, marginBottom: base / 3 },
     // Portfolio QR: absolute (zero layout impact — the fit loop and page counts are
     // invariant, same argument as HiddenInk) inside the page margins, top-right.
@@ -136,7 +200,11 @@ export function cvStyles(spec: LayoutSpec) {
       alignItems: "center",
     },
     qrImage: { width: mm(18), height: mm(18) },
-    qrCaption: { fontSize: small * 0.9, color: spec.colors.muted, marginTop: 2 },
+    qrCaption: {
+      fontSize: small * 0.9,
+      color: spec.colors.muted,
+      marginTop: 2,
+    },
   });
 }
 function CvSectionView({
@@ -145,12 +213,14 @@ function CvSectionView({
   db,
   styles,
   compact,
+  demoted,
 }: {
   section: SectionKey;
   content: CvContent;
   db: CvEntriesResponse | undefined;
   styles: ReturnType<typeof cvStyles>;
   compact?: boolean;
+  demoted?: Set<string>;
 }) {
   const entries = content[section] ?? [];
   if (entries.length === 0) return null;
@@ -185,19 +255,31 @@ function CvSectionView({
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
-      {entries.map((e) => {
+      <Text style={styles.sectionTitle} minPresenceAhead={mm(14)}>
+        {SECTION_TITLES[section]}
+      </Text>
+           {entries.map((e, i) => {
         const p = entryParts(db, section, e);
+        const full =
+          entryDetail(e, i, section, spec.cv.detailed, demoted) === "full";
         return (
           <View key={e.id} style={styles.row} wrap={false}>
-            <Text style={styles.hints}>{p.date}</Text>
+            <View style={styles.hints}>
+              …
+            </View>
             <View style={styles.content}>
               <Text style={styles.heading}>
                 {p.favourite ? "★ " : ""}
                 {p.heading}
               </Text>
-              {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
-              {p.body ? <Text style={styles.body}>{p.body}</Text> : null}
+              {/* A compact entry is the same dated row, minus everything that costs
+                  lines. The description is still in the invisible-ink layer — the
+                  hidden payload joins the career-DB row, so nothing is lost to a
+                  parser, only to the page. */}
+              {full && p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
+              {full
+                ? bodyBlocks(p.body).map((b, j) => …)
+                : null}
             </View>
           </View>
         );
@@ -205,6 +287,7 @@ function CvSectionView({
     </View>
   );
 }
+
 export function CvPages({
   spec,
   name,
@@ -215,6 +298,7 @@ export function CvPages({
   subtitle,
   hidden,
   portfolio,
+  demoted,
 }: {
   spec: LayoutSpec;
   name: string;
@@ -225,6 +309,7 @@ export function CvPages({
   subtitle?: string;
   hidden?: string;
   portfolio?: { qr: string };
+  demoted?: Set<string>;
 }) {
   const styles = cvStyles(spec);
   return (
@@ -246,6 +331,7 @@ export function CvPages({
           content={content}
           db={db}
           styles={styles}
+          demoted={demoted}
         />
       ))}
       {spec.cv.sidebar.map((s) => (
@@ -258,6 +344,7 @@ export function CvPages({
           compact
         />
       ))}
+      <PageFooter name={name} styles={styles} />
       <HiddenInk text={hidden} />
     </Page>
   );

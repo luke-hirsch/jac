@@ -26,7 +26,7 @@ export function cvToMarkdown(
     for (const e of entries) {
       const p = entryParts(db, section, e);
       lines.push(`### ${p.favourite ? "★ " : ""}${p.heading}`);
-      const metaLine = [p.date, p.meta].filter(Boolean).join(" · ");
+      const metaLine = [p.date, p.meta, p.skills].filter(Boolean).join(" · ");
       if (metaLine) lines.push(metaLine);
       if (p.body) lines.push(p.body);
       lines.push("");
@@ -95,7 +95,10 @@ export function exportBlocker(
   }
   return null;
 }
-/** content joined with the career-DB rows behind it — the shared export/hidden-layer shape. */
+
+/** content joined with the career-DB rows behind it — the shared export/hidden-layer shape.
+ *  `skill_names` is the resolved form of the row's `skills` id array: since the CV page
+ *  stopped printing the per-entry skill cloud, this is where a parser reads it. */
 export function joinedContent(
   content: CvContent,
   db: CvEntriesResponse | undefined,
@@ -103,10 +106,14 @@ export function joinedContent(
   return Object.fromEntries(
     SECTION_ORDER.map((section) => [
       section,
-      (content[section] ?? []).map((e) => ({
-        ...e,
-        entry: joinEntry(db, section, e),
-      })),
+      (content[section] ?? []).map((e) => {
+        const skills = entryParts(db, section, e).skills;
+        return {
+          ...e,
+          entry: joinEntry(db, section, e),
+          ...(skills ? { skill_names: skills } : {}),
+        };
+      }),
     ]),
   );
 }

@@ -12,7 +12,7 @@ Five concrete changes to what the CV page looks like, plus the layout budgets th
    meta line (`parts.ts:87`) and skills + url on every project's (`:108`). At 7.5pt that's the grey
    wall in `pdf_preview2.png`. The visible entry becomes **headline + dates + description**; the
    skills move to the machine layer.
-   ⚠️ They must be moved *deliberately*: `joinedContent` spreads the raw DB row, so the hidden JSON
+   ⚠️ They must be moved _deliberately_: `joinedContent` spreads the raw DB row, so the hidden JSON
    carries `skills: [3, 7, 12]` — **ids**, which no ATS can read. Dropping them from the page
    without resolving them into the hidden layer would delete them from the document altogether.
 2. **The date column stops wrapping.** `hints` is `mm(22)` wide holding `"Aug 2020 – Jan 2023"` as
@@ -24,7 +24,7 @@ Five concrete changes to what the CV page looks like, plus the layout budgets th
    they print as literal hyphens. Real bullets, and `**bold**` markers stripped rather than shown.
 4. **Spend the freed space.** Skills get their proficiency back (technical/domain only — nobody
    believes "Teamwork (expert)"), and the per-section budgets go up.
-4b. **Two levels of entry detail.** Not every job deserves a paragraph. The way Lukas writes a CV by
+   4b. **Two levels of entry detail.** Not every job deserves a paragraph. The way Lukas writes a CV by
    hand is two jobs described in full and the rest as a list of positions — so the renderer gets a
    `full` / `compact` detail level per entry: `full` is today's heading + dates + description,
    `compact` is the same dated row with the description and meta line dropped. The layout says how
@@ -35,26 +35,26 @@ Five concrete changes to what the CV page looks like, plus the layout budgets th
    `[frontend]-fit-preflight`; this guide builds the two render forms it will choose between.
 5. **Certifications stop shouting.** In the screenshot three Udemy courses get the same visual
    weight as three jobs. Moving them to the layout's `sidebar` list renders them as one compact
-   joined line — no code change, one line of layout JSON. (The *user-controlled* version of this,
+   joined line — no code change, one line of layout JSON. (The _user-controlled_ version of this,
    switching sections off per application, is guide `[fullstack]-cv-section-toggles`.)
 
 Plus widow control: a section title landing at the bottom of page 2 with its entries on page 3.
 
 ## Affected files
 
-| path | why |
-| --- | --- |
-| `frontend/src/lib/render/parts.ts` | `dateFrom`/`dateTo` split, skills off the meta line onto their own field, proficiency in `skillGroups`. |
-| `frontend/src/lib/render/templates.tsx` | hyphenation off, two-line date column, markdown body, page footer, widow control. |
-| `frontend/src/lib/export.ts` | `joinedContent` resolves skill names for the hidden layer; markdown keeps the skills it has today. |
-| `frontend/src/lib/render/spec.ts` | `FALLBACK_SPEC` mirrors the new default layout (certs → sidebar, bigger budgets) + `cv.detailed`. |
-| `frontend/src/lib/queries/generations.ts` | `CvEntry.detail` — the per-entry override. |
-| `backend/jac/resources/default_layout.json` | same, for the seeded system layout. |
-| `backend/jac/resources/two_page_layout.json` | same. |
-| `frontend/tests/lib/render-typography.test.ts` | **new** — acceptance tests. |
-| `frontend/tests/lib/export.test.ts` | existing: `p.meta === "Python"` moves to `p.skills`, and the `toEqual` fallback shape gains the three new `EntryParts` keys. |
-| `frontend/tests/lib/render-moderncv.test.ts` | existing `skillGroups` expectation gains proficiency. |
-| `frontend/tests/lib/render-templates.test.ts` | existing `max_entries.skills === 14` follows the new budget. |
+| path                                           | why                                                                                                                          |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `frontend/src/lib/render/parts.ts`             | `dateFrom`/`dateTo` split, skills off the meta line onto their own field, proficiency in `skillGroups`.                      |
+| `frontend/src/lib/render/templates.tsx`        | hyphenation off, two-line date column, markdown body, page footer, widow control.                                            |
+| `frontend/src/lib/export.ts`                   | `joinedContent` resolves skill names for the hidden layer; markdown keeps the skills it has today.                           |
+| `frontend/src/lib/render/spec.ts`              | `FALLBACK_SPEC` mirrors the new default layout (certs → sidebar, bigger budgets) + `cv.detailed`.                            |
+| `frontend/src/lib/queries/generations.ts`      | `CvEntry.detail` — the per-entry override.                                                                                   |
+| `backend/jac/resources/default_layout.json`    | same, for the seeded system layout.                                                                                          |
+| `backend/jac/resources/two_page_layout.json`   | same.                                                                                                                        |
+| `frontend/tests/lib/render-typography.test.ts` | **new** — acceptance tests.                                                                                                  |
+| `frontend/tests/lib/export.test.ts`            | existing: `p.meta === "Python"` moves to `p.skills`, and the `toEqual` fallback shape gains the three new `EntryParts` keys. |
+| `frontend/tests/lib/render-moderncv.test.ts`   | existing `skillGroups` expectation gains proficiency.                                                                        |
+| `frontend/tests/lib/render-templates.test.ts`  | existing `max_entries.skills === 14` follows the new budget.                                                                 |
 
 ## The code
 
@@ -306,48 +306,48 @@ and after `body` (line 128):
 **d.** the entry render — replace the non-compact branch of `CvSectionView` (lines 186–207):
 
 ```tsx
-  return (
-    <View>
-      {/* minPresenceAhead keeps a section title from stranding at a page bottom. If
+return (
+  <View>
+    {/* minPresenceAhead keeps a section title from stranding at a page bottom. If
           react-pdf ignores it (log it in Results), wrap title + first entry in a
           <View wrap={false}> instead. */}
-      <Text style={styles.sectionTitle} minPresenceAhead={mm(14)}>
-        {SECTION_TITLES[section]}
-      </Text>
-      {entries.map((e) => {
-        const p = entryParts(db, section, e);
-        return (
-          <View key={e.id} style={styles.row} wrap={false}>
-            <View style={styles.hints}>
-              {p.dateFrom ? (
-                <Text style={styles.hintLine}>{p.dateFrom}</Text>
-              ) : null}
-              {p.dateTo ? <Text style={styles.hintLine}>{p.dateTo}</Text> : null}
-            </View>
-            <View style={styles.content}>
-              <Text style={styles.heading}>
-                {p.favourite ? "★ " : ""}
-                {p.heading}
-              </Text>
-              {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
-              {bodyBlocks(p.body).map((b, i) =>
-                b.bullet ? (
-                  <View key={i} style={styles.bulletRow}>
-                    <Text style={styles.bulletDot}>•</Text>
-                    <Text style={styles.bulletText}>{b.text}</Text>
-                  </View>
-                ) : (
-                  <Text key={i} style={styles.body}>
-                    {b.text}
-                  </Text>
-                ),
-              )}
-            </View>
+    <Text style={styles.sectionTitle} minPresenceAhead={mm(14)}>
+      {SECTION_TITLES[section]}
+    </Text>
+    {entries.map((e) => {
+      const p = entryParts(db, section, e);
+      return (
+        <View key={e.id} style={styles.row} wrap={false}>
+          <View style={styles.hints}>
+            {p.dateFrom ? (
+              <Text style={styles.hintLine}>{p.dateFrom}</Text>
+            ) : null}
+            {p.dateTo ? <Text style={styles.hintLine}>{p.dateTo}</Text> : null}
           </View>
-        );
-      })}
-    </View>
-  );
+          <View style={styles.content}>
+            <Text style={styles.heading}>
+              {p.favourite ? "★ " : ""}
+              {p.heading}
+            </Text>
+            {p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
+            {bodyBlocks(p.body).map((b, i) =>
+              b.bullet ? (
+                <View key={i} style={styles.bulletRow}>
+                  <Text style={styles.bulletDot}>•</Text>
+                  <Text style={styles.bulletText}>{b.text}</Text>
+                </View>
+              ) : (
+                <Text key={i} style={styles.body}>
+                  {b.text}
+                </Text>
+              ),
+            )}
+          </View>
+        </View>
+      );
+    })}
+  </View>
+);
 ```
 
 The compact branch keeps `styles.hints` as a `Text` — it holds a category label, not a date, so
@@ -360,7 +360,13 @@ leave lines 176–181 alone.
  * "Name — page 2 of 3", suppressed on a single-page CV. Same physics as HiddenInk: a
  * `fixed`, absolutely positioned Text, so page counts and the fit loop stay invariant.
  */
-function PageFooter({ name, styles }: { name: string; styles: ReturnType<typeof cvStyles> }) {
+function PageFooter({
+  name,
+  styles,
+}: {
+  name: string;
+  styles: ReturnType<typeof cvStyles>;
+}) {
   return (
     <Text
       fixed
@@ -376,7 +382,7 @@ function PageFooter({ name, styles }: { name: string; styles: ReturnType<typeof 
 and render it in `CvPages`, right before `<HiddenInk … />` (line 261):
 
 ```tsx
-      <PageFooter name={name} styles={styles} />
+<PageFooter name={name} styles={styles} />
 ```
 
 ### 3. `frontend/src/lib/export.ts`
@@ -411,7 +417,7 @@ export function joinedContent(
 skills it prints today:
 
 ```ts
-      const metaLine = [p.date, p.meta, p.skills].filter(Boolean).join(" · ");
+const metaLine = [p.date, p.meta, p.skills].filter(Boolean).join(" · ");
 ```
 
 ### 3b. entry detail level
@@ -425,7 +431,7 @@ skills it prints today:
 ```
 
 `cv_content` is a raw JSONField with no serializer validation, so this needs **no backend change and
-no migration**. Note the existing behaviour it inherits: applying a *new* run replaces the section
+no migration**. Note the existing behaviour it inherits: applying a _new_ run replaces the section
 lists, so an override is lost unless the entry is pinned — exactly what already happens to
 `deselected`.
 
@@ -433,10 +439,10 @@ lists, so an override is lost unless the entry is pinned — exactly what alread
 type, next to `max_entries` (line 20):
 
 ```ts
-    /** How many entries per section render in full. The rest are one-liners. Sections
-     *  absent from this map are compact throughout (skills, languages — they have no
-     *  description to show anyway). */
-    detailed: Record<string, number>;
+/** How many entries per section render in full. The rest are one-liners. Sections
+ *  absent from this map are compact throughout (skills, languages — they have no
+ *  description to show anyway). */
+detailed: Record<string, number>;
 ```
 
 in `FALLBACK_SPEC.cv`, after `max_entries` (line 42):
@@ -451,20 +457,20 @@ and in `parseLayoutSpec`. The existing `maxEntries` helper (lines 62–70) parse
 Generalise it (one renamed function, one extra argument, the two call sites below it):
 
 ```ts
-  /** Positive ints keyed by section, legacy names remapped. Shared by `max_entries`
-   *  and `detailed` — same shape, different fallback. */
-  const sectionCounts = (
-    raw: Record<string, number> | undefined,
-    fallback: Record<string, number>,
-  ) => {
-    if (!raw) return { ...fallback };
-    const out: Record<string, number> = {};
-    for (const [name, cap] of Object.entries(raw)) {
-      if (typeof cap === "number" && cap > 0)
-        out[LEGACY_SECTIONS[name] ?? name] = Math.floor(cap);
-    }
-    return out;
-  };
+/** Positive ints keyed by section, legacy names remapped. Shared by `max_entries`
+ *  and `detailed` — same shape, different fallback. */
+const sectionCounts = (
+  raw: Record<string, number> | undefined,
+  fallback: Record<string, number>,
+) => {
+  if (!raw) return { ...fallback };
+  const out: Record<string, number> = {};
+  for (const [name, cap] of Object.entries(raw)) {
+    if (typeof cap === "number" && cap > 0)
+      out[LEGACY_SECTIONS[name] ?? name] = Math.floor(cap);
+  }
+  return out;
+};
 ```
 
 ```ts
@@ -475,7 +481,7 @@ Generalise it (one renamed function, one extra argument, the two call sites belo
 ⚠️ Note what the `if (!raw)` branch means for a **stored** layout: a template file written before
 this change has no `detailed` key, so it inherits the fallback's `{ jobs: 2, projects: 1,
 educations: 1 }` rather than an empty map. That is the intended default — but it also means step 4's
-`seed_system_defaults` is not optional for the *budgets*, only for the section split.
+`seed_system_defaults` is not optional for the _budgets_, only for the section split.
 
 **c.** `frontend/src/lib/render/parts.ts` — the resolution rule, in one pure place:
 
@@ -552,12 +558,12 @@ Inside the `entries.map` from step 2d:
 the page's. In `cvToMarkdown`'s entry loop (line 31):
 
 ```ts
-      // The three detail signals are not equal. `entry.detail` is editorial — "this job
-      // is a footnote" — and holds in any format. The other two (rank against the
-      // layout budget, and a fit demotion) exist because the PAGE ran out of room, and
-      // markdown has no pages. So markdown reads the override off the entry and ignores
-      // the rest; it needs no `detailed` map and keeps its three-argument signature.
-      if (p.body && e.detail !== "compact") lines.push(p.body);
+// The three detail signals are not equal. `entry.detail` is editorial — "this job
+// is a footnote" — and holds in any format. The other two (rank against the
+// layout budget, and a fit demotion) exist because the PAGE ran out of room, and
+// markdown has no pages. So markdown reads the override off the entry and ignores
+// the rest; it needs no `detailed` map and keeps its three-argument signature.
+if (p.body && e.detail !== "compact") lines.push(p.body);
 ```
 
 The invisible-ink payload and the JSON dump stay untouched in either case — both carry the joined
@@ -664,3 +670,9 @@ cd frontend && npx vitest run tests/lib/render-typography.test.ts tests/lib/expo
 ## Results
 
 <!-- human: raw test output, observed issues, what works -->
+
+i had trouble coding 3b.d.
+
+there is also problems with the spec. i think what happend: yuou wanted the one funciton to stay slim and iused detailed, but in the helper function you expect spec. anyways, amaybe i misunderstood, or the guide was ambigous or wrong, it needs to fixed
+
+four tests fail. nothing commited yet

@@ -16,6 +16,7 @@ export type CvEntry = {
   pinned?: boolean;
   /** Selection warning from the run — rendered by [frontend]-entry-pins-ui. */
   warning?: string;
+  detail?: "full" | "compact";
 };
 
 export type Grounding = {
