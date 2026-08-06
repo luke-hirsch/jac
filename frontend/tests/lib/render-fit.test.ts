@@ -5,17 +5,18 @@ import {
   countPdfPages,
   dropOrder,
   effectiveCaps,
-  fitCv,
   MAX_CAP_GROWTH,
-  overCapIds,
 } from "@/lib/render/fit";
 import type { CvContent } from "@/lib/cv-doc";
 
 /**
- * Fit-to-layout logic (guide [frontend]-render-export). The drop order is scale-free —
+ * Fit-to-layout primitives (guide [frontend]-render-export). The drop order is scale-free —
  * position fraction within a section, not raw relevance scores (incomparable across rungs
- * and sections) — respects per-section min-keep floors, and drops favourites last. fitCv
- * binary-searches the smallest drop that fits, with the renderer injected as `pagesFor`.
+ * and sections) — respects per-section min-keep floors, and drops favourites last.
+ *
+ * The searches that consume these (`reduceCv`, `growCv`, `fitContent`) live in
+ * `render-preflight.test.ts`, together with the demote-before-drop ladder that replaced
+ * the old drop-only `fitCv`.
  */
 
 function entry(id: string) {
@@ -37,9 +38,6 @@ function content(): CvContent {
     educations: [entry("education:1")],
   };
 }
-
-const totalEntries = (c: CvContent) =>
-  Object.values(c).reduce((n, list) => n + list.length, 0);
 
 describe("dropOrder", () => {
   it("drops tails first (by position fraction), bigger section on ties, floors protected", () => {
@@ -99,24 +97,6 @@ describe("capContent (template entry budget)", () => {
   });
 });
 
-describe("overCapIds (editor warning set)", () => {
-  it("flags entries past the cap, counting active entries only", () => {
-    const c = content();
-    c.skills[1] = { ...c.skills[1], deselected: true }; // skill:2 doesn't render
-    const over = overCapIds(c, { skills: 3 });
-    // Active order: 1,3,4,5,6 → 4th+ active are over.
-    expect(over).toEqual(new Set(["skill:5", "skill:6"]));
-  });
-
-  it("never flags deselected entries and ignores uncapped sections", () => {
-    const c = content();
-    c.skills[5] = { ...c.skills[5], deselected: true };
-    const over = overCapIds(c, { skills: 5 });
-    expect(over.size).toBe(0);
-    expect(overCapIds(content(), {}).size).toBe(0);
-  });
-});
-
 describe("countPdfPages", () => {
   it("counts /Type /Page dictionaries, excluding the /Pages tree node", () => {
     const pdfText =
@@ -128,38 +108,6 @@ describe("countPdfPages", () => {
 
   it("is 0 when nothing matches", () => {
     expect(countPdfPages("<< /Type /Pages >>")).toBe(0);
-  });
-});
-
-describe("fitCv", () => {
-  // Fake renderer: 4 entries per page.
-  const pagesFor = (c: CvContent) => Promise.resolve(Math.ceil(totalEntries(c) / 4));
-
-  it("returns the content untouched when it already fits", async () => {
-    const c = content(); // 10 entries → 3 pages
-    const fit = await fitCv(c, 3, pagesFor);
-    expect(fit.content).toBe(c);
-    expect(fit.droppedIds).toEqual([]);
-    expect(fit.pages).toBe(3);
-    expect(fit.fits).toBe(true);
-  });
-
-  it("drops the minimal ranked tail to fit", async () => {
-    // 10 entries → 3 pages; 2 pages allow 8 entries → exactly 2 drops, in drop order.
-    const fit = await fitCv(content(), 2, pagesFor);
-    expect(fit.droppedIds).toEqual(["skill:6", "job:3"]);
-    expect(totalEntries(fit.content)).toBe(8);
-    expect(fit.pages).toBe(2);
-    expect(fit.fits).toBe(true);
-  });
-
-  it("reports fits=false when even the min-keep floor overflows", async () => {
-    const fit = await fitCv(content(), 1, pagesFor);
-    // Floor = 1 job + 3 skills + 1 education = 5 entries → 2 pages > 1.
-    expect(fit.fits).toBe(false);
-    expect(fit.droppedIds).toHaveLength(5);
-    expect(totalEntries(fit.content)).toBe(5);
-    expect(fit.pages).toBe(2);
   });
 });
 

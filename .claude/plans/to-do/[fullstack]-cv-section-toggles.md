@@ -275,6 +275,23 @@ Line 111–112:
 and the same two lines in `onDownloadMd` (line 258). `full` is what feeds `hiddenPayload`, so a
 switched-off section is now absent from the invisible layer too — which is the point.
 
+### 8. Thread the off-list through the preflight
+
+`[frontend]-fit-preflight` shipped **without** this guide (its dependency was only `effectiveCaps`,
+which it works around by using `spec.cv.max_entries` directly). Four small edits close the loop —
+without them a switched-off section frees budget on paper but the page fit never spends it, which is
+the whole promise of the toggle:
+
+1. `use-preflight.ts` — the hook's args gain `sectionsOff: string[]`; it passes
+   `effectiveCaps(spec.cv.max_entries, sectionsOff)` to `fitContent` instead of
+   `spec.cv.max_entries`, and `sectionsOff` into `preflightKey` (the key already accepts the field).
+2. `content-card.tsx` — pass `sectionsOff` to the hook, and `activeContent(cvDraft, sectionsOff)` as
+   its `content`.
+3. `export-card.tsx` — the same two swaps inside `buildPdf` (`effectiveCaps(s.cv.max_entries, off)`
+   in the `fitContent` call, `sectionsOff: off` in the `preflightKey` call). Both sides must build
+   the key identically or the export silently re-measures on every download.
+4. Verify: switching a section off makes the editor's status line report *more* entries added.
+
 ## Tests
 
 **Step 0 — unskip.** Delete the `@skip` in the backend file and every `.skip` in the frontend ones.

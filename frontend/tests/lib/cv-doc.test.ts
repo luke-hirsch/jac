@@ -15,6 +15,7 @@ import {
   parseEntryId,
   pinnedIds,
   removeEntry,
+  setDetail,
   toggleDeselect,
   togglePin,
   toggleSection,
@@ -281,6 +282,38 @@ describe("mergePinned", () => {
     };
     const merged = mergePinned(current, next);
     expect(merged.jobs[0].warning).toContain("high-mode");
+  });
+});
+
+/**
+ * `[frontend]-fit-preflight`: the per-entry detail override. Same shape as the other
+ * editor mutations — immutable, index-addressed, out-of-range is a no-op. Writing
+ * `detail` is what makes the choice *editorial*: `entryDetail` reads it before the fit's
+ * demotion set, so a stored value beats whatever the page fit would have preferred.
+ */
+describe("setDetail", () => {
+  it("writes the override on the addressed entry only", () => {
+    const out = setDetail(content(), "jobs", 1, "compact");
+    expect(out.jobs[1].detail).toBe("compact");
+    expect(out.jobs[0].detail).toBeUndefined();
+    expect(out.skills[0].detail).toBeUndefined();
+  });
+
+  it("flips an existing override the other way", () => {
+    const once = setDetail(content(), "jobs", 0, "compact");
+    expect(setDetail(once, "jobs", 0, "full").jobs[0].detail).toBe("full");
+  });
+
+  it("does not mutate the input", () => {
+    const c = content();
+    setDetail(c, "jobs", 0, "compact");
+    expect(c.jobs[0].detail).toBeUndefined();
+  });
+
+  it("returns the same object for an index that is not there", () => {
+    const c = content();
+    expect(setDetail(c, "jobs", 9, "compact")).toBe(c);
+    expect(setDetail(c, "languages", 0, "compact")).toBe(c);
   });
 });
 

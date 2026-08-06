@@ -1,34 +1,36 @@
 # [frontend] Fit preflight — drop *and* grow, in the editor
 
 > Roadmap: **CV-filter phase, item 3** — "a pre render run to determine if everything fits and
-> adjust accordingly would be good", and the second half of item 2 in the UI section — "if we gain
+> adjust accordingly would be good", and the second half of the UI section's item 2 — "if we gain
 > some space because the skill cloud is removed … i would love to use the space".
 > Branch: `frontend/fit-preflight`
-> Depends on: `[frontend]-cv-typography` (it changes what fits) and
-> `[fullstack]-cv-section-toggles` (`effectiveCaps` is the input here).
+> Depends on: `[frontend]-cv-typography` — **landed** (`d66ed35`, `08fd5fa`): `spec.cv.detailed`,
+> `CvEntry.detail`, `entryDetail(entry, i, section, detailed, demoted)` and the `demoted` prop on
+> `CvPages` are all in the tree. This guide is what fills that prop.
+> **Activated 2026-08-05** — contracts verified against the code, tests on disk and red.
 
 ## Context / goal
 
-The fit has two holes.
+The fit has three holes.
 
 **It only ever drops.** `fitCv` (`fit.ts:131`) binary-searches the smallest number of entries to
-*remove* so the CV fits its page budget. Nothing ever puts an entry back. So the caps are a hard
-ceiling: after guide 2 takes the skill clouds off the page, and after guide 5 lets you switch a
-section off, the freed space just… stays blank. The page budget is a budget — an under-full page is
-as much a miss as an overflowing one.
+*remove* so the CV fits its page budget. Nothing ever puts an entry back, so the template caps are a
+hard ceiling: now that guide 2 took the skill clouds off the page, the freed space just… stays
+blank. A page budget is a budget — an under-full page is as much a miss as an overflowing one.
 
-**It only has two gears.** An entry is either on the CV in full or gone. Guide
-`[frontend]-cv-typography` adds a third state — `compact`, the dated row without the description —
-and demoting a deep job to it is almost always better than dropping it: a CV that lists every
-position but describes only the relevant ones is a normal good CV, while a CV missing positions has
-gaps a recruiter will ask about. So the reduction ladder becomes **demote, then drop**.
+**It only has two gears.** An entry is either on the CV in full or gone. Guide 2 added the third
+state — `compact`, the dated row without the description — and demoting a deep job to it is almost
+always better than dropping it: a CV that lists every position but describes only the relevant ones
+is a normal good CV, while a CV missing positions has gaps a recruiter will ask about. So the
+reduction ladder becomes **demote, then drop**.
 
-**It runs too late.** `fitCv` is called from `buildPdf()` — export and preview only. Until you hit
-one of those buttons, the editor shows no sign that three entries won't make it. `overCapIds`
-warns about the *template cap*, which is a different and much cruder thing than the actual page fit.
+**It runs too late.** `fitCv` is called from `buildPdf()` — export and preview only. Until you press
+one of those buttons the editor shows no sign that three entries won't make it. `overCapIds` warns
+about the *template cap*, which is a different and much cruder thing than the actual page fit — and
+with a grow pass it is now actively wrong, because an entry past the cap may well come back.
 
-This guide adds the grow pass and moves the whole measurement into the editor as a debounced
-background render, with the result cached so the export doesn't redo it.
+This guide adds the grow pass, adds the demote rung, and moves the whole measurement into the editor
+as a debounced background render, cached so the export doesn't redo it.
 
 **Why binary search both ways.** Page count is monotone in the entry count — non-increasing as you
 drop, non-decreasing as you add — so both directions are ~log₂(n) renders (4–6), not n. A render is
@@ -36,31 +38,224 @@ drop, non-decreasing as you add — so both directions are ~log₂(n) renders (4
 monotonicity (removing a description never adds lines), so the reduction ladder stays a single
 ordered list with one binary search over it, exactly like today's drop count.
 
+**Two decisions worth stating before the code.**
+
+1. **Demotions travel *beside* the content, never inside it.** `applySteps` does not write
+   `detail: "compact"` into the entries. `entry.detail` is the *user's* field — `entryDetail` reads
+   it before anything else, and the markdown exporter (`export.ts:36`) honours it and nothing else.
+   A machine demotion baked into that field would be indistinguishable from editorial intent and
+   would silently strip descriptions from the markdown export. So the fit returns a `demoted` id set
+   and hands it to `CvPages` through the prop guide 2 left for exactly this. The measuring render
+   and the export render therefore take the *same two inputs* — parity by construction, which is the
+   entire point of a preflight. This is why `pagesFor` gains a second parameter.
+2. **The user always wins.** `reductionOrder` skips any entry that carries an explicit
+   `entry.detail`, in either direction: `compact` has nothing left to give, and `full` is the user
+   saying "describe this one". Without that skip the fit would demote an entry the render then
+   refuses to shorten, and the measurement would disagree with the page.
+
+## Scope note — `sections_off` is *not* in this guide
+
+The original draft depended on `[fullstack]-cv-section-toggles` for `effectiveCaps` and the two-arg
+`activeContent`. Neither exists yet, and neither is needed to ship the preflight: this guide uses
+`spec.cv.max_entries` and today's one-arg `activeContent`. `preflightKey` already accepts an
+optional `sectionsOff` so the key survives the change. The section-toggles guide carries the
+four-line follow-up (its §8) that threads the off-list through the hook and the export card.
+
 ## Affected files
 
 | path | why |
 | --- | --- |
-| `frontend/src/lib/render/fit.ts` | `reductionOrder`, `applySteps`, `reduceCv` (replaces `fitCv`), `beyondCap`, `addOrder`, `growCv`, `fitContent`, `preflightKey`. |
+| `frontend/src/lib/render/fit.ts` | `reductionOrder`, `applySteps`, `PagesFor`, `reduceCv`, `beyondCap`, `addOrder`, `applyAdd`, `growCv`, `fitContent`, `preflightKey`. **`fitCv`, `FitResult` and `overCapIds` are deleted.** |
 | `frontend/src/lib/cv-doc.ts` | `setDetail` — the per-entry detail override. |
-| `frontend/src/components/applications/use-preflight.ts` | **new** — the debounced background measurement hook. |
-| `frontend/src/components/applications/content-card.tsx` | will-be-cut / will-be-added badges from the preflight. |
-| `frontend/src/components/applications/letter-editor.tsx` | live letter page count. |
-| `frontend/src/components/applications/export-card.tsx` | build on the cached preflight instead of re-fitting. |
+| `frontend/src/components/applications/use-preflight.ts` | **new** — the debounced background measurement hook + the shared cache. |
+| `frontend/src/components/applications/content-card.tsx` | the hook call, the three badge sets, the detail toggle, the status line; `overCapIds` usage goes. |
+| `frontend/src/components/applications/letter-editor.tsx` | `letterPages` prop + the "runs to N pages" line. |
+| `frontend/src/components/applications/export-card.tsx` | build on the cached preflight instead of re-fitting; pass `demoted` to both CV render sites. |
+| `frontend/src/lib/render/preview.ts` | `BuiltPdf.fit` is a `PreflightResult`; `fitNotices` reports shortened and added entries. |
+
+**Blast radius (honest).** Deleting `fitCv` breaks `export-card.tsx` and `preview.ts` — both are
+repaired here, in this branch, no bridge. Deleting `overCapIds` removes the amber template-cap
+warning from the editor; the per-section `4/5 in the layout` counter stays, and the per-entry truth
+becomes the preflight's. Nothing else in the tree imports either symbol (checked).
 
 ## The code
 
+Everything below was typed into a throwaway worktree off `08fd5fa` and verified: `npx tsc -b` clean,
+`npx eslint` clean, full suite green (396 passed / 52 skipped).
+
 ### 1. `frontend/src/lib/render/fit.ts`
 
-**a.** the pool — what the cap cut off, still in rank order:
+**a.** two new imports at the top, next to the existing `CvContent` type import:
 
 ```ts
+import { MIN_DETAILED } from "./parts";
+import type { LayoutSpec } from "./spec";
+```
+
+(No cycle: `parts.ts` and `spec.ts` don't import `fit.ts`.)
+
+**b.** delete `overCapIds` (lines 86–107), `FitResult` and `fitCv` (lines 119–172). `dropOrder`,
+`applyDrop`, `capContent`, `countPdfPages` and `MIN_KEEP` all stay exactly as they are.
+
+**c.** the reduction ladder — demote before drop:
+
+```ts
+/* ---------- the reduction ladder: demote, then drop ---------- */
+
+export type Step = { kind: "demote" | "drop"; id: string };
+
 /**
- * The entries each section has *beyond* its cap, in rank order — the grow pass's candidate
- * pool. `headroom` bounds how far past the editorial cap the fit may go: page space is not
- * the only constraint, nobody wants 40 skills just because they fit.
+ * Every reduction available, cheapest first. Two rungs, in order:
+ *
+ *   1. **demote** a full entry to compact (drop its description), deepest rank fraction
+ *      first, never below `MIN_DETAILED` per section;
+ *   2. **drop** it entirely, in the existing `dropOrder`.
+ *
+ * All demotions come before any drop. That is an editorial decision, not an accident:
+ * losing a description costs a few lines of colour, losing an entry costs a visible gap
+ * in the timeline. Revisit it in Results if a real CV disagrees.
+ *
+ * An entry with an explicit `detail` is skipped either way — `compact` has nothing left
+ * to give, and `full` is the user overruling the fit (and `entryDetail` would honour that
+ * at render time, so demoting it would only make the measurement lie).
+ */
+export function reductionOrder(
+  content: CvContent,
+  detailed: Record<string, number>,
+  isFavourite: (id: string) => boolean = () => false,
+): Step[] {
+  const demotes: { id: string; frac: number; section: string }[] = [];
+  for (const [section, list] of Object.entries(content)) {
+    // Only entries the layout renders in full can be demoted, and the top
+    // MIN_DETAILED of each section stay full whatever happens.
+    const budget = Math.min(detailed[section] ?? 0, list.length);
+    for (let i = MIN_DETAILED; i < budget; i++) {
+      const e = list[i];
+      if (e.detail) continue;
+      demotes.push({ id: e.id, frac: (i + 1) / list.length, section });
+    }
+  }
+  demotes.sort((a, b) => b.frac - a.frac || a.section.localeCompare(b.section));
+  return [
+    ...demotes.map((d) => ({ kind: "demote" as const, id: d.id })),
+    ...dropOrder(content, isFavourite).map((id) => ({
+      kind: "drop" as const,
+      id,
+    })),
+  ];
+}
+
+/**
+ * Apply the first k steps: dropped entries are gone, demoted ones are reported *beside*
+ * the content (never written into `entry.detail` — that field is the user's). Immutable:
+ * a measurement must not rewrite the editor's draft. An id that is both demoted and
+ * dropped is only dropped — reporting it as "shortened" would be a lie.
+ */
+export function applySteps(
+  content: CvContent,
+  steps: Step[],
+): { content: CvContent; demoted: Set<string> } {
+  const dropped = new Set(
+    steps.filter((s) => s.kind === "drop").map((s) => s.id),
+  );
+  const demoted = new Set(
+    steps
+      .filter((s) => s.kind === "demote" && !dropped.has(s.id))
+      .map((s) => s.id),
+  );
+  const out: CvContent = {};
+  for (const [section, list] of Object.entries(content)) {
+    out[section] = list.filter((e) => !dropped.has(e.id));
+  }
+  return { content: out, demoted };
+}
+
+/**
+ * Render a candidate and count its pages — the only impure part, injected. The demotion
+ * set is the second argument because that is how the real render takes it (`CvPages`'
+ * `demoted` prop), so what the search measures is what the export draws.
+ */
+export type PagesFor = (
+  content: CvContent,
+  demoted: Set<string>,
+) => Promise<number>;
+
+const NO_DEMOTIONS: Set<string> = new Set();
+
+export type ReduceResult = {
+  content: CvContent;
+  demotedIds: string[];
+  droppedIds: string[];
+  pages: number;
+  fits: boolean; // false: even the min-keep floor overflows the budget
+};
+
+/**
+ * Smallest prefix of the reduction ladder that fits `maxPages`, by binary search — the
+ * page count is monotonically non-increasing in the step count (a demotion never adds
+ * lines, a drop never adds entries). Same search as the old `fitCv`; what changed is that
+ * a step can now be a demotion, and the chosen prefix is split by kind at the end.
+ */
+export async function reduceCv(
+  content: CvContent,
+  detailed: Record<string, number>,
+  maxPages: number,
+  pagesFor: PagesFor,
+  isFavourite?: (id: string) => boolean,
+): Promise<ReduceResult> {
+  const steps = reductionOrder(content, detailed, isFavourite);
+  const pagesAt = (k: number) => {
+    const c = applySteps(content, steps.slice(0, k));
+    return pagesFor(c.content, c.demoted);
+  };
+  const resultAt = (k: number, pages: number, fits: boolean): ReduceResult => {
+    const taken = steps.slice(0, k);
+    const c = applySteps(content, taken);
+    return {
+      content: c.content,
+      demotedIds: taken
+        .filter((s) => s.kind === "demote" && c.demoted.has(s.id))
+        .map((s) => s.id),
+      droppedIds: taken.filter((s) => s.kind === "drop").map((s) => s.id),
+      pages,
+      fits,
+    };
+  };
+
+  const full = await pagesAt(0);
+  if (full <= maxPages) return resultAt(0, full, true);
+
+  let lo = 0; // known: doesn't fit
+  let hi = steps.length;
+  let hiPages = await pagesAt(hi);
+  if (hiPages > maxPages) return resultAt(hi, hiPages, false);
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    const p = await pagesAt(mid);
+    if (p <= maxPages) {
+      hi = mid;
+      hiPages = p;
+    } else {
+      lo = mid;
+    }
+  }
+  return resultAt(hi, hiPages, true);
+}
+```
+
+**d.** the grow pass — the pool, the order, the search:
+
+```ts
+/* ---------- the grow pass ---------- */
+
+/**
+ * How far past the editorial cap the fit may go. Page space is not the only constraint —
+ * nobody wants 40 skills just because they fit.
  */
 export const GROW_HEADROOM = 1.5;
 
+/** What each section has *beyond* its cap, in rank order — the grow pass's candidate
+ *  pool. Uncapped sections are already all in, so they contribute nothing. */
 export function beyondCap(
   content: CvContent,
   maxEntries: Record<string, number>,
@@ -69,21 +264,19 @@ export function beyondCap(
   const out: CvContent = {};
   for (const [section, list] of Object.entries(content)) {
     const cap = maxEntries[section];
-    if (cap == null) continue; // uncapped sections are already all in
+    if (cap == null) continue;
     out[section] = list.slice(cap, Math.ceil(cap * headroom));
   }
   return out;
 }
-```
 
-**b.** the mirror of `dropOrder` — best candidates first:
-
-```ts
 /**
- * Ids in add-first order: the exact mirror of `dropOrder`. Shallowest position fraction
- * first (the best of what the cap cut), favourites and pins ahead of the rest. Being a
- * mirror matters — an entry the drop order would shed last is the one the grow order takes
- * back first, so the two passes can never fight over the same entry.
+ * Ids in add-first order — `dropOrder` read backwards. Shallowest position fraction
+ * first (the best of what the cap cut), pins and favourites ahead of the rest, and every
+ * tiebreak reversed. Being a mirror matters: an entry the drop order would shed last is
+ * the one the grow order takes back first, so the two passes can never fight over the
+ * same entry. (The fraction is relative to the *pool*, which is what "how far past the
+ * cap" means here — a section with more spare depth gets the earlier slot.)
  */
 export function addOrder(
   pool: CvContent,
@@ -114,14 +307,14 @@ export function addOrder(
       Number(b.pin) - Number(a.pin) ||
       Number(b.fav) - Number(a.fav) ||
       a.frac - b.frac ||
-      b.size - a.size ||
-      a.section.localeCompare(b.section),
+      a.size - b.size ||
+      b.section.localeCompare(a.section),
   );
   return cands.map((c) => c.id);
 }
 
-/** Put `ids` back into `content`, each into its own section, keeping the rank order the
- *  full (pre-cap) content defines. */
+/** Put `ids` back into `content`, each into its own section, in the rank order the
+ *  full (pre-cap) content defines — not at the end. Immutable. */
 export function applyAdd(
   content: CvContent,
   full: CvContent,
@@ -136,44 +329,44 @@ export function applyAdd(
   }
   return out;
 }
-```
 
-**c.** the grow search:
-
-```ts
-export type GrowResult = { content: CvContent; addedIds: string[]; pages: number };
+export type GrowResult = {
+  content: CvContent;
+  addedIds: string[];
+  pages: number;
+};
 
 /**
- * Largest number of pool entries that still fits `maxPages`, by binary search — page count
- * is monotonically non-decreasing in the add count. Mirrors `fitCv`; `pagesFor` is injected
- * the same way.
+ * Largest number of pool entries that still fits `maxPages`, by binary search — the page
+ * count is monotonically non-decreasing in the add count. Measures with no demotions:
+ * `fitContent` only grows when the reduce pass made none.
  */
 export async function growCv(
   content: CvContent,
   full: CvContent,
   pool: CvContent,
   maxPages: number,
-  pagesFor: (c: CvContent) => Promise<number>,
+  pagesFor: PagesFor,
   isFavourite?: (id: string) => boolean,
 ): Promise<GrowResult> {
   const order = addOrder(pool, isFavourite);
-  if (order.length === 0)
-    return { content, addedIds: [], pages: await pagesFor(content) };
-
   const pagesAt = (k: number) =>
-    pagesFor(applyAdd(content, full, order.slice(0, k)));
+    pagesFor(applyAdd(content, full, order.slice(0, k)), NO_DEMOTIONS);
+
+  if (order.length === 0)
+    return { content, addedIds: [], pages: await pagesAt(0) };
 
   const all = await pagesAt(order.length);
-  if (all <= maxPages) {
+  if (all <= maxPages)
     return {
       content: applyAdd(content, full, order),
       addedIds: order,
       pages: all,
     };
-  }
-  let lo = 0; // known: fits (it's the fitted content)
+
+  let lo = 0; // known: fits (it is the fitted content)
   let hi = order.length; // known: doesn't fit
-  let loPages = await pagesAt(0);
+  let loPages: number | null = null; // only measured if the search never advances lo
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
     const p = await pagesAt(mid);
@@ -187,97 +380,16 @@ export async function growCv(
   return {
     content: applyAdd(content, full, order.slice(0, lo)),
     addedIds: order.slice(0, lo),
-    pages: loPages,
+    pages: loPages ?? (await pagesAt(lo)),
   };
 }
 ```
 
-**c2.** the reduction ladder — demote before drop:
+**e.** the orchestrator and the cache key — one call the editor and the export both use:
 
 ```ts
-export type Step = { kind: "demote" | "drop"; id: string };
+/* ---------- the orchestrator ---------- */
 
-/**
- * Every reduction available, cheapest first. Two rungs, in order:
- *
- *   1. **demote** a full entry to compact (drop its description), deepest rank fraction
- *      first, never below `MIN_DETAILED` per section;
- *   2. **drop** it entirely, in the existing `dropOrder`.
- *
- * All demotions come before any drop. That is an editorial decision, not an accident:
- * losing a description costs a few lines of colour, losing an entry costs a visible gap in
- * the timeline. Revisit it in Results if a real CV disagrees.
- */
-export function reductionOrder(
-  content: CvContent,
-  detailed: Record<string, number>,
-  isFavourite: (id: string) => boolean = () => false,
-): Step[] {
-  const demotes: { id: string; frac: number; section: string }[] = [];
-  for (const [section, list] of Object.entries(content)) {
-    const budget = detailed[section] ?? 0;
-    // Only entries that are currently full can be demoted, and the top MIN_DETAILED of
-    // each section stay full whatever happens.
-    list.slice(MIN_DETAILED, budget).forEach((e, i) => {
-      if (e.detail === "compact") return; // the user already made it a one-liner
-      demotes.push({
-        id: e.id,
-        frac: (MIN_DETAILED + i + 1) / list.length,
-        section,
-      });
-    });
-  }
-  demotes.sort(
-    (a, b) => b.frac - a.frac || a.section.localeCompare(b.section),
-  );
-  return [
-    ...demotes.map((d) => ({ kind: "demote" as const, id: d.id })),
-    ...dropOrder(content, isFavourite).map((id) => ({
-      kind: "drop" as const,
-      id,
-    })),
-  ];
-}
-
-/** Apply the first k steps: demoted entries carry `detail: "compact"`, dropped ones are
- *  gone. Immutable — the editor's draft must not be rewritten by a measurement. */
-export function applySteps(content: CvContent, steps: Step[]): CvContent {
-  const demoted = new Set(
-    steps.filter((s) => s.kind === "demote").map((s) => s.id),
-  );
-  const dropped = new Set(steps.filter((s) => s.kind === "drop").map((s) => s.id));
-  const out: CvContent = {};
-  for (const [section, list] of Object.entries(content)) {
-    out[section] = list
-      .filter((e) => !dropped.has(e.id))
-      .map((e) =>
-        demoted.has(e.id) ? { ...e, detail: "compact" as const } : e,
-      );
-  }
-  return out;
-}
-```
-
-`reduceCv` is then today's `fitCv` with `reductionOrder`/`applySteps` in place of
-`dropOrder`/`applyDrop`, and a result that separates the two kinds:
-
-```ts
-export type ReduceResult = {
-  content: CvContent;
-  demotedIds: string[];
-  droppedIds: string[];
-  pages: number;
-  fits: boolean;
-};
-```
-
-The binary search itself is unchanged — copy it from `fitCv` (lines 137–171) and split the chosen
-prefix by `kind` at the end. **`fitCv` goes away**; `reduceCv` replaces it outright (no compat
-bridge — dev-phase rule).
-
-**d.** the orchestrator — one call the editor and the export both use:
-
-```ts
 export type PreflightResult = ReduceResult & { addedIds: string[] };
 
 /**
@@ -286,7 +398,7 @@ export type PreflightResult = ReduceResult & { addedIds: string[] };
  * is the active content BEFORE the cap, so the grow pass has somewhere to grow from.
  *
  * The grow pass deliberately does NOT promote compact entries back to full: the layout's
- * `detailed` budget is an editorial intent ("two jobs described, the rest listed"), not a
+ * `detailed` budget is editorial intent ("two jobs described, the rest listed"), not a
  * floor to be spent up. Leftover space buys more entries, not more prose.
  */
 export async function fitContent(
@@ -294,7 +406,7 @@ export async function fitContent(
   maxEntries: Record<string, number>,
   detailed: Record<string, number>,
   maxPages: number,
-  pagesFor: (c: CvContent) => Promise<number>,
+  pagesFor: PagesFor,
   isFavourite?: (id: string) => boolean,
 ): Promise<PreflightResult> {
   const capped = capContent(full, maxEntries);
@@ -322,33 +434,63 @@ export async function fitContent(
 }
 
 /**
- * Cache key for a preflight: everything a render depends on. Cheap to compute and stable
- * — the editor recomputes it on every keystroke, so it must not do work.
+ * Cache key for a preflight: everything a render depends on. The whole spec goes in
+ * (it is a small object, and picking fields out of it is how the key silently goes
+ * stale); so does the CV header, because a contact line and a profile summary are page
+ * content, not chrome. The QR block is deliberately absent — it is absolutely positioned
+ * and proven layout-invariant (`render-templates.test.ts`), and the URL it adds to the
+ * contact line is already in `cvHeader`.
+ *
+ * Cheap and stable: the editor recomputes it on every keystroke, so it must not do work.
  */
 export function preflightKey(args: {
-  specVersion: string;
+  spec: LayoutSpec;
   content: CvContent;
-  sectionsOff: string[];
+  sectionsOff?: string[]; // filled by [fullstack]-cv-section-toggles
+  cvHeader: { name: string; contact: string; summary: string };
   letterBody: string;
   letterMeta: unknown;
 }): string {
   return JSON.stringify([
-    args.specVersion,
+    args.spec,
     args.content,
-    args.sectionsOff,
+    args.sectionsOff ?? [],
+    args.cvHeader,
     args.letterBody,
     args.letterMeta,
   ]);
 }
 ```
 
-### 2. `frontend/src/components/applications/use-preflight.ts` (new)
+### 2. `frontend/src/lib/cv-doc.ts` — the detail override
+
+Next to `togglePin` (line 189), same shape as its neighbours:
+
+```ts
+/** The user's per-entry detail override. `entryDetail` reads this before the fit's
+ *  demotion set, so a stored value beats whatever the page fit would have preferred —
+ *  which is exactly why the fit never writes this field itself. */
+export function setDetail(
+  content: CvContent,
+  section: string,
+  index: number,
+  detail: "full" | "compact",
+): CvContent {
+  const list = content[section] ?? [];
+  if (index < 0 || index >= list.length) return content;
+  const next = list.map((e, i) => (i === index ? { ...e, detail } : e));
+  return { ...content, [section]: next };
+}
+```
+
+### 3. `frontend/src/components/applications/use-preflight.ts` (new)
 
 ```ts
 /**
  * Background page-fit measurement for the editor. Renders the real documents off-screen
  * (react-pdf into a Blob, never mounted) and reports what the export WILL do — which
- * entries get cut, which get pulled back in, how many pages, whether the letter spills.
+ * entries get shortened, which get cut, which get pulled back in, how many pages, whether
+ * the letter spills.
  *
  * Three things keep it cheap:
  *  - a debounce, so typing doesn't queue renders;
@@ -358,9 +500,13 @@ export function preflightKey(args: {
  */
 import { useEffect, useRef, useState } from "react";
 import type { CvContent } from "@/lib/cv-doc";
-import type { LetterMeta } from "@/lib/letter-doc";
+import { stripSoftStub, type LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
-import { effectiveCaps, fitContent, preflightKey, type PreflightResult } from "@/lib/render/fit";
+import {
+  fitContent,
+  preflightKey,
+  type PreflightResult,
+} from "@/lib/render/fit";
 import { isFavouriteLookup } from "@/lib/render/parts";
 import type { LayoutSpec } from "@/lib/render/spec";
 import { CvDocument, LetterDocument, pdfPages } from "@/lib/render/templates";
@@ -370,6 +516,8 @@ export type Preflight = {
   letterPages: number | null;
   measuring: boolean;
 };
+
+const IDLE: Preflight = { result: null, letterPages: null, measuring: false };
 
 const CACHE = new Map<string, Preflight>();
 const CACHE_MAX = 12; // a handful of editor states; this is a measurement, not a store.
@@ -383,220 +531,288 @@ const DEBOUNCE_MS = 800;
 export function usePreflight(args: {
   spec: LayoutSpec | undefined;
   db: CvEntriesResponse | undefined;
-  content: CvContent; // active content, pre-cap (sections already filtered)
-  sectionsOff: string[];
+  content: CvContent; // active content, pre-cap
   name: string;
+  contact: string;
+  summary: string;
   meta: LetterMeta;
   body: string;
 }): Preflight {
-  const { spec, db, content, sectionsOff, name, meta, body } = args;
-  const [state, setState] = useState<Preflight>({
-    result: null,
-    letterPages: null,
-    measuring: false,
-  });
+  const { spec, db, content, name, contact, summary, meta, body } = args;
+  // Only *finished* measurements are state; "which state am I looking at" is derived
+  // below from the key, so the effect never sets state synchronously (the react-hooks
+  // lint rejects that, and it would cascade a render per keystroke anyway).
+  const [done, setDone] = useState<{ key: string; value: Preflight } | null>(
+    null,
+  );
   const token = useRef(0);
 
   const key = spec
     ? preflightKey({
-        specVersion: `${spec.version}:${spec.cv.pages}:${spec.font.base_pt}:${spec.colors.accent}`,
+        spec,
         content,
-        sectionsOff,
+        cvHeader: { name, contact, summary },
         letterBody: body,
         letterMeta: meta,
       })
     : "";
 
   useEffect(() => {
-    if (!spec || !key) return;
-    const cached = CACHE.get(key);
-    if (cached) {
-      setState(cached);
-      return;
-    }
+    if (!spec || !key || CACHE.has(key)) return;
     const mine = ++token.current;
-    setState((s) => ({ ...s, measuring: true }));
-    const timer = setTimeout(async () => {
-      try {
-        const caps = effectiveCaps(spec.cv.max_entries, sectionsOff);
-        const result = await fitContent(
-          content,
-          caps,
-          spec.cv.detailed,
-          spec.cv.pages,
-          // The candidate content already carries `detail: "compact"` on demoted
-          // entries, so the measuring render sees exactly what the export will.
-          (c) => pdfPages(CvDocument({ spec, name, content: c, db })),
-          isFavouriteLookup(db),
-        );
-        const letterPages = body.trim()
-          ? await pdfPages(LetterDocument({ spec, meta, body }))
-          : null;
-        if (token.current !== mine) return; // superseded
-        const next = { result, letterPages, measuring: false };
-        if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value!);
-        CACHE.set(key, next);
-        setState(next);
-      } catch {
-        if (token.current === mine)
-          setState({ result: null, letterPages: null, measuring: false });
-      }
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await fitContent(
+            content,
+            spec.cv.max_entries,
+            spec.cv.detailed,
+            spec.cv.pages,
+            (c, demoted) =>
+              pdfPages(
+                CvDocument({
+                  spec,
+                  name,
+                  content: c,
+                  db,
+                  demoted,
+                  contact,
+                  summary,
+                }),
+              ),
+            isFavouriteLookup(db),
+          );
+          const stripped = stripSoftStub(body);
+          const letterPages = stripped
+            ? await pdfPages(LetterDocument({ spec, meta, body: stripped }))
+            : null;
+          if (token.current !== mine) return; // superseded
+          const value: Preflight = { result, letterPages, measuring: false };
+          if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value!);
+          CACHE.set(key, value);
+          setDone({ key, value });
+        } catch {
+          if (token.current === mine) setDone({ key, value: IDLE });
+        }
+      })();
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [key, spec, db, name]);
+    // `key` already folds in content / header / letter: listing those objects would
+    // re-fire the measurement on every identity change instead of every real change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, spec, db]);
 
-  return state;
+  if (!spec) return IDLE;
+  const cached = CACHE.get(key);
+  if (cached) return cached;
+  return done?.key === key
+    ? done.value
+    : { result: null, letterPages: null, measuring: true };
 }
 ```
 
-Note the deliberate `key`-only dependency: `content`/`meta`/`body` are already folded into it, and
-listing the objects themselves would re-fire on every identity change.
+Note the deliberate dependency list and the `.ts` (not `.tsx`) extension: the documents are called
+as plain functions, which typechecks fine against `pdfPages` and keeps JSX out of a hook file.
 
-### 3. `frontend/src/components/applications/content-card.tsx`
+### 4. `frontend/src/components/applications/content-card.tsx`
 
-Call it next to the other state, and derive the two badge sets:
+**a.** imports: add `AlignLeft` and `Minus` to the `lucide-react` block; add `activeContent` and
+`setDetail` to the `@/lib/cv-doc` block; add `contactLine` to the **existing** `@/lib/letter-doc`
+block; replace the `overCapIds` import line with
 
 ```tsx
+import { entryDetail } from "@/lib/render/parts";
+```
+
+and add `import { usePreflight } from "./use-preflight";` next to the `LetterEditor` import.
+
+**b.** replace the `overCap` block (lines 184–188) with the hook and the three id sets:
+
+```tsx
+  const hasCv = SECTION_ORDER.some((s) => (cvDraft[s] ?? []).length > 0);
+  const maxEntries = spec.data?.cv.max_entries ?? {};
+
+  // The real page fit, measured in the background off the live draft — not the crude
+  // template cap. It is what the export will do, so the editor can show it up front.
   const preflight = usePreflight({
     spec: spec.data,
     db: careerDb.data,
-    content: activeContent(cvDraft, sectionsOff),
-    sectionsOff,
-    name: meta.sender.name || "CV",
+    content: activeContent(cvDraft),
+    name: letterMeta.sender.name || "CV",
+    contact: contactLine(letterMeta.sender, {
+      socials: profile.data?.show_socials ?? false,
+    }),
+    summary: profile.data?.bio ?? "",
     meta: letterMeta,
     body: coverLetter,
   });
-  // The real page fit, not the crude template cap: these are the entries the export will
-  // actually shorten, cut, and pull back in to fill the page.
   const willCut = new Set(preflight.result?.droppedIds ?? []);
   const willShorten = new Set(preflight.result?.demotedIds ?? []);
   const willAdd = new Set(preflight.result?.addedIds ?? []);
 ```
 
-Pass `willCut` / `willShorten` / `willAdd` down to `CvEditorSection` alongside `overIds`, and render
-on each `<li>`:
+**c.** the section list (line 237): `overIds={overCap}` becomes four props, and a status line goes
+under the map:
 
 ```tsx
-                {willCut.has(e.id) && (
-                  <Badge variant="outline" className="text-amber-600">
-                    won't fit
-                  </Badge>
+                cap={maxEntries[section]}
+                detailed={spec.data?.cv.detailed ?? {}}
+                willCut={willCut}
+                willShorten={willShorten}
+                willAdd={willAdd}
+                freshIds={fresh.ids}
+              />
+            ))}
+            <p className="text-xs text-muted-foreground">
+              {preflight.measuring
+                ? "measuring the layout…"
+                : preflight.result
+                  ? `${preflight.result.pages} of ${spec.data?.cv.pages ?? 1} page(s) used` +
+                    (preflight.result.addedIds.length
+                      ? ` — ${preflight.result.addedIds.length} extra entr${
+                          preflight.result.addedIds.length === 1 ? "y" : "ies"
+                        } added to fill it`
+                      : "")
+                  : ""}
+            </p>
+```
+
+**d.** `<LetterEditor>` (line 274) gains `letterPages={preflight.letterPages}`.
+
+**e.** `CvEditorSection`'s signature: `overIds: Set<string>` becomes
+
+```tsx
+  detailed: Record<string, number>;
+  willCut: Set<string>;
+  willShorten: Set<string>;
+  willAdd: Set<string>;
+```
+
+with the destructuring updated to match.
+
+**f.** inside the entry map (line 327): `const isOver = willCut.has(e.id);` and one line more —
+
+```tsx
+          const detail = entryDetail(e, i, section, detailed, willShorten);
+```
+
+The amber-triangle title (line 338) now describes the real reason:
+
+```tsx
+                <span title="The page fit has to cut this entry — deselect or shorten something else to keep it.">
+```
+
+**g.** after the relevance badge (line 361–363), the three fit badges and the detail toggle — the
+fit's choice is a default, not a verdict:
+
+```tsx
+              {willCut.has(e.id) && (
+                <Badge variant="outline" className="text-amber-600">
+                  won't fit
+                </Badge>
+              )}
+              {willShorten.has(e.id) && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  title only
+                </Badge>
+              )}
+              {willAdd.has(e.id) && (
+                <Badge variant="outline" className="text-emerald-600">
+                  fills the page
+                </Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={detail === "full" ? "Show title only" : "Show description"}
+                title={
+                  detail === "full"
+                    ? "Show the title only — keeps the position, drops the description."
+                    : "Show the full description."
+                }
+                onClick={() =>
+                  onEdit((c) =>
+                    setDetail(
+                      c,
+                      section,
+                      i,
+                      detail === "full" ? "compact" : "full",
+                    ),
+                  )
+                }
+              >
+                {detail === "full" ? (
+                  <AlignLeft className="h-4 w-4" />
+                ) : (
+                  <Minus className="h-4 w-4" />
                 )}
-                {willShorten.has(e.id) && (
-                  <Badge variant="outline" className="text-muted-foreground">
-                    title only
-                  </Badge>
-                )}
-                {willAdd.has(e.id) && (
-                  <Badge variant="outline" className="text-emerald-600">
-                    fills the page
-                  </Badge>
-                )}
+              </Button>
 ```
 
-and the per-entry override next to the existing eye / pin / trash actions — the fit's choice is a
-default, not a verdict:
+### 5. `frontend/src/components/applications/letter-editor.tsx`
+
+The prop (after `onBody`, line 62):
 
 ```tsx
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  title={
-                    entryDetail(e, i, section, detailed, willShorten) === "full"
-                      ? "Show the title only"
-                      : "Show the full description"
-                  }
-                  onClick={() =>
-                    onEdit((c) =>
-                      setDetail(
-                        c,
-                        section,
-                        i,
-                        entryDetail(e, i, section, detailed, willShorten) === "full"
-                          ? "compact"
-                          : "full",
-                      ),
-                    )
-                  }
-                >
-                  {entryDetail(e, i, section, detailed, willShorten) === "full" ? (
-                    <AlignLeft />
-                  ) : (
-                    <Minus />
-                  )}
-                </Button>
+  /** Measured page count from the editor's preflight; null while unmeasured. */
+  letterPages: number | null;
 ```
 
-with a `setDetail(content, section, index, detail)` immutable helper in `lib/cv-doc.ts`, written to
-match the existing `toggleDeselect` / `togglePin` (same signature shape, same immutability).
-
-and a one-line status under the section list:
+and the signal, right after the `<Textarea>` (before the `{sel && anchor && (` popover):
 
 ```tsx
-        <p className="text-xs text-muted-foreground">
-          {preflight.measuring
-            ? "measuring the layout…"
-            : preflight.result
-              ? `${preflight.result.pages} of ${spec.data?.cv.pages} page(s) used` +
-                (preflight.result.addedIds.length
-                  ? ` — ${preflight.result.addedIds.length} extra entr${
-                      preflight.result.addedIds.length === 1 ? "y" : "ies"
-                    } added to fill it`
-                  : "")
-              : ""}
-        </p>
+        {letterPages != null && letterPages > 1 && (
+          <p className="text-xs text-destructive">
+            This letter runs to {letterPages} pages — it should be one.
+          </p>
+        )}
 ```
 
-### 4. `frontend/src/components/applications/letter-editor.tsx`
+The *how much* to cut, and the shortening loop, are guide `[fullstack]-letter-fit`. This is only the
+signal it builds on.
 
-The editor takes a `letterPages: number | null` prop (passed from the content card's preflight) and
-renders, under the body textarea:
+### 6. `frontend/src/components/applications/export-card.tsx`
+
+Import line 30 becomes two lines:
 
 ```tsx
-      {letterPages != null && letterPages > 1 && (
-        <p className="text-xs text-destructive">
-          This letter runs to {letterPages} pages — it should be one.
-        </p>
-      )}
+import { capContent, fitContent, preflightKey } from "@/lib/render/fit";
+import { readPreflightCache } from "./use-preflight";
 ```
 
-The *how much* to cut, and the shortening loop, are guide `[fullstack]-letter-fit`. This is just the
-signal.
-
-### 5. `frontend/src/components/applications/export-card.tsx`
-
-In `buildPdf()`, replace the `capContent` + `fitCv` pair (lines 111–133) with the shared call, and
-check the cache first:
+(`capContent` is still used by `onDownloadMd`.) Then replace lines 102–124 of `buildPdf`:
 
 ```tsx
-    const off = app.sections_off ?? [];
-    const full = activeContent(app.cv_content ?? {}, off);
-    const caps = effectiveCaps(s.cv.max_entries, off);
-    const key = preflightKey({
-      specVersion: `${s.version}:${s.cv.pages}:${s.font.base_pt}:${s.colors.accent}`,
-      content: full,
-      sectionsOff: off,
-      letterBody: app.cover_letter,
-      letterMeta: meta,
-    });
-    const cached = readPreflightCache(key);
-
+    const full = activeContent(app.cv_content ?? {});
+    // The editor measured this exact state moments ago (same key builder, same inputs):
+    // reuse it instead of re-rendering the CV four times. A stale draft, a different
+    // contact line or the QR's URL all change the key, so a miss is a real difference.
+    const cached = readPreflightCache(
+      preflightKey({
+        spec: s,
+        content: full,
+        cvHeader: { name, contact, summary },
+        letterBody: app.cover_letter,
+        letterMeta: meta,
+      }),
+    );
     const fit =
       scope === "letter"
         ? null
         : (cached?.result ??
           (await fitContent(
             full,
-            caps,
+            s.cv.max_entries,
             s.cv.detailed,
             s.cv.pages,
-            (c) =>
+            (c, demoted) =>
               pdfPages(
                 <CvDocument
                   spec={s}
                   name={name}
                   content={c}
                   db={db}
+                  demoted={demoted}
                   contact={contact}
                   summary={summary}
                   portfolio={portfolio}
@@ -604,71 +820,123 @@ check the cache first:
               ),
             isFavouriteLookup(db),
           )));
+    // Demotions travel beside the content, never inside it (see fit.ts): the render
+    // resolves them through `entryDetail`, exactly as the measuring render did.
+    const demoted = new Set(fit?.demotedIds ?? []);
 ```
 
-⚠️ The cached measurement is rendered **without** contact/summary/QR (the hook keeps its render
-minimal). Those are absolutely positioned or single lines; if the Results show a page-count
-disagreement between preview and editor, drop the cache reuse for the QR case rather than
-"fixing" it by adding the QR to the hook — the fit must stay layout-invariant.
+and pass that set at **both** CV render sites: `demoted={demoted}` on the `scope === "cv"`
+`<CvDocument>` (line ~157) and `demoted,` inside `ApplicationDocument`'s `cv={{ … }}` (line ~180).
+Miss one and the export quietly grows the page the fit just measured away.
+
+`onDownloadMd` stays as it is: markdown is the editorial artefact and honours `entry.detail` only —
+it must not inherit a machine demotion.
+
+### 7. `frontend/src/lib/render/preview.ts`
+
+`BuiltPdf.fit` becomes `PreflightResult | null` (and the type import changes with it). Then
+`fitNotices` reports the two new outcomes — a description silently missing from the PDF is exactly
+the surprise this module exists to prevent:
+
+```ts
+  } else if (built.fit) {
+    const dropped = built.fit.droppedIds.length;
+    if (dropped > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${dropped} lowest-ranked entr${dropped === 1 ? "y was" : "ies were"} dropped to fit ` +
+          `${pageBudget} page(s). Deselect or reorder to override.`,
+      });
+    }
+    const shortened = built.fit.demotedIds.length;
+    if (shortened > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${shortened} ${shortened === 1 ? "entry was" : "entries were"} shortened to ` +
+          `${shortened === 1 ? "its" : "their"} heading to fit ${pageBudget} page(s).`,
+      });
+    }
+    const added = built.fit.addedIds.length;
+    if (added > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${added} extra entr${added === 1 ? "y was" : "ies were"} added to fill ` +
+          `${pageBudget} page(s).`,
+      });
+    }
+  }
+```
+
+(The `!built.fit.fits` warning branch above it is unchanged, and still swallows the rest — an
+unfittable CV dropped everything, so counts on top of it are noise.)
 
 ## Tests
 
-**Step 0 — unskip.** Delete every `.skip` in `frontend/tests/lib/render-grow.test.ts`.
+**No step 0 — the tests are already unskipped and red.** They were rewritten at activation against
+the verified contracts above.
 
-`frontend/tests/lib/render-grow.test.ts` — **new**. `pagesFor` is a fake that costs each entry a
-fixed number of "lines" and divides by a page height, so the tests are deterministic and fast (no
-react-pdf). Covers:
+| file | state | covers |
+| --- | --- | --- |
+| `frontend/tests/lib/render-preflight.test.ts` | **new** (replaces the old skip-marked `render-grow.test.ts`) | the whole preflight: `reductionOrder`, `applySteps`, `reduceCv`, `beyondCap`, `addOrder`, `applyAdd`, `growCv`, `fitContent`, `preflightKey`. |
+| `frontend/tests/lib/render-fit.test.ts` | trimmed | the `fitCv` and `overCapIds` blocks are gone with the functions; `dropOrder` / `applyDrop` / `capContent` / `countPdfPages` stay. |
+| `frontend/tests/lib/render-preview.test.ts` | extended | `fitNotices` for shortened and added entries; the fixture is a `PreflightResult`. |
+| `frontend/tests/lib/cv-doc.test.ts` | extended | `setDetail`: writes one entry, flips, immutable, out-of-range is a no-op. |
 
-- `reductionOrder`: demotions come before every drop; demotions go deepest-first; the top
-  `MIN_DETAILED` of each section are never demoted; entries beyond the `detailed` budget (already
-  compact) produce no demote step; an entry the user already set to `compact` produces none either;
-  a section with no `detailed` budget contributes only drops.
-- `applySteps`: demoted entries gain `detail: "compact"` and keep their position; dropped ones are
-  gone; the input is not mutated; a step naming an unknown id is a no-op.
-- `reduceCv`: prefers demotion over dropping (a CV one line over budget loses a description, not an
-  entry); falls through to dropping once every demotion is spent; `demotedIds`/`droppedIds` split
-  the chosen prefix correctly; `fits: false` still propagates.
-- `beyondCap`: takes only what's past the cap, respects `GROW_HEADROOM`, skips uncapped sections.
-- `addOrder`: exact mirror of `dropOrder` (pins first, then favourites, then shallowest fraction);
-  an entry `dropOrder` sheds last is the one `addOrder` takes first.
-- `applyAdd`: re-inserts in the full content's rank order, not at the end; leaves other sections
-  alone; is immutable.
-- `growCv`: adds nothing when the pool is empty; adds everything when everything fits; binary-search
-  boundary — adds exactly the entries that fit and not one more; the returned `pages` is the page
-  count of the returned content.
-- `fitContent`: overflowing input reduces and never grows; roomy input grows and never reduces; a
-  perfect fit does neither; `fits: false` propagates; the grow pass **never promotes** a compact
-  entry back to full (the `detailed` budget is intent, not a floor to spend up).
-- `preflightKey`: stable across identical inputs, different when any input changes (content,
-  sections, letter body, spec version).
+`pagesFor` is faked as a line count, so the suite is deterministic and fast (the real react-pdf
+measurement is already covered by the render suites). Two fakes: a detail-blind one, and
+`pagesByDetail`, which mirrors `entryDetail`'s precedence exactly — explicit `entry.detail`, then
+the `demoted` set, then rank — and charges 3 lines for a full entry and 1 for a compact one.
+
+Points worth knowing before you read the assertions:
+
+- **the ladder**: 4 jobs, `detailed: { jobs: 3 }`, 10 lines. At 8 lines/page one demotion fixes it
+  and *nothing is dropped*; at 5 lines/page both demotions are spent and then `job:4` drops.
+- **the mirror**: `addOrder` is asserted against `dropOrder` reversed over the ids they share —
+  `dropOrder` protects each section's min-keep floor and `addOrder` has no floor to protect, so
+  "identical reversed" is only true over the intersection.
+- **the headroom**: cap 2 with `GROW_HEADROOM` 1.5 → `ceil(3)` slots → exactly one entry may come
+  back, even on a page with room for eight. Uncapped sections are never grow candidates.
+- **the honesty guards**: an entry that is demoted *and* dropped is reported once, as a drop; an
+  entry the user pinned to `full` is never demoted, and the ladder pays with a drop instead.
 
 ```bash
-cd frontend && npx vitest run tests/lib/render-grow.test.ts tests/lib/render-fit.test.ts
+cd frontend && npx vitest run tests/lib/render-preflight.test.ts tests/lib/render-fit.test.ts \
+  tests/lib/render-preview.test.ts tests/lib/cv-doc.test.ts
 ```
+
+**Red set at activation** (`npx vitest run`, whole suite): `43 failed | 353 passed | 52 skipped`.
+The 43 are exactly this guide — 36 in `render-preflight`, 3 in `render-preview`, 4 in `cv-doc`. The
+52 skips belong to other guides (`effectiveCaps` / `toggleSection` → section toggles, `labelFor` →
+education degree, plus the dormant executor-rework SPA blocks). Anything else red is yours.
 
 The hook is not unit-tested (hooks are still deferred, memory `frontend-test-layout`) — everything
 it decides lives in `fit.ts`.
 
 ## Verification
 
-1. Suite red → green, `npx tsc -b`.
-2. Open an application whose CV is comfortably under one page. Within a second of the editor
+1. Suite red → green; `npx tsc -b`; `npx eslint src` (the hook's `set-state-in-effect` rule is
+   strict here — the derived-state shape above is what passes it).
+2. Open an application whose CV is comfortably under one page. Within about a second of the editor
    settling, the status line reads `1 of 1 page(s) used — N extra entries added to fill it`, and
    those entries carry a green **fills the page** badge.
-3. Export it: the PDF contains exactly the badged entries. Editor and export must agree — if they
-   don't, the cache key is missing an input.
-4. Now add entries by hand until it overflows *slightly*: the first thing that should happen is a
-   deep job picking up a grey **title only** badge — not an amber **won't fit**. Export and check:
-   that job's heading and dates are still on the page, its description is gone. Push it further
-   over and the amber drops start once the demotions are spent.
-4b. Click the detail toggle on the top job to force it compact, and on a deep one to force it full:
-   both must survive a save + reload and beat whatever the fit wanted.
-5. Type continuously in the letter body for ~10 s: the network/CPU should show *one* measurement
-   after you stop, not one per keystroke.
-6. Switch a section off (guide 5): the grow pass should immediately pull more entries in — that's
-   the whole point of the freed budget.
+3. Export it: the PDF contains exactly the badged entries, and the toast/preview footer says the
+   same N. Editor and export must agree — if they don't, the cache key is missing an input.
+4. Add entries by hand until it overflows *slightly*: the first thing that happens is a deep job
+   picking up a grey **title only** badge — not an amber **won't fit**. Export and check: that job's
+   heading and dates are still on the page, its description is gone. Push it further and the amber
+   drops start once the demotions are spent.
+5. Click the detail toggle on the top job to force it compact, and on a deep one to force it full:
+   both must survive save + reload, and both must beat whatever the fit wanted (the forced-full job
+   keeps its description even while the fit is looking for lines to cut).
+6. Type continuously in the letter body for ~10 s: the CPU should show *one* measurement after you
+   stop, not one per keystroke.
 7. Paste a very long letter: the "runs to N pages" warning appears under the textarea.
 8. Switch layouts (1-page ↔ 2-page): the preflight re-measures and the badges move.
+9. Tick **include QR** in the export card and download: the page count must match what the editor
+   showed (the QR is layout-invariant; the cache simply misses because the contact line changed).
 
 ## Results
 

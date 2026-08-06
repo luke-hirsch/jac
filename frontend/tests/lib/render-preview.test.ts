@@ -7,21 +7,33 @@ import {
   totalPages,
   type BuiltPdf,
 } from "@/lib/render/preview";
-import type { FitResult } from "@/lib/render/fit";
+import type { PreflightResult } from "@/lib/render/fit";
 
 /**
- * `[frontend]-pdf-preview-shell`: the pure half of the preview overlay. Starts RED —
- * `@/lib/render/preview` does not exist yet.
+ * `[frontend]-pdf-preview-shell`: the pure half of the preview overlay.
  *
  * The point of this module is that the export card's toasts and the overlay's footer read
  * the same notice list; the wording assertions below are the existing toast strings, so a
  * silent reword in one place fails here instead of drifting apart unnoticed.
+ *
+ * `[frontend]-fit-preflight` widens what a fit can report: it now also *shortens* entries
+ * (the demote rung) and *adds* entries back to spend leftover page space. Both are things
+ * the reader must be told about — a description silently missing from the PDF is exactly
+ * the kind of surprise this module exists to prevent.
  */
 
 const blob = new Blob(["%PDF-1.3"], { type: "application/pdf" });
 
-function fit(over: Partial<FitResult> = {}): FitResult {
-  return { content: {}, droppedIds: [], pages: 1, fits: true, ...over };
+function fit(over: Partial<PreflightResult> = {}): PreflightResult {
+  return {
+    content: {},
+    demotedIds: [],
+    droppedIds: [],
+    addedIds: [],
+    pages: 1,
+    fits: true,
+    ...over,
+  };
 }
 
 function built(over: Partial<BuiltPdf> = {}): BuiltPdf {
@@ -69,6 +81,45 @@ describe("fitNotices", () => {
     // quoting a drop count on top of it is noise.
     const n = fitNotices(
       built({ fit: fit({ fits: false, droppedIds: ["job:1", "job:2"] }) }),
+      1,
+    );
+    expect(n).toHaveLength(1);
+    expect(n[0].level).toBe("warning");
+  });
+
+  it("reports shortened entries — a description silently gone is a surprise", () => {
+    const n = fitNotices(built({ fit: fit({ demotedIds: ["job:3"] }) }), 1);
+    expect(n).toHaveLength(1);
+    expect(n[0].level).toBe("info");
+    expect(n[0].text).toBe(
+      "1 entry was shortened to its heading to fit 1 page(s).",
+    );
+  });
+
+  it("reports shortened and dropped entries side by side, shortest cut first", () => {
+    const n = fitNotices(
+      built({
+        fit: fit({ demotedIds: ["job:3", "job:2"], droppedIds: ["job:4"] }),
+      }),
+      1,
+    );
+    expect(n.map((x) => x.text)).toEqual([
+      "1 lowest-ranked entry was dropped to fit 1 page(s). " +
+        "Deselect or reorder to override.",
+      "2 entries were shortened to their heading to fit 1 page(s).",
+    ]);
+  });
+
+  it("reports the entries the fit added to spend the leftover space", () => {
+    const n = fitNotices(built({ fit: fit({ addedIds: ["job:4", "job:5"] }) }), 1);
+    expect(n).toHaveLength(1);
+    expect(n[0].level).toBe("info");
+    expect(n[0].text).toBe("2 extra entries were added to fill 1 page(s).");
+  });
+
+  it("says nothing about additions on an overflowing CV — they never happen there", () => {
+    const n = fitNotices(
+      built({ fit: fit({ fits: false, demotedIds: ["job:2"] }) }),
       1,
     );
     expect(n).toHaveLength(1);
