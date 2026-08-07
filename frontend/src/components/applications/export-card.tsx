@@ -27,7 +27,13 @@ import {
 } from "@/lib/letter-doc";
 import { useCvEntries, useFullList, type LayoutRow } from "@/lib/queries/jac";
 import { useProfile } from "@/lib/queries/profile";
-import { capContent, fitCv } from "@/lib/render/fit";
+import {
+  capContent,
+  effectiveCaps,
+  fitContent,
+  preflightKey,
+} from "@/lib/render/fit";
+import { readPreflightCache } from "./use-preflight";
 import { isFavouriteLookup } from "@/lib/render/parts";
 import { useLayoutSpec } from "@/lib/render/spec";
 import {
@@ -99,29 +105,44 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     // Template entry budget first (hard editorial cap), page fit second. `full` (pre-cap)
     // sticks around: everything it has that the fitted content lacks — cap cuts and page
     // drops alike — goes into the hidden layer as cut_for_space.
-    const full = activeContent(app.cv_content ?? {});
-    const active = capContent(full, s.cv.max_entries);
-
+    const off = app.sections_off ?? [];
+    const full = activeContent(app.cv_content ?? {}, off);
+    const cached = readPreflightCache(
+      preflightKey({
+        spec: s,
+        content: full,
+        sectionsOff: off,
+        cvHeader: { name, contact, summary },
+        letterBody: app.cover_letter,
+        letterMeta: meta,
+      }),
+    );
     const fit =
       scope === "letter"
         ? null
-        : await fitCv(
-            active,
+        : (cached?.result ??
+          (await fitContent(
+            full,
+            effectiveCaps(s.cv.max_entries, off),
+            s.cv.detailed,
             s.cv.pages,
-            (c) =>
+            (c, demoted) =>
               pdfPages(
                 <CvDocument
                   spec={s}
                   name={name}
                   content={c}
                   db={db}
+                  demoted={demoted}
                   contact={contact}
                   summary={summary}
                   portfolio={portfolio}
                 />,
               ),
             isFavouriteLookup(db),
-          );
+          )));
+    const demoted = new Set(fit?.demotedIds ?? []);
+
     const letterPages =
       scope === "cv"
         ? null
@@ -161,6 +182,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
           summary={summary}
           hidden={hidden}
           portfolio={portfolio}
+          demoted={demoted}
         />
       ) : scope === "letter" ? (
         <LetterDocument
@@ -183,6 +205,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
             summary,
             hidden,
             portfolio,
+            demoted,
           }}
           letter={{
             spec: s,
@@ -232,6 +255,7 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
       notify(built);
     });
   }
+
   // Download from inside the overlay: the blob is already built and merged, so this is a
   // straight save — no second render pass.
   function onDownloadPreview() {
@@ -254,12 +278,13 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
     if (blockedBy("md")) return;
     const db = careerDb.data;
     // Same template budget as the PDF (md is a sendable artefact); json stays a full dump.
+    const off = app.sections_off ?? [];
     const active = spec.data
       ? capContent(
-          activeContent(app.cv_content ?? {}),
-          spec.data.cv.max_entries,
+          activeContent(app.cv_content ?? {}, off),
+          effectiveCaps(spec.data.cv.max_entries, off),
         )
-      : activeContent(app.cv_content ?? {});
+      : activeContent(app.cv_content ?? {}, off);
     const cvMd = cvToMarkdown(name, active, db);
     const letterMd = letterToMarkdown(meta, app.cover_letter);
     const md =
@@ -274,7 +299,9 @@ export function ExportCard({ app }: { app: ApplicationRow }) {
   function onDownloadJson() {
     downloadText(
       exportJson(scope, {
-        content: activeContent(app.cv_content ?? {}),
+        // A switched-off section is content the user removed from this application,
+        // not a layout cut — it has no business in any export, dump or not.
+        content: activeContent(app.cv_content ?? {}, app.sections_off ?? []),
         meta,
         body: app.cover_letter,
         db: careerDb.data,

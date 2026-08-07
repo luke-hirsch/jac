@@ -522,10 +522,8 @@ class EducationDegreeApiTests(APITestCase):
 
 
 # --- [fullstack]-cv-section-toggles -------------------------------------------------
-# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
 
 
-@skip("[fullstack]-cv-section-toggles — step 0: unskip")
 class SectionsOffApiTests(APITestCase):
     """Whole sections switched off for one application. Unknown keys are a 400, not a
     silent no-op: a typo that quietly does nothing is the worst failure mode here."""

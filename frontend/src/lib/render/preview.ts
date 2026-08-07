@@ -4,7 +4,7 @@
  * places (the toasts in export-card, nothing at all in the preview), which is how the
  * preview ended up silent about dropped entries.
  */
-import type { FitResult } from "./fit";
+import type { PreflightResult } from "./fit";
 
 /** A4 short/long side. The overlay is sized to this so the page fills the frame with
  *  `#view=FitH` instead of floating in a landscape box. */
@@ -14,7 +14,7 @@ export type Notice = { level: "warning" | "info"; text: string };
 
 export type BuiltPdf = {
   blob: Blob;
-  fit: FitResult | null; // null for letter-only
+  fit: PreflightResult | null; // null for letter-only
   letterPages: number | null; // null for cv-only
 };
 
@@ -30,14 +30,34 @@ export function fitNotices(built: BuiltPdf, pageBudget: number): Notice[] {
       level: "warning",
       text: "The CV overflows the layout even at minimum content.",
     });
-  } else if (built.fit && built.fit.droppedIds.length > 0) {
-    const n = built.fit.droppedIds.length;
-    out.push({
-      level: "info",
-      text:
-        `${n} lowest-ranked entr${n === 1 ? "y was" : "ies were"} dropped to fit ` +
-        `${pageBudget} page(s). Deselect or reorder to override.`,
-    });
+  } else if (built.fit) {
+    const dropped = built.fit.droppedIds.length;
+    if (dropped > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${dropped} lowest-ranked entr${dropped === 1 ? "y was" : "ies were"} dropped to fit ` +
+          `${pageBudget} page(s). Deselect or reorder to override.`,
+      });
+    }
+    const shortened = built.fit.demotedIds.length;
+    if (shortened > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${shortened} ${shortened === 1 ? "entry was" : "entries were"} shortened to ` +
+          `${shortened === 1 ? "its" : "their"} heading to fit ${pageBudget} page(s).`,
+      });
+    }
+    const added = built.fit.addedIds.length;
+    if (added > 0) {
+      out.push({
+        level: "info",
+        text:
+          `${added} extra entr${added === 1 ? "y was" : "ies were"} added to fill ` +
+          `${pageBudget} page(s).`,
+      });
+    }
   }
   if (built.letterPages != null && built.letterPages > 1) {
     out.push({

@@ -95,6 +95,22 @@ describe("capContent (template entry budget)", () => {
     const out = capContent(content(), { skills: 99 });
     expect(out.skills).toHaveLength(6);
   });
+
+  /**
+   * `[frontend]-fit-preflight` Results round 1. A pin is the user saying "this one is on
+   * the CV"; the editorial cap does not get to overrule it silently. The page fit still
+   * can — and drops pins last (`dropOrder`) — but that at least gets reported.
+   */
+  it("keeps a pinned entry wherever it sits, cap or no cap", () => {
+    const c = content();
+    c.skills[5] = { ...c.skills[5], pinned: true };
+    const out = capContent(c, { skills: 2 });
+    expect(out.skills.map((e) => e.id)).toEqual([
+      "skill:1",
+      "skill:2",
+      "skill:6",
+    ]);
+  });
 });
 
 describe("countPdfPages", () => {
@@ -112,14 +128,13 @@ describe("countPdfPages", () => {
 });
 
 /**
- * `[fullstack]-cv-section-toggles`. SKIP-MARKED — not the active guide.
- * **Step 0: delete the `.skip` below.**
+ * `[fullstack]-cv-section-toggles` — the ACTIVE guide.
  *
  * Switching a section off frees *page space*, not a slot count — 4 certification slots
  * are worth about one and a half jobs, not four. So the caps are scaled by the freed
  * weight rather than traded one for one.
  */
-describe.skip("effectiveCaps", () => {
+describe("effectiveCaps", () => {
   const CAPS = {
     jobs: 5,
     educations: 3,
@@ -150,9 +165,15 @@ describe.skip("effectiveCaps", () => {
     // skills: 18 slots × weight 1 = 18 lines freed.
     // certifications: 4 slots × weight 2 = 8 lines freed — fewer, despite 4 vs 18 being
     // the smaller number only in slots.
+    //
+    // Read on `projects`, not `jobs`: at these budgets both toggles round the 5 job
+    // slots to 6, so `jobs` cannot tell the two apart — 4 project slots can (4 → 5 for
+    // the bigger release, 4 → 4 for the smaller). Rounding hides small differences;
+    // that is a property of integer caps, not a reason to weaken the claim.
     const offSkills = effectiveCaps(CAPS, ["skills"]);
     const offCerts = effectiveCaps(CAPS, ["certifications"]);
-    expect(offSkills.jobs).toBeGreaterThan(offCerts.jobs);
+    expect(offSkills.projects).toBeGreaterThan(offCerts.projects);
+    expect(offSkills.jobs).toBeGreaterThanOrEqual(offCerts.jobs);
   });
 
   it("clamps growth so one toggle loosens the layout instead of abolishing it", () => {

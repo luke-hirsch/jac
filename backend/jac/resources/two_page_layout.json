@@ -6,7 +6,7 @@
   "cv": {
     "pages": 2,
     "sections": ["jobs", "educations", "projects"],
-    "sidebar": ["certifications", "skills", "languages"],
+    "sidebar": ["skills", ["certifications", "languages"]],
     "max_entries": {
       "jobs": 9,
       "educations": 4,

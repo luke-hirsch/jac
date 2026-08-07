@@ -438,14 +438,13 @@ describe.skip("labelFor — unfinished education", () => {
 });
 
 /**
- * `[fullstack]-cv-section-toggles`. SKIP-MARKED — not the active guide.
- * **Step 0: delete the `.skip` below.**
+ * `[fullstack]-cv-section-toggles` — the ACTIVE guide.
  *
  * A switched-off section is gone from the CV *on purpose* — different from a deselected
  * entry, and different again from an entry the page fit had to cut. It must not reach the
  * export at all, invisible-ink layer included.
  */
-describe.skip("activeContent / toggleSection — whole sections", () => {
+describe("activeContent / toggleSection — whole sections", () => {
   const content: CvContent = {
     jobs: [
       { id: "job:1", label: "kept", relevance_score: null },

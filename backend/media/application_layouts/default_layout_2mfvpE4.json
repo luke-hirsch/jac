@@ -1,21 +1,21 @@
 {
   "version": 1,
   "page": { "size": "A4", "margin": [56, 48] },
-  "font": { "family": "Helvetica", "base_pt": 10 },
+  "font": { "family": "Helvetica", "base_pt": 9 },
   "colors": { "accent": "#1a5fb4", "text": "#1c1c1c", "muted": "#6b6b6b" },
   "cv": {
-    "pages": 2,
+    "pages": 1,
     "sections": ["jobs", "educations", "projects"],
-    "sidebar": ["certifications", "skills", "languages"],
+    "sidebar": ["skills", ["certifications", "languages"]],
     "max_entries": {
-      "jobs": 9,
-      "educations": 4,
-      "projects": 8,
-      "certifications": 8,
-      "skills": 24,
+      "jobs": 5,
+      "educations": 3,
+      "projects": 4,
+      "certifications": 4,
+      "skills": 18,
       "languages": 6
     },
-    "detailed": { "jobs": 4, "projects": 2, "educations": 1 }
+    "detailed": { "jobs": 2, "projects": 1, "educations": 1 }
   },
   "cover_letter": { "din5008": true }
 }

@@ -30,6 +30,7 @@ function fit(over: Partial<PreflightResult> = {}): PreflightResult {
     demotedIds: [],
     droppedIds: [],
     addedIds: [],
+    cutIds: [],
     pages: 1,
     fits: true,
     ...over,
@@ -115,6 +116,15 @@ describe("fitNotices", () => {
     expect(n).toHaveLength(1);
     expect(n[0].level).toBe("info");
     expect(n[0].text).toBe("2 extra entries were added to fill 1 page(s).");
+  });
+
+  it("stays quiet about the template cap — that is a standing budget, not news", () => {
+    // `cutIds` is the editor's business (a per-entry badge on the exact rows it
+    // concerns). In a send-time toast it would fire on nearly every export, and the
+    // machine layer already lists those entries as cut_for_space.
+    expect(fitNotices(built({ fit: fit({ cutIds: ["job:8", "job:9"] }) }), 1)).toEqual(
+      [],
+    );
   });
 
   it("says nothing about additions on an overflowing CV — they never happen there", () => {

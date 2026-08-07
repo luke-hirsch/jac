@@ -35,6 +35,33 @@ describe("parseLayoutSpec", () => {
     expect(spec.cv.sidebar).toEqual(["skills"]);
   });
 
+  /**
+   * `[frontend]-fit-preflight` Results round 1: a nested array in `sidebar` is the
+   * layout saying "these render side by side". Kept in `sidebar` rather than a second
+   * field so one list still reads top-to-bottom as the page does.
+   */
+  it("reads a nested sidebar group as one row of columns", () => {
+    const spec = parseLayoutSpec({
+      cv: { sidebar: ["skills", ["certifications", "languages"]] },
+    });
+    expect(spec.cv.sidebar).toEqual([
+      "skills",
+      ["certifications", "languages"],
+    ]);
+  });
+
+  it("normalizes legacy names inside a group too", () => {
+    const spec = parseLayoutSpec({ cv: { sidebar: [["education", "languages"]] } });
+    expect(spec.cv.sidebar).toEqual([["educations", "languages"]]);
+  });
+
+  it("the fallback pairs certifications with languages", () => {
+    expect(FALLBACK_SPEC.cv.sidebar).toEqual([
+      "skills",
+      ["certifications", "languages"],
+    ]);
+  });
+
   it("the fallback itself speaks plural", () => {
     expect(FALLBACK_SPEC.cv.sections).toContain("educations");
     expect(FALLBACK_SPEC.cv.sections).not.toContain("education");

@@ -603,6 +603,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "cover_letter",
             "letter_meta",
             "pinned_entries",
+            "sections_off",
             "attachments",
             "layout",
             "status",
@@ -658,6 +659,21 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
                 {"posting": "The posting is bound on create and cannot be changed."}
             )
         return attrs
+
+    _SECTIONS = frozenset(
+        ("jobs", "educations", "projects", "skills", "certifications", "languages")
+    )
+
+    def validate_sections_off(self, value):
+        """A list of known section keys, deduped. Unknown keys are rejected rather than
+        ignored: a typo that silently does nothing is worse than a 400. The keys are the
+        plural cv_content section names — "certification" is the plausible typo."""
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise serializers.ValidationError("Expected a list of section names.")
+        unknown = sorted(set(value) - self._SECTIONS)
+        if unknown:
+            raise serializers.ValidationError(f"Unknown sections: {unknown}")
+        return list(dict.fromkeys(value))
 
     def validate_pinned_entries(self, value):
         """Shape + ownership. Stale pins (entry deleted later) are tolerated at

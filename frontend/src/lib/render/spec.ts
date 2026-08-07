@@ -14,7 +14,9 @@ export type LayoutSpec = {
   cv: {
     pages: number;
     sections: string[];
-    sidebar: string[];
+    /** Compact sections after the main flow. A nested array is one row of equal
+     *  columns — the layout's way of saying "these two side by side". */
+    sidebar: (string | string[])[];
     /** Per-section entry budget the template is designed for. Render/export cut
      *  to it; the editor warns beyond it. */
     max_entries: Record<string, number>;
@@ -32,7 +34,7 @@ export const FALLBACK_SPEC: LayoutSpec = {
   cv: {
     pages: 1,
     sections: ["jobs", "educations", "projects"],
-    sidebar: ["certifications", "skills", "languages"],
+    sidebar: ["skills", ["certifications", "languages"]],
     max_entries: {
       jobs: 5,
       educations: 3,
@@ -61,6 +63,16 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
   const f = FALLBACK_SPEC;
   const sections = (names: string[] | undefined, fallback: string[]) =>
     (names ?? fallback).map((n) => LEGACY_SECTIONS[n] ?? n);
+  /** Same normalization, one level deeper: a nested array is a side-by-side row. */
+  const sidebarGroups = (
+    names: (string | string[])[] | undefined,
+    fallback: (string | string[])[],
+  ): (string | string[])[] =>
+    (names ?? fallback).map((n) =>
+      Array.isArray(n)
+        ? n.map((s) => LEGACY_SECTIONS[s] ?? s)
+        : (LEGACY_SECTIONS[n] ?? n),
+    );
   const sectionCounts = (
     raw: Record<string, number> | undefined,
     fallback: Record<string, number>,
@@ -87,7 +99,7 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
     cv: {
       pages: r.cv?.pages ?? f.cv.pages,
       sections: sections(r.cv?.sections, f.cv.sections),
-      sidebar: sections(r.cv?.sidebar, f.cv.sidebar),
+      sidebar: sidebarGroups(r.cv?.sidebar, f.cv.sidebar),
       max_entries: sectionCounts(r.cv?.max_entries, f.cv.max_entries),
       detailed: sectionCounts(r.cv?.detailed, f.cv.detailed),
     },

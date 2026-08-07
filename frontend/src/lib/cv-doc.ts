@@ -71,8 +71,18 @@ export function joinEntry(
 }
 
 const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
 
 /** ISO `yyyy`, `yyyy-mm`, or `yyyy-mm-dd` → "Mon yyyy" (or bare "yyyy"). Unknown
@@ -198,6 +208,22 @@ export function togglePin(
   );
   return { ...content, [section]: next };
 }
+
+/** The user's per-entry detail override. `entryDetail` reads this before the fit's
+ *  demotion set, so a stored value beats whatever the page fit would have preferred —
+ *  which is exactly why the fit never writes this field itself. */
+export function setDetail(
+  content: CvContent,
+  section: string,
+  index: number,
+  detail: "full" | "compact",
+): CvContent {
+  const list = content[section] ?? [];
+  if (index < 0 || index >= list.length) return content;
+  const next = list.map((e, i) => (i === index ? { ...e, detail } : e));
+  return { ...content, [section]: next };
+}
+
 export function pinnedIds(content: CvContent): string[] {
   const out: string[] = [];
   for (const list of Object.values(content)) {
@@ -228,13 +254,31 @@ export function mergePinned(current: CvContent, next: CvContent): CvContent {
   return out;
 }
 
-/** Deselected entries stripped — the shape the render/export pipeline (guide 4) consumes. */
-export function activeContent(content: CvContent): CvContent {
+/** Deselected entries stripped, and switched-off sections dropped whole — the shape the
+ *  render/export pipeline consumes. Both are "not on the CV", but for different reasons:
+ *  see JobApplication.sections_off (a section that is off was cut on purpose, so it is
+ *  absent from the machine layer too, rather than filed under cut_for_space). */
+export function activeContent(
+  content: CvContent,
+  sectionsOff: string[] = [],
+): CvContent {
+  const off = new Set(sectionsOff);
   const out: CvContent = {};
   for (const [section, list] of Object.entries(content)) {
+    if (off.has(section)) continue;
     out[section] = list.filter((e) => !e.deselected);
   }
   return out;
+}
+
+/** Immutable toggle for the editor's section switch. */
+export function toggleSection(
+  sectionsOff: string[],
+  section: string,
+): string[] {
+  return sectionsOff.includes(section)
+    ? sectionsOff.filter((s) => s !== section)
+    : [...sectionsOff, section];
 }
 
 /** Career-DB rows of a section not (or no longer) in the content — the add-picker options. */

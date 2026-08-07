@@ -488,6 +488,11 @@ class JobApplication(models.Model):
     cover_letter = models.TextField(blank=True)
     letter_meta = models.JSONField(default=dict, blank=True)
     pinned_entries = models.JSONField(default=list, blank=True)
+    # Sections the user switched off for THIS application (["certifications", …]).
+    # Not "everything deselected": a section that is off releases its slice of the
+    # layout's entry budget to the sections that stay, and never reaches the export —
+    # including the machine-readable layer, because it was cut on purpose, not for space.
+    sections_off = models.JSONField(default=list, blank=True)
     # Ordered list of CvAttachment ids to append to this application's export (the user's
     # per-application pick from their reusable attachment library). Ownership validated on write.
     attachments = models.JSONField(default=list, blank=True)

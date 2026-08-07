@@ -62,6 +62,7 @@ export type ApplicationRow = {
   created_at: string;
   updated_at: string;
   pinned_entries: string[];
+  sections_off: string[]; // sections switched off for this application
   attachments: number[]; // ordered CvAttachment ids appended to the export
 };
 
@@ -73,6 +74,7 @@ export type ApplicationPatch = Partial<{
   deadline: string | null;
   notes: string;
   pinned_entries?: string[];
+  sections_off?: string[];
   attachments: number[];
 }>;
 

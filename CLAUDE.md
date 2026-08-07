@@ -52,14 +52,18 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 - **jac career DB** — models (`Domain`, `Location`, `Skill`, `Job`, `Project`, `Education`,
   `Certification`, `Language`, `ResumeSnippet`) + full CRUD API/serializers + frontend UI.
 - **`llm_connector`** — multi-provider connector (Anthropic, OpenAI, Google, Ollama, custom),
-  per-user Fernet-encrypted configs. Optional capabilities gated by class flags: `embed()` (Ollama)
-  and `web_search()`/`supports_web_search` (Anthropic; OpenAI via Responses API; Google via Gemini
-  grounding). All LLM I/O is line-format, not JSON. See [[no-json-llm-io]].
+  per-user Fernet-encrypted configs. One run touches exactly one **`Executor`** (HirschAI = the
+  system ollama row, or a commercial provider on the user's key); the curated
+  `llm_connector/catalog.py` is the gate for per-run model choice. Optional capabilities gated by
+  class flags: `embed()` (Ollama) and `web_search()`/`supports_web_search` (Anthropic; OpenAI via
+  Responses API; Google via Gemini grounding). All LLM I/O is line-format, not JSON.
+  See [[no-json-llm-io]], [[llm-executor-rework]].
 - **jac CV pipeline** (`cv.py`, `filter.py`) — `CV` flattens entries (`refs` edges); `CVFilter`
-  selects across **three rungs**: `light` (`Embed` → propagation + per-section floor/min-keep),
-  `standard` (`Instruct` 0–3 labels → keep-by-verdict), `strong` (`Conversational` → holistic ordered
-  set, guardrails only); `output()` degrades strong→standard→light. Alias threads through;
-  `embed_floors` overridable; **favourite** flag = small capped ranking nudge. See [[project_jac]],
+  selects by **mode**: `manual` (no run), `standard` (`Embed` ranking, plus `Instruct` 0–3 labels →
+  keep-by-verdict), `high` (commercial only — `Conversational` holistic ordered set, guardrails
+  only); `output()` degrades within the run's single executor, HirschAI getting one attempt.
+  `embed_floors` overridable; **favourite** flag = small capped ranking nudge; entry **pins** are
+  force-kept by every rung. See [[project_jac]], [[llm-executor-rework]],
   [[selection-size-is-intentional]].
 - **jac eval tooling** — `cv_test` / `cv_eval` commands (model×grade matrix, `--all-models`,
   interactive pick, colour-graded `findings.md` artifacts; `--analyze` → `TheJudge` + `TheAnalyst`).
@@ -73,8 +77,8 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   (≤280 chars) distilled into one cached `dossier` (`ensure_dossier`, rebuilt only on change).
 - **jac cover-letter personal paragraph** (`cover_letter.py` `_personal_paragraph`, `research.py`,
   `PersonalParagraphWriter`) — one researched, company-specific paragraph (web research × personality
-  dossier) after the body. Opt-in (`--personal`), **capability-driven not grade-gated**: real only
-  when grade≠light + alias can web-search + research ok + personality present, else a loud
+  dossier) after the body. Opt-in (`--personal`), **capability-driven not mode-gated**: real only
+  when the run's executor can web-search + research ok + personality present, else a loud
   `PERSONAL_STUB`. Own `ParagraphGroundingCheck`; words fold into `ai_share`. _(Tests green; live LLM
   verification pending.)_ See [[project-purpose-cv-showcase]].
 - **jac frontend LLM-config tab** (`frontend/src/lib/queries/llm.ts`,
@@ -103,11 +107,16 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   `/rewrite/` endpoint on applications) — the application is the editable artefact: CV editor
   (reorder / deselect / delete / add-from-career-DB per section), letter editor (meta fields,
   snippet append, AI rewrite of a text selection, stub replace), snippets CRUD UI. Export via
-  **react-pdf**: `ApplicationLayout`'s JSON spec drives `CvDocument`/`LetterDocument`; `fitCv`
-  drops lowest-ranked entries to the layout's page budget (favourites last), the letter is never
-  cut, only flagged; md/json builders; `exportBlocker` = send-time stub gate (pdf/md refuse on
+  **react-pdf**: `ApplicationLayout`'s JSON spec drives `CvDocument`/`LetterDocument`; the page fit
+  (`lib/render/fit.ts`) **demotes, drops and grows** to the page budget, the letter is never cut,
+  only flagged; md/json builders; `exportBlocker` = send-time stub gate (pdf/md refuse on
   letter-bearing scopes while the `PERSONAL_STUB` is in the body). Cached server-side `pdf` field
   still future work. See [[cv-render-export-decision]].
+- **CV typography** (`lib/render/{parts,templates}.tsx`, layout JSONs) — per-entry skill clouds moved
+  to the machine layer, unbreakable two-line date column (dash-aligned with the heading), markdown-ish
+  bullets, and **two detail levels per entry** (`full` / `compact`): `cv.detailed` says how many
+  entries a section describes, rank picks which, `entry.detail` overrides. Preview overlay
+  (`lib/render/preview.ts` + `pdf-preview-dialog`) shares its notice list with the export toasts.
 - **application detail page decomposed** (`components/applications/`) — the former 1.3k-line route
   is split per card: `posting-card` / `generate-panel` / `result-view` / `content-card` /
   `letter-editor` / `export-card` + a `use-run-lifecycle` hook (reducer + WS + snapshot seed +
@@ -141,20 +150,38 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-1. **portfolio creator UX + block links — verification** — both guides sit in `to-do/` with the code
-   implemented: guide 1 (`[frontend]-portfolio-creator-ux`) has an empty Results chapter, guide 2
-   (`[fullstack]-block-links`) has one bug fixed (a stray line in a test) plus the unrun §7 hyperlink
-   follow-up (branch `fullstack/block-links-hyperlinks`, verification steps 7–11).
-2. **cover-letter refusal guard** (small) — `CoverLetterWriter` accepts any non-empty LLM
-   response, so a spurious small-model refusal ("I can't assist…") can become the letter body.
-3. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
+> **Current phase — "polish the PDF before production": UI, CV filter, cover letter.** Seven guides
+> off one prompt; `[frontend]-pdf-preview-shell` and `[frontend]-cv-typography` are in `done/`.
+
+1. **fit preflight + CV section toggles — verification** (branch `page-fit`, code complete,
+   **nothing verified in the browser yet**). Both guides sit in `to-do/` with green suites
+   (frontend 421, backend 135) and empty/partial Results chapters. Before anything else:
+   `python manage.py migrate && python manage.py seed_system_defaults` — the layout spec the SPA
+   renders from is the **media copy in the DB**, so an unseeded change looks like an unimplemented
+   feature. Then the click-throughs (preflight §Verification round 1, toggles steps 2–10).
+2. **education degree level** (`[fullstack]-education-degree`) — `Education.degree` is free text, so
+   "Drop Out Education Physics" is a degree as far as the code knows; the highest real degree must
+   always survive the filter (German public service pays by it).
+3. **cover letter — fit + German register** (`[fullstack]-letter-fit`, `[fullstack]-letter-register-de`).
+   `letter-fit` depends on the preflight's letter page count: the writer targets 200–320 words, which
+   overflows one page, and "shorten" over-cuts. `letter-register-de` carries roadmap item **refusal
+   guard** — `CoverLetterWriter` accepts any non-empty LLM response, so a small-model refusal
+   ("I can't assist…") can become the letter body.
+4. **appearance settings** (`[fullstack]-appearance-settings`) — theme / contrast / CV accent colour
+   are stored on the profile and do nothing.
+5. **self-hosted web-search agent** (parked) — let a self-hosted _standard_ run produce a real
    personal paragraph: wire a tool-capable local model to a **self-hostable** search backend
    (SearXNG / Tavily / Firecrawl-style) via a tool-calling loop, folding in the parked `scraper`
    app. The personal-paragraph guide leaves `ollama`/`custom` at `supports_web_search=False` and
    stubs until this lands (Ollama's hosted `/api/web_search` is cloud + key — quick but doesn't
    prove the self-hosted thesis). See [[project-purpose-cv-showcase]].
-4. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
+6. **pricing calculator** (backlog, small) — pre-run cost estimate on the generate panel from
    per-model pricing metadata in the model catalog (see `[fullstack]-model-knobs`).
+
+> **Known open question, deliberately not acted on:** the fit is weight-blind. `addOrder` ranks grow
+> candidates by position fraction within their pool, so the biggest pool wins and leftover page space
+> buys ~9 more skills before one more job (measured: **6 skills ≈ 1 line ≈ 8.2pt**; a job entry ≈ 5
+> lines). Decide it against a real page after the reseed — `SECTION_WEIGHT` already exists.
 
 > **Portfolio generator — merged to `main`; six guides in `done/portfolio/`.** Flow rework
 > (owner-fix + dynamic flat-form questionnaire + AI intro + Django landing) and multiuser (host-based
@@ -165,39 +192,18 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > (tower up) + signup click-through. Signup needs no launch flip — it ships **open**
 > ([[public-site-posture]]). See [[portfolio-multiuser]].
 
-> **Single-executor redesign — backend landed (`456a72f`…`f738eaf`; rework guides 1–3 in
-> `done/`, Results chapters not yet logged).** A run touches exactly one executor: **HirschAI**
-> (system-owned ollama row; local MacBook ollama until the tower/VPS move — tower guide parked
-> in `plans/backlog/`) or anthropic/openai on the user's key. Modes `manual`/`standard`/`high`
-> (`high` commercial-only); per-run model validated against the curated catalog
-> (`llm_connector/catalog.py` — the catalog IS the gate); `GET /api/llm/executors/` is the
-> SPA's single source; auto-run on application create (backend-side, never retro); entry pins
-> force-kept by every rung. **SPA phase = the current `to-do/` stack, in order — ALL guides
-> activated (full contracts + tests on disk; 3–6 activated 2026-07-18):**
-> `[fullstack]-llm-config-rework` (the former generate-panel + config-tab guides, **merged
-> 2026-07-17** — one break, one branch, no frozen zones; step 1 carries every backend repair
-> the rework missed, now seven: dead-column config/request-log serializers (also break
-> `/api/schema/`), the module `complete()` helper silently **dropping the `executor=` kwarg**
-> all eleven pipeline/distill call sites pass (mis-routes every rung to the default executor +
-> crashes ollama's payload), chat passing `job_posting=` to a `posting_text=` class,
-> `_ai_share`'s eager `_REWRITE_TAX["instruct"]` fallback KeyError-ing every letter,
-> `LLMConfig.save()` never enforcing default exclusivity, and the spa dossier-rebuild view's
-> old `ensure_dossier(alias=…)` call) → `[frontend]-manual-no-run-mode` →
-> `[frontend]-entry-pins-ui` → `[fullstack]-model-knobs` → `[fullstack]-chat-assistant-rework`.
-> Guides 3–6 shrank honestly at activation (pins UI/merge + manual seed already typed in the
-> cv-editor era — the guides spec only the real deltas); their acceptance tests are on disk
-> **skip-marked** with the guide slug (each guide's step 0 = unskip) so the active guide's
-> red set stays unambiguous: backend 16 red = exactly the step-1 repairs, frontend 6 red =
-> guide-2 libs, 31 backend + 18 frontend skips = guides 3–6.
-> The SPA is knowingly broken until the first guide lands. The "current state" bullets above
-> still describe the alias/grade era for llm_connector + pipeline — next `/wrap-up` refreshes
-> them; the `done/` rework guides are the accurate spec meanwhile.
+> **Single-executor redesign — done, backend and SPA (all six guides in `done/`).** A run touches
+> exactly one executor: **HirschAI** (system-owned ollama row; local MacBook ollama until the
+> tower/VPS move — tower guide parked in `plans/backlog/`) or anthropic/openai on the user's key.
+> Modes `manual`/`standard`/`high` (`high` commercial-only); per-run model validated against the
+> curated catalog; `GET /api/llm/executors/` is the SPA's single source; auto-run on application
+> create (backend-side, never retro). The alias/grade vocabulary is gone. See
+> [[llm-executor-rework]].
 
 > **Application editor + render/export phase — done (2026-07-10 wrap-up).** All frontend guides
 > (`cv-snippets`, `cv-editor`, `letter-editor`, `tailored-render`, `render-export`) are in
-> `plans/done/`; `to-do/` is empty. Note: `render-export` moved to `done/` without a `## Results`
-> chapter — no logged verification run; the detail-page component split (2026-07-10) is also
-> pending Lukas's `tsc`/vitest/click-through.
+> `plans/done/`. Note: `render-export` moved to `done/` without a `## Results` chapter — no logged
+> verification run; the current phase has been rewriting that code anyway.
 
 # how we work
 

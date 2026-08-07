@@ -80,6 +80,13 @@ describe("beyondCap", () => {
   it("ignores sections the layout does not cap", () => {
     expect(beyondCap(full(), { jobs: 3 })).not.toHaveProperty("skills");
   });
+
+  it("skips pinned entries — `capContent` already kept those", () => {
+    const f = full();
+    f.jobs[4] = { ...f.jobs[4], pinned: true }; // job:5, past a cap of 3
+    const pool = beyondCap(f, { jobs: 3 }, 2);
+    expect(pool.jobs.map((e) => e.id)).toEqual(["job:4", "job:6"]);
+  });
 });
 
 describe("addOrder", () => {
@@ -185,6 +192,7 @@ describe("fitContent — cap, then down OR up, never both", () => {
     const out = await fitContent(full(), { jobs: 8, skills: 6 }, {}, 1, pagesBy(5));
     expect(out.droppedIds.length).toBeGreaterThan(0);
     expect(out.addedIds).toEqual([]);
+    expect(out.cutIds).toEqual([]); // the caps cut nothing here
     expect(out.pages).toBeLessThanOrEqual(1);
   });
 
@@ -219,6 +227,60 @@ describe("fitContent — cap, then down OR up, never both", () => {
     // The uncapped section is not a grow candidate at all — capContent already let it
     // through whole, so there is nothing "beyond the cap" to take back.
     expect(out.content.skills).toHaveLength(6);
+  });
+});
+
+/**
+ * `[frontend]-fit-preflight` Results round 1: **an entry that is not on the page must
+ * say so.** The cap runs before the search, so what it cut was invisible to every id
+ * list the result carried — the editor badged the page-fit drops, said nothing at all
+ * about the cap's, and the reporter could not tell the difference. `cutIds` is that
+ * missing half: everything handed in that the render does not show, minus what is
+ * already reported as a page-fit drop.
+ */
+describe("fitContent — cutIds, the cap's share of the truth", () => {
+  it("reports what the cap cut and the grow pass did not buy back", async () => {
+    // 9 jobs, cap 5 (headroom → pool of 2), a page that holds 7.
+    const nine: CvContent = {
+      jobs: Array.from({ length: 9 }, (_, i) => entry(`job:${i + 1}`)),
+    };
+    const out = await fitContent(nine, { jobs: 5 }, {}, 1, pagesBy(7));
+    expect(out.addedIds).toEqual(["job:6", "job:7"]);
+    expect(out.droppedIds).toEqual([]);
+    expect(out.cutIds).toEqual(["job:8", "job:9"]);
+  });
+
+  it("keeps the two lists disjoint when the cap and the page both bite", async () => {
+    const out = await fitContent(full(), { jobs: 4, skills: 4 }, {}, 1, pagesBy(5));
+    const overlap = out.cutIds.filter((id) => out.droppedIds.includes(id));
+    expect(overlap).toEqual([]);
+    // Between them they account for every entry that is not on the page.
+    const shown = new Set(Object.values(out.content).flatMap((l) => l.map((e) => e.id)));
+    const missing = Object.values(full())
+      .flatMap((l) => l.map((e) => e.id))
+      .filter((id) => !shown.has(id));
+    expect([...out.droppedIds, ...out.cutIds].sort()).toEqual(missing.sort());
+  });
+
+  it("says nothing when everything fits", async () => {
+    const out = await fitContent(full(), { jobs: 8, skills: 6 }, {}, 2, pagesBy(20));
+    expect(out.cutIds).toEqual([]);
+  });
+
+  it("carries a pinned entry past the cap instead of losing it silently", async () => {
+    const c: CvContent = {
+      jobs: [
+        ...Array.from({ length: 5 }, (_, i) => entry(`job:${i + 1}`)),
+        entry("job:9", { pinned: true }),
+      ],
+    };
+    // The page holds 5, so something still has to go — but not the pin, and whatever
+    // goes is named.
+    const out = await fitContent(c, { jobs: 5 }, {}, 1, pagesBy(5));
+    expect(out.content.jobs.map((e) => e.id)).toContain("job:9");
+    expect(out.addedIds).toEqual([]); // it was never cut, so it was never "added back"
+    expect(out.droppedIds).toEqual(["job:5"]);
+    expect(out.cutIds).toEqual([]);
   });
 });
 

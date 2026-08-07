@@ -57,6 +57,7 @@ export function LetterEditor({
   onMeta,
   body,
   onBody,
+  letterPages,
   runs,
 }: {
   applicationId: number;
@@ -64,6 +65,7 @@ export function LetterEditor({
   onMeta: (m: LetterMeta) => void;
   body: string;
   onBody: (b: string) => void;
+  letterPages: number | null;
   runs: RunSummary[];
 }) {
   const rewrite = useRewriteParagraph();
@@ -214,6 +216,11 @@ export function LetterEditor({
           }}
           placeholder="The applied run's letter body lands here — or write your own."
         />
+        {letterPages != null && letterPages > 1 && (
+          <p className="text-xs text-destructive">
+            This letter runs to {letterPages} pages — it should be one.
+          </p>
+        )}
         {sel && anchor && (
           <RewritePopover
             anchor={anchor}

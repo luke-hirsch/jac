@@ -220,6 +220,25 @@ export function cvStyles(spec: LayoutSpec) {
       textAlign: "center",
     },
     compact: { fontSize: small, marginBottom: base / 3 },
+    // Side-by-side compact sections: equal columns, the gutter on every column but the
+    // last. Keeps two short blocks (certifications, languages) from each eating a
+    // full-width line and reading as more important than they are.
+    sideRow: { flexDirection: "row" },
+    sideCol: { flex: 1 },
+    sideGutter: { paddingRight: base * 2 },
+    stackedRow: { flexDirection: "row", marginBottom: base / 6 },
+    // Narrower than the main flow's `hints` (27mm), because this sits inside a
+    // half-width column — but wide enough for the longest real qualifier,
+    // "conversational" (~52pt at 7.5pt), so it never wraps.
+    stackedHints: {
+      width: mm(20),
+      color: spec.colors.muted,
+      fontSize: small,
+      paddingRight: base * 0.4,
+    },
+    // Same lineHeight trap as `summary`: declare the fontSize the multiplier resolves
+    // against, or 1.3 silently means 1.3 × react-pdf's 18pt default.
+    stackedLine: { fontSize: small, lineHeight: 1.3 },
     // Portfolio QR: absolute (zero layout impact — the fit loop and page counts are
     // invariant, same argument as HiddenInk) inside the page margins, top-right.
     qr: {
@@ -242,6 +261,7 @@ function CvSectionView({
   db,
   styles,
   compact,
+  stacked,
   detailed,
   demoted,
 }: {
@@ -250,6 +270,9 @@ function CvSectionView({
   db: CvEntriesResponse | undefined;
   styles: ReturnType<typeof cvStyles>;
   compact?: boolean;
+  /** Inside a side-by-side row: one entry per line instead of one joined run, so a
+   *  half-width column reads as a list rather than as wrapped prose. */
+  stacked?: boolean;
   /** The layout's `cv.detailed` budget. Passed instead of the whole spec so this
    *  function keeps the narrow signature it has today. */
   detailed?: Record<string, number>;
@@ -257,6 +280,31 @@ function CvSectionView({
 }) {
   const entries = content[section] ?? [];
   if (entries.length === 0) return null;
+
+  if (compact && stacked) {
+    return (
+      <View>
+        <Text style={styles.sectionTitle}>{SECTION_TITLES[section]}</Text>
+        {entries.map((e) => {
+          const p = entryParts(db, section, e);
+          // The qualifier column, same idiom as the main flow's dates and the skills
+          // block's category labels: whatever the entry is *rated* by goes left, muted,
+          // and the name reads down a clean edge. A certification is qualified by when
+          // it was issued, a language by how well it is spoken — one of the two is
+          // always empty, so this is one rule, not a section switch.
+          const hint = p.dateFrom || p.meta;
+          return (
+            <View key={e.id} style={styles.stackedRow}>
+              <Text style={styles.stackedHints}>{hint}</Text>
+              <Text style={[styles.content, styles.stackedLine]}>
+                {p.heading}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    );
+  }
 
   if (compact) {
     const rows =
@@ -321,7 +369,9 @@ function CvSectionView({
                   lines. The description is still in the invisible-ink layer — the
                   hidden payload joins the career-DB row, so nothing is lost to a
                   parser, only to the page. */}
-              {full && p.meta ? <Text style={styles.meta}>{p.meta}</Text> : null}
+              {full && p.meta ? (
+                <Text style={styles.meta}>{p.meta}</Text>
+              ) : null}
               {full
                 ? bodyBlocks(p.body).map((b, j) =>
                     b.bullet ? (
@@ -391,16 +441,59 @@ export function CvPages({
           demoted={demoted}
         />
       ))}
-      {spec.cv.sidebar.map((s) => (
-        <CvSectionView
-          key={s}
-          section={s as SectionKey}
-          content={content}
-          db={db}
-          styles={styles}
-          compact
-        />
-      ))}
+      {spec.cv.sidebar.map((group) => {
+        if (!Array.isArray(group)) {
+          return (
+            <CvSectionView
+              key={group}
+              section={group as SectionKey}
+              content={content}
+              db={db}
+              styles={styles}
+              compact
+            />
+          );
+        }
+        // An empty section must not hold a column open — with one survivor the row
+        // collapses to the plain full-width rendering.
+        const present = group.filter((s) => (content[s] ?? []).length > 0);
+        if (present.length === 0) return null;
+        if (present.length === 1) {
+          return (
+            <CvSectionView
+              key={present[0]}
+              section={present[0] as SectionKey}
+              content={content}
+              db={db}
+              styles={styles}
+              compact
+            />
+          );
+        }
+        return (
+          <View key={group.join("+")} style={styles.sideRow}>
+            {present.map((s, i) => (
+              <View
+                key={s}
+                style={
+                  i < present.length - 1
+                    ? [styles.sideCol, styles.sideGutter]
+                    : styles.sideCol
+                }
+              >
+                <CvSectionView
+                  section={s as SectionKey}
+                  content={content}
+                  db={db}
+                  styles={styles}
+                  compact
+                  stacked
+                />
+              </View>
+            ))}
+          </View>
+        );
+      })}
       <PageFooter name={name} styles={styles} />
       <HiddenInk text={hidden} />
     </Page>
