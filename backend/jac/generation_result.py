@@ -25,11 +25,14 @@ def _job_label(j) -> str:
 def _education_label(e) -> str:
     window = f"{e.started or '?'}–{e.ended or 'present'}"
     head = f"{e.degree or ''} {e.field_of_study or ''}".strip()
-    return (
+    label = (
         f"{head} @ {e.institution} ({window})"
         if head
         else f"{e.institution} ({window})"
     )
+    # The list form: the string already ends in a bracketed range, so a second bracket
+    # would read as a typo. The heading form ("(no degree)") lives in render.py/parts.ts.
+    return label if e.is_degree else f"{label} — no degree"
 
 
 def _certification_label(c) -> str:

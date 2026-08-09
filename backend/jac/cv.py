@@ -198,6 +198,11 @@ class CV:
                 if text
                 else f"{e.institution} ({window})"
             )
+            text += (
+                f" [degree: {e.get_degree_level_display()}]"
+                if e.is_degree
+                else " [no degree]"
+            )
             if e.description:
                 text += f" — {e.description[:200]}"
             refs = [f"skill:{sk.pk}" for sk in e.skills.all()]
@@ -271,14 +276,35 @@ class CV:
 
         return out
 
-    # filter
+    def highest_degree_id(self) -> str | None:
+        """Flat id of the highest COMPLETED degree in this CV's education set, or None.
+
+        German public service grades pay on the highest formal qualification, so it belongs
+        on every CV regardless of how it scores against the posting. Ties (two Masters) go to
+        the most recently finished one; an unfinished study period is ordinary content the
+        selection may rank and drop like anything else.
+        """
+        best = None
+        for e in self.entries.get("educations", []):
+            if not e.is_degree:
+                continue
+            key = (e.degree_level, e.ended or date.min)
+            if best is None or key > (best.degree_level, best.ended or date.min):
+                best = e
+        return f"education:{best.pk}" if best else None
+
     def filter_cv(self, job_post_text: str, mode: str | None, executor, pinned=None):
+
+        pins = set(pinned or ())
+        top = self.highest_degree_id()
+        if top:
+            pins.add(top)  # type:ignore
         return CVFilter(
             job_post_text=job_post_text,
             entries=self._flatten_entries(),
             mode=normalize_mode(mode),
             executor=executor,
-            pinned=pinned,
+            pinned=pins,  # type:ignore
         ).output()
 
     def apply_selection(self, selection: dict) -> None:

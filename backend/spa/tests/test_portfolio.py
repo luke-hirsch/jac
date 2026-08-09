@@ -18,7 +18,15 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
-from jac.models import Domain, Job, JobApplication, JobPostAddress, JobPosting, Skill
+from jac.models import (
+    Domain,
+    Education,
+    Job,
+    JobApplication,
+    JobPostAddress,
+    JobPosting,
+    Skill,
+)
 
 from spa.models import PortfolioBlock, PortfolioLink
 from spa.portfolio import (
@@ -542,6 +550,45 @@ class BuildPayloadClaimedTests(TestCase):
             i for i in payload["featured"] if i["id"] == f"block:{block.pk}"
         )
         self.assertEqual([s["id"] for s in feat_block["links"]], [f"job:{job.pk}"])
+
+
+# --- [fullstack]-education-degree ---------------------------------------------------
+# ACTIVE guide (activated 2026-08-07). Red until `Education.degree_level` lands.
+
+
+class CareerItemDegreeTests(TestCase):
+    """The public card titles an education entry `degree or field_of_study`. Once the
+    free-text "Drop Out …" wording is gone from the degree field, an unfinished study
+    period would present as a plain degree on the portfolio — the one surface strangers
+    read without context. Same marker as the CV heading."""
+
+    def test_an_unfinished_study_period_is_marked(self):
+        owner = _owner()
+        edu = Education.objects.create(
+            user=owner,
+            institution="FU Berlin",
+            field_of_study="Physics",
+            started=date(2016, 10, 1),
+            ended=date(2018, 9, 30),
+            degree_level=Education.DegreeLevel.none,
+        )
+        [item] = resolve_items(owner, [f"education:{edu.pk}"])
+        self.assertEqual(item["title"], "Physics (no degree)")
+        self.assertEqual(item["subtitle"], "FU Berlin")
+
+    def test_a_degree_keeps_its_plain_title(self):
+        owner = _owner()
+        edu = Education.objects.create(
+            user=owner,
+            institution="TU",
+            field_of_study="Physics",
+            degree="B.Sc.",
+            started=date(2012, 10, 1),
+            ended=date(2015, 9, 30),
+            degree_level=Education.DegreeLevel.bachelor,
+        )
+        [item] = resolve_items(owner, [f"education:{edu.pk}"])
+        self.assertEqual(item["title"], "B.Sc.")
 
 
 class BlockLinksSerializerTests(TestCase):

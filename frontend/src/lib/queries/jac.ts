@@ -34,6 +34,7 @@ export type EducationRow = {
   started: string;
   ended: string | null;
   degree: string | null;
+  degree_level: number;
   grade: string | null;
   description: string;
   location: number | null;

@@ -469,13 +469,13 @@ class LetterChatStreamTests(APITestCase):
 
 
 # --- [fullstack]-education-degree ---------------------------------------------------
-# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+# ACTIVE guide (activated 2026-08-07, rescoped to `degree_level` alone). Red until the
+# serializer exposes the field.
 
 
-@skip("[fullstack]-education-degree — step 0: unskip")
 class EducationDegreeApiTests(APITestCase):
-    """The two new fields have to reach the SPA form — the user classifies their own
-    education; nothing infers a degree level from free text."""
+    """The new field has to reach the SPA form — the user classifies their own education;
+    nothing infers a degree level from free text or from the grade field."""
 
     EDU_URL = "/api/jac/education/"
 
@@ -498,27 +498,33 @@ class EducationDegreeApiTests(APITestCase):
             format="json",
         )
 
-    def test_defaults_come_back_on_create(self):
+    def test_the_default_comes_back_on_create(self):
+        """Omitting it claims nothing — an unclassified row is not a degree."""
         r = self._create()
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(r.data["degree_level"], 0)
-        self.assertIs(r.data["completed"], True)
 
-    def test_both_fields_round_trip(self):
-        r = self._create(degree_level=2, completed=True)
+    def test_the_level_round_trips(self):
+        r = self._create(degree_level=3)  # bachelor
         self.assertEqual(r.status_code, 201, r.data)
         pk = r.data["id"]
         patched = self.client.patch(
-            f"{self.EDU_URL}{pk}/", {"completed": False}, format="json"
+            f"{self.EDU_URL}{pk}/", {"degree_level": 4}, format="json"
         )
         self.assertEqual(patched.status_code, 200, patched.data)
-        self.assertEqual(patched.data["degree_level"], 2)
-        self.assertIs(patched.data["completed"], False)
+        self.assertEqual(patched.data["degree_level"], 4)
 
     def test_an_out_of_range_level_is_rejected(self):
         r = self._create(degree_level=9)
         self.assertEqual(r.status_code, 400)
         self.assertIn("degree_level", r.data)
+
+    def test_a_grade_alone_does_not_make_a_degree(self):
+        """The rejected alternative, pinned so it can't creep back: `grade` is display
+        data. Leaving it off a CV must not change what the entry IS."""
+        r = self._create(grade="2.6")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["degree_level"], 0)
 
 
 # --- [fullstack]-cv-section-toggles -------------------------------------------------

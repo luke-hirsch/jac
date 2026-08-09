@@ -6,8 +6,10 @@ runs RUNS times and passes at PASS_RATE (Lukas, 2026-07-16).
 - Skips loudly ("HirschAi offline …") when the tower doesn't answer the probe.
 - Knobs: JAC_PROMPT_RUNS (default 5), JAC_PROMPT_PASS_RATE (default 0.6).
 - Cost/time: ~RUNS runs × 7 prompts on the tower's small model — minutes, not
-  seconds. For a quick smoke: JAC_PROMPT_RUNS=1 python manage.py test
-  jac.tests.test_prompts
+  seconds. Measured 2026-08-09: 8 tests, ~237s — 91% of the whole backend suite.
+  Hence the `llm` skip group: `manage.py test --skip llm` (261s → ~21s). For a
+  quick smoke of the prompts themselves instead: JAC_PROMPT_RUNS=1 python
+  manage.py test jac.tests.test_prompts
 - Commercial executors are deliberately NOT exercised here (no paid keys in the
   suite); the high-mode prompts get their live check in the guide's manual smoke.
 
@@ -17,7 +19,7 @@ Target API = `[backend]-pipeline-single-executor`.
 import os
 import unittest
 
-from django.test import TestCase
+from django.test import TestCase, tag
 
 from jac.llm_prompts import (
     AddressExtract,
@@ -84,8 +86,13 @@ GROUNDED_BODY = (
 REFUSAL_MARKERS = ("i can't", "i cannot", "i'm sorry", "as an ai")
 
 
+@tag("llm")
 class LivePromptTestCase(TestCase):
-    """Base class: every subclass skips as one block when the tower is down."""
+    """Base class: every subclass skips as one block when the tower is down.
+
+    The `llm` tag is inherited by every subclass (Django reads `tags` off the test
+    instance, so normal attribute lookup does the work) — one decorator covers the
+    whole module, and `--skip llm` drops it without needing the tower up at all."""
 
     executor = Executor("ollama")
 

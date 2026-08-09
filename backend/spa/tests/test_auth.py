@@ -3,6 +3,11 @@
 Covers signup → email verify → login, password reset/change, TOTP
 enroll/verify, recovery-code consumption, login rate limiting, and the
 AdminRequireMfaMiddleware gate.
+
+The allauth/MFA classes carry the `auth` skip group (`manage.py test --skip auth`):
+they are the slowest non-live block in the suite, ~6s, most of it PBKDF2 hashing.
+`UserProfileViewTests` is deliberately NOT tagged — it is profile CRUD that happens
+to live in this file, and it is cheap.
 """
 
 import json
@@ -12,7 +17,7 @@ from unittest import skip
 
 from django.contrib.auth import get_user_model
 from django.core import mail
-from django.test import TestCase, override_settings
+from django.test import TestCase, override_settings, tag
 
 from allauth.mfa.models import Authenticator
 from allauth.mfa.totp.internal.auth import TOTP, format_hotp_value, hotp_value
@@ -61,6 +66,7 @@ _TEST_SETTINGS = {
 }
 
 
+@tag("auth")
 @override_settings(**_TEST_SETTINGS)
 class AuthFlowTests(TestCase):
     """Full allauth headless auth flows."""
@@ -227,6 +233,7 @@ class AuthFlowTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+@tag("auth")
 @override_settings(**_TEST_SETTINGS)
 class AdminMfaGateTests(TestCase):
     """AdminRequireMfaMiddleware: staff + MFA enrolled → redirected; others pass through."""
@@ -460,6 +467,7 @@ class UserProfileViewTests(TestCase):
 
 # Deliberately NOT `**_TEST_SETTINGS` — that pins ACCOUNT_ALLOW_SIGNUPS, and the shipped
 # default is exactly what this class is here to assert. Only the infra bits are pinned.
+@tag("auth")
 @override_settings(
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},

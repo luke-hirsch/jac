@@ -154,10 +154,25 @@ python manage.py llm_check default  # specific alias
 
 ```bash
 cd backend
-python manage.py test
+python manage.py test                          # everything — 455 tests, ~260s
+python manage.py test --skip llm               # ~22s
+python manage.py test --skip llm --parallel auto   # ~9s
 ```
 
-46 tests covering models, the CV pipeline (mocked LLMs), and LLM wrapper JSON parsing.
+455 tests covering the career-DB models, the CV + cover-letter pipeline (mocked LLMs), the
+connector's providers and encrypted configs, auth/MFA, and the portfolio's per-visitor rendering.
+
+Everything runs by default. `--skip` opts out of named groups — a forgotten `--skip` costs time,
+a forgotten `--include` costs coverage:
+
+| group   | what it drops                                              | saves |
+| ------- | ---------------------------------------------------------- | ----- |
+| `llm`   | live prompt-quality tests — need ollama/the tower answering | ~237s |
+| `auth`  | allauth signup/login, MFA, admin gate (PBKDF2-bound)       | ~6s   |
+| `files` | attachment round-trips through a throwaway `MEDIA_ROOT`     | ~3s   |
+
+Groups are Django test tags, so `--exclude-tag` works too; the list lives in
+`lukehirsch/test_runner.py`. Profile before adding one: `python manage.py test --durations 20`.
 
 ---
 

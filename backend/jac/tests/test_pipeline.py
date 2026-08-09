@@ -14,8 +14,10 @@ from django.test import TestCase, override_settings
 from jac.cover_letter import editable_body
 from jac.cv import CV
 from jac.filter import CVFilter, GenerationError
+from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import CoverLetterWriter, Instruct, LetterChat
 from jac.models import Education, Mode
+from jac.render import CvRender
 from llm_connector.executor import Executor
 from llm_connector.tests._helpers import FakeAdapter
 
@@ -296,14 +298,17 @@ class LetterChatAssistantTests(TestCase):
 
 
 # --- [fullstack]-education-degree ---------------------------------------------------
-# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+# ACTIVE guide (activated 2026-08-07, rescoped to `degree_level` alone). Red until the
+# field + `highest_degree_id` land; `DegreeLabelTests` below covers the label surfaces.
 
 
-@skip("[fullstack]-education-degree — step 0: unskip")
 class HighestDegreeTests(TestCase):
-    """The highest COMPLETED degree rides the existing pin mechanism, so every rung
-    force-keeps it — an LLM instruction alone would be honoured about half the time by a
-    1B model, and the German public-service pay grade is not a coin flip."""
+    """The highest degree rides the existing pin mechanism, so every rung force-keeps it —
+    an LLM instruction alone would be honoured about half the time by a 1B model, and the
+    German public-service pay grade is not a coin flip.
+
+    "Highest" is `max(degree_level)`, NOT the latest entry and NOT the best grade: German
+    grades run 1–5 with 1 best, so a 1.4 Abitur would outscore a 2.6 BSc."""
 
     @classmethod
     def setUpTestData(cls):
@@ -312,52 +317,49 @@ class HighestDegreeTests(TestCase):
     def _cv(self):
         return CV(user_pk=self.user.pk)
 
-    def test_none_without_a_single_completed_degree(self):
-        Education.objects.create(
+    def _edu(self, level, ended=None, **kw):
+        return Education.objects.create(
             user=self.user,
-            institution="FU Berlin",
-            started=date(2012, 10, 1),
-            degree_level=Education.DegreeLevel.master,
-            completed=False,
+            institution=kw.pop("institution", "TU"),
+            started=kw.pop("started", date(2012, 10, 1)),
+            ended=ended,
+            degree_level=level,
+            **kw,
         )
+
+    def test_none_without_a_single_degree(self):
+        self._edu(Education.DegreeLevel.none, date(2016, 9, 30), degree="Drop Out")
         self.assertIsNone(self._cv().highest_degree_id())
 
     def test_picks_the_highest_level(self):
-        bsc = Education.objects.create(
-            user=self.user, institution="TU", started=date(2012, 10, 1),
-            ended=date(2015, 9, 30),
-            degree_level=Education.DegreeLevel.bachelor, completed=True,
-        )
-        msc = Education.objects.create(
-            user=self.user, institution="TU", started=date(2015, 10, 1),
-            ended=date(2017, 9, 30),
-            degree_level=Education.DegreeLevel.master, completed=True,
-        )
+        bsc = self._edu(Education.DegreeLevel.bachelor, date(2015, 9, 30))
+        msc = self._edu(Education.DegreeLevel.master, date(2017, 9, 30))
         self.assertEqual(self._cv().highest_degree_id(), f"education:{msc.pk}")
         self.assertNotEqual(self._cv().highest_degree_id(), f"education:{bsc.pk}")
 
-    def test_ignores_drop_outs_even_at_a_higher_level(self):
-        bsc = Education.objects.create(
-            user=self.user, institution="TU", started=date(2012, 10, 1),
-            ended=date(2015, 9, 30),
-            degree_level=Education.DegreeLevel.bachelor, completed=True,
-        )
-        Education.objects.create(
-            user=self.user, institution="FU", started=date(2016, 10, 1),
-            degree_level=Education.DegreeLevel.doctorate, completed=False,
-        )
+    def test_a_later_drop_out_never_takes_the_pin(self):
+        """The real-data shape: a BSc in 2012, then two abandoned courses ending 2016 and
+        2020. Chronology must not decide this — the level does."""
+        bsc = self._edu(Education.DegreeLevel.bachelor, date(2012, 9, 30))
+        self._edu(Education.DegreeLevel.none, date(2016, 9, 30), degree="Drop Out")
+        self._edu(Education.DegreeLevel.none, date(2020, 9, 30), degree="Drop Out")
         self.assertEqual(self._cv().highest_degree_id(), f"education:{bsc.pk}")
 
-    def test_ties_go_to_the_most_recently_finished(self):
-        older = Education.objects.create(
-            user=self.user, institution="A", started=date(2010, 10, 1),
-            ended=date(2013, 9, 30),
-            degree_level=Education.DegreeLevel.master, completed=True,
+    def test_secondary_wins_when_it_is_all_there_is(self):
+        """No BSc in the DB ⇒ the Abitur IS the highest formal qualification. It must be
+        pinned, not treated as "not a real degree"."""
+        abi = self._edu(
+            Education.DegreeLevel.secondary, date(2008, 6, 30), degree="Abitur"
         )
-        newer = Education.objects.create(
-            user=self.user, institution="B", started=date(2015, 10, 1),
-            ended=date(2018, 9, 30),
-            degree_level=Education.DegreeLevel.master, completed=True,
+        self._edu(Education.DegreeLevel.none, date(2016, 9, 30), degree="Drop Out")
+        self.assertEqual(self._cv().highest_degree_id(), f"education:{abi.pk}")
+
+    def test_ties_go_to_the_most_recently_finished(self):
+        older = self._edu(
+            Education.DegreeLevel.master, date(2013, 9, 30), institution="A"
+        )
+        newer = self._edu(
+            Education.DegreeLevel.master, date(2018, 9, 30), institution="B"
         )
         self.assertEqual(self._cv().highest_degree_id(), f"education:{newer.pk}")
         self.assertNotEqual(self._cv().highest_degree_id(), f"education:{older.pk}")
@@ -365,28 +367,24 @@ class HighestDegreeTests(TestCase):
     def test_the_flattened_text_states_the_degree_status(self):
         """The LLM rungs can only weigh what the entry text says, and a free-text
         "Drop Out Education Physics" degree field says the opposite of the truth."""
-        Education.objects.create(
-            user=self.user, institution="TU", started=date(2012, 10, 1),
-            ended=date(2015, 9, 30), field_of_study="Physics",
-            degree_level=Education.DegreeLevel.bachelor, completed=True,
+        self._edu(
+            Education.DegreeLevel.bachelor, date(2015, 9, 30), field_of_study="Physics"
         )
-        Education.objects.create(
-            user=self.user, institution="FU", started=date(2016, 10, 1),
-            field_of_study="Maths",
-            degree_level=Education.DegreeLevel.master, completed=False,
+        self._edu(
+            Education.DegreeLevel.none,
+            date(2020, 9, 30),
+            institution="FU",
+            field_of_study="Maths (Master)",
+            degree="Drop Out",
         )
         texts = [
             e["text"] for e in self._cv()._flatten_entries() if e["type"] == "education"
         ]
-        self.assertTrue(any("[completed:" in t for t in texts), texts)
-        self.assertTrue(any("[studied, no degree]" in t for t in texts), texts)
+        self.assertTrue(any("[degree: Bachelor]" in t for t in texts), texts)
+        self.assertTrue(any("[no degree]" in t for t in texts), texts)
 
     def test_filter_cv_unions_the_degree_with_the_callers_pins(self):
-        msc = Education.objects.create(
-            user=self.user, institution="TU", started=date(2015, 10, 1),
-            ended=date(2017, 9, 30),
-            degree_level=Education.DegreeLevel.master, completed=True,
-        )
+        msc = self._edu(Education.DegreeLevel.master, date(2017, 9, 30))
         seen = {}
         real = CVFilter.__init__
 
@@ -398,6 +396,48 @@ class HighestDegreeTests(TestCase):
             self._cv().filter_cv(POST, Mode.manual, TOWER, pinned={"job:99"})
         self.assertIn(f"education:{msc.pk}", seen["pinned"])
         self.assertIn("job:99", seen["pinned"])  # the user's own pin survives
+
+
+class DegreeLabelTests(TestCase):
+    """Every surface that prints an education entry composes its own heading out of the
+    free-text `degree` field, so "Drop Out" leaks into all of them. Two are server-side:
+    the run snapshot label (the editor's fallback when the career row is gone,
+    `content-card.tsx:451`) and the markdown artifact `cv_test` writes to disk."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.bsc = Education.objects.create(
+            user=cls.user, institution="TU", started=date(2012, 10, 1),
+            ended=date(2015, 9, 30), field_of_study="Physics", degree="B.Sc.",
+            degree_level=Education.DegreeLevel.bachelor,
+        )
+        cls.dropout = Education.objects.create(
+            user=cls.user, institution="FU Berlin", started=date(2016, 10, 1),
+            ended=date(2018, 9, 30), field_of_study="Maths",
+            degree_level=Education.DegreeLevel.none,
+        )
+
+    def _labels(self) -> dict[str, str]:
+        payload = serialize_cv_selection(CV(user_pk=self.user.pk))
+        return {row["id"]: row["label"] for row in payload["educations"]}
+
+    def test_the_snapshot_label_marks_an_unfinished_period(self):
+        """Mirrors the frontend `labelFor` wording exactly — the two are read as one
+        list in the editor, so they must not disagree about the same entry."""
+        label = self._labels()[f"education:{self.dropout.pk}"]
+        self.assertTrue(label.endswith("— no degree"), label)
+
+    def test_the_snapshot_label_leaves_a_degree_alone(self):
+        label = self._labels()[f"education:{self.bsc.pk}"]
+        self.assertNotIn("no degree", label)
+        self.assertIn("B.Sc. Physics @ TU", label)
+
+    def test_the_markdown_artifact_marks_an_unfinished_period(self):
+        md = CvRender(CV(user_pk=self.user.pk), name="Tester").export_md()
+        self.assertIn("Maths @ FU Berlin (no degree)", md)
+        self.assertIn("B.Sc. Physics @ TU", md)
+        self.assertNotIn("B.Sc. Physics @ TU (no degree)", md)
 
 
 # --- [fullstack]-letter-fit ---------------------------------------------------------

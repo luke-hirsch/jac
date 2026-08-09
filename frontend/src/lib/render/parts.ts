@@ -7,6 +7,7 @@ import {
   dateRange,
   entryId,
   formatMonthYear,
+  isDegree,
   joinEntry,
   SECTION_ORDER,
   type SectionKey,
@@ -102,6 +103,9 @@ export function skillGroups(
     names: groups[c].join(", "),
   }));
 }
+
+export const NO_DEGREE = "(no degree)";
+
 export function entryParts(
   db: CvEntriesResponse | undefined,
   section: SectionKey,
@@ -130,9 +134,10 @@ export function entryParts(
     case "educations": {
       const e = row as EducationRow;
       const head = `${e.degree ?? ""} ${e.field_of_study ?? ""}`.trim();
+      const base = head ? `${head} @ ${e.institution}` : e.institution;
       const d = dateParts(e.started, e.ended);
       return {
-        heading: head ? `${head} @ ${e.institution}` : e.institution,
+        heading: isDegree(e) ? base : `${base} ${NO_DEGREE}`,
         date: dateRange(e.started, e.ended),
         dateFrom: d.from,
         dateTo: d.to,

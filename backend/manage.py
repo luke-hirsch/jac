@@ -6,7 +6,15 @@ import sys
 
 def main():
     """Run administrative tasks."""
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lukehirsch.settings')
+    # `manage.py test` runs on lukehirsch.test_settings (production settings + a fast
+    # password hasher). Set here rather than sniffed inside settings.py because spawned
+    # --parallel workers inherit os.environ but not sys.argv; going through
+    # DJANGO_SETTINGS_MODULE is what carries the choice into them.
+    is_test = sys.argv[1:2] == ['test']
+    os.environ.setdefault(
+        'DJANGO_SETTINGS_MODULE',
+        'lukehirsch.test_settings' if is_test else 'lukehirsch.settings',
+    )
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

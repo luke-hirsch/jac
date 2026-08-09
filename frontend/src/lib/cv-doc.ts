@@ -106,6 +106,9 @@ export function dateRange(
   return `${from} – ${to}`;
 }
 
+/** One ordered field, one meaning: anything above `none` is a formal qualification. */
+export const isDegree = (e: EducationRow) => e.degree_level > 0;
+
 export function labelFor(section: SectionKey, row: AnyRow): string {
   switch (section) {
     case "skills": {
@@ -120,9 +123,10 @@ export function labelFor(section: SectionKey, row: AnyRow): string {
       const e = row as EducationRow;
       const head = `${e.degree ?? ""} ${e.field_of_study ?? ""}`.trim();
       const w = dateRange(e.started, e.ended);
-      return head
+      const base = head
         ? `${head} @ ${e.institution} (${w})`
         : `${e.institution} (${w})`;
+      return isDegree(e) ? base : `${base} — no degree`;
     }
     case "certifications": {
       const c = row as CertificationRow;

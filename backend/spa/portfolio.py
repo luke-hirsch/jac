@@ -274,8 +274,9 @@ def _career_item(type_name: str, obj) -> dict:
             url=obj.url,
         )
     elif type_name == "education":
+        title = obj.degree or obj.field_of_study
         item.update(
-            title=obj.degree or obj.field_of_study,
+            title=title if obj.is_degree else f"{title} (no degree)",
             subtitle=obj.institution,
             started=obj.started,
             ended=obj.ended,

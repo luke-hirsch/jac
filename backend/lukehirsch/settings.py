@@ -174,6 +174,25 @@ CELERY_TASK_TIME_LIMIT = 30 * 60
 # ─────────────────────────────────────────────────────────────────────────────
 # Django misc: passwords, i18n, static & media
 # ─────────────────────────────────────────────────────────────────────────────
+# Argon2 first — the PHC winner and Django's own recommendation over the PBKDF2 default;
+# memory-hard, so a stolen hash is expensive to attack with GPUs. Needs argon2-cffi
+# (`Django[argon2]` in requirements.txt): without it EVERY set_password/check_password
+# raises, so a server that skipped `pip install -r` locks everyone out. Guarded by
+# ArgonProductionHasherTests.
+#
+# The rest of Django's default chain stays listed on purpose: hashes already written as
+# pbkdf2_sha256 must keep verifying, and Django rewrites each one to argon2 on that
+# user's next successful login. Never prune this list while old hashes exist in the DB.
+#
+# Tests do NOT run on this — see lukehirsch/test_settings.py.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
+    "django.contrib.auth.hashers.ScryptPasswordHasher",
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -338,6 +357,12 @@ PORTFOLIO_ORIGIN_TEMPLATE = os.getenv(
     "PORTFOLIO_ORIGIN_TEMPLATE",
     "http://{handle}.localhost:5173" if DEBUG else f"https://{{handle}}.{BASE_DOMAIN}",
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests
+# ─────────────────────────────────────────────────────────────────────────────
+# Adds `--skip <group>` to `manage.py test`; see lukehirsch/test_runner.py.
+TEST_RUNNER = "lukehirsch.test_runner.SkipGroupRunner"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Production guard — must run last

@@ -27,8 +27,8 @@ class CvRender:
 
     def __init__(self, cv: CV, name: str | None = None):
         """Args:
-            cv: A CV instance (typically after filtering/ranking).
-            name: Display name for the CV header. Derived from the user record if omitted.
+        cv: A CV instance (typically after filtering/ranking).
+        name: Display name for the CV header. Derived from the user record if omitted.
         """
         self.cv = cv
         self.name = name or self._derive_name()
@@ -85,6 +85,8 @@ class CvRender:
         if kind == "educations":
             label = " ".join(p for p in (e.degree, e.field_of_study) if p).strip()
             heading = f"{label} @ {e.institution}" if label else e.institution
+            if not e.is_degree:
+                heading = f"{heading} (no degree)"
             body = []
             meta = self._date_range(e.started, e.ended)
             if meta:

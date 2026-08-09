@@ -6,7 +6,6 @@ Target API = `[backend]-pipeline-single-executor` and `[backend]-entry-pins`
 """
 
 from datetime import date
-from unittest import skip
 
 from django.test import TestCase
 from django.utils import timezone
@@ -101,14 +100,15 @@ class JobApplicationModelTests(TestCase):
 
 
 # --- [fullstack]-education-degree ---------------------------------------------------
-# SKIP-MARKED: not the active guide. Step 0 of that guide: drop the @skip decorator.
+# ACTIVE guide (activated 2026-08-07, rescoped to `degree_level` alone). Red until the
+# field lands.
 
 
-@skip("[fullstack]-education-degree — step 0: unskip")
 class EducationDegreeTests(TestCase):
-    """`is_degree` is the predicate the whole force-keep hangs off: an ordered level so
-    "highest" is a max(), plus a `completed` flag so an unfinished study period is content
-    rather than a qualification."""
+    """`is_degree` is the predicate the whole force-keep hangs off. One ordered field,
+    and it means what the entry EARNED — not what it aimed at. That is what makes a
+    separate `completed` flag unnecessary: a drop-out earned nothing, so it is `none`,
+    and the level it was aiming at stays in the free text where it already lives."""
 
     @classmethod
     def setUpTestData(cls):
@@ -124,23 +124,37 @@ class EducationDegreeTests(TestCase):
 
     def test_levels_are_ordered_so_highest_is_a_max(self):
         L = Education.DegreeLevel
-        self.assertLess(L.none, L.vocational)
+        self.assertLess(L.none, L.secondary)
+        self.assertLess(L.secondary, L.vocational)
         self.assertLess(L.vocational, L.bachelor)
         self.assertLess(L.bachelor, L.master)
         self.assertLess(L.master, L.doctorate)
 
-    def test_defaults_are_the_conservative_ones(self):
+    def test_the_default_is_the_conservative_one(self):
+        """Every pre-migration row starts at `none`, i.e. claims nothing, until the user
+        classifies it by hand."""
         e = self._edu()
         self.assertEqual(e.degree_level, Education.DegreeLevel.none)
-        self.assertTrue(e.completed)  # most education entries ARE finished
-        self.assertFalse(e.is_degree)  # …but "finished nothing" is not a degree
+        self.assertFalse(e.is_degree)
 
-    def test_a_finished_degree_is_a_degree(self):
-        e = self._edu(degree_level=Education.DegreeLevel.bachelor, completed=True)
-        self.assertTrue(e.is_degree)
+    def test_any_level_above_none_is_a_degree(self):
+        """Abitur counts: with no BSc in the DB it IS the highest formal qualification,
+        and a German pay grade would key on it."""
+        for level in (
+            Education.DegreeLevel.secondary,
+            Education.DegreeLevel.vocational,
+            Education.DegreeLevel.bachelor,
+            Education.DegreeLevel.doctorate,
+        ):
+            with self.subTest(level=level):
+                self.assertTrue(self._edu(degree_level=level).is_degree)
 
-    def test_an_unfinished_master_is_not_a_degree(self):
-        """The drop-out case: real experience, ranked like any other entry, never the
-        candidate's highest qualification."""
-        e = self._edu(degree_level=Education.DegreeLevel.master, completed=False)
+    def test_free_text_never_overrides_the_level(self):
+        """The drop-out case, exactly as it sits in the real DB: the aborted Master is
+        prose in `field_of_study`, and the level says what was actually earned."""
+        e = self._edu(
+            degree="Drop Out",
+            field_of_study="Physics (Master)",
+            degree_level=Education.DegreeLevel.none,
+        )
         self.assertFalse(e.is_degree)

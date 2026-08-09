@@ -183,6 +183,7 @@ class Command(BaseCommand):
                 "location": e.location.city if e.location else None,
                 "field_of_study": e.field_of_study,
                 "degree": e.degree,
+                "degree_level": e.degree_level,
                 "grade": e.grade,
                 "started": e.started,
                 "ended": e.ended,

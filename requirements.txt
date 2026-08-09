@@ -2,7 +2,7 @@
 celery
 channels
 daphne
-Django
+Django[argon2]      # the extra pulls argon2-cffi — see PASSWORD_HASHERS in settings.py
 django-allauth[mfa]
 django-cors-headers
 django-filter

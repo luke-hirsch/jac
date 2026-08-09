@@ -33,6 +33,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SectionPage } from "@/components/cv/section-page";
 import { Pagination } from "@/components/cv/pagination";
 import { LocationPicker } from "@/components/cv/location-picker";
@@ -59,6 +66,7 @@ const schema = z.object({
     .or(z.literal("")),
   degree: z.string().max(100),
   grade: z.string().max(50),
+  degree_level: z.number().int().min(0).max(5),
   description: z.string(),
   location: z.number().nullable(),
   skills: z.array(z.number()),
@@ -67,6 +75,19 @@ const schema = z.object({
 });
 
 type EducationInput = z.infer<typeof schema>;
+
+const DEGREE_LEVELS: [number, string][] = [
+  [0, "No degree"],
+  [1, "Abitur / High School"],
+  [2, "Vocational / Ausbildung"],
+  [3, "Bachelor"],
+  [4, "Master / Diplom"],
+  [5, "Doctorate"],
+];
+const DEGREE_LABELS = Object.fromEntries(DEGREE_LEVELS) as Record<
+  number,
+  string
+>;
 
 export const Route = createFileRoute("/_authenticated/cv/education")({
   component: EducationPage,
@@ -260,6 +281,10 @@ function buildColumns(opts: {
     col.accessor("field_of_study", { header: "Field of Study" }),
     col.accessor("institution", { header: "Institution" }),
     col.accessor("degree", { header: "Degree" }),
+    col.accessor("degree_level", {
+      header: "Level",
+      cell: (c) => DEGREE_LABELS[c.getValue()] ?? "—",
+    }),
     col.accessor("started", { header: "From" }),
     col.accessor("ended", {
       header: "To",
@@ -309,6 +334,7 @@ function EducationEditor({
         field_of_study: row.field_of_study,
         institution: row.institution,
         degree: row.degree ?? "",
+        degree_level: row.degree_level ?? 0,
         grade: row.grade ?? "",
         started: row.started,
         ended: row.ended ?? "",
@@ -322,6 +348,7 @@ function EducationEditor({
         field_of_study: "",
         institution: "",
         degree: "",
+        degree_level: 0,
         grade: "",
         started: "",
         ended: "",
@@ -341,6 +368,7 @@ function EducationEditor({
     onSubmit: async ({ value }) => {
       // DRF's DateField rejects "" for the nullable `ended` — send null.
       const body = { ...value, ended: value.ended || null };
+
       try {
         if (row) {
           await update.mutateAsync({ id: row.id, body });
@@ -377,7 +405,9 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
-              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
+              onBlur={() =>
+                line.save(f.name, f.state.value, f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
             <LineSaveHint s={line.fields[f.name]} />
@@ -393,7 +423,9 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
-              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
+              onBlur={() =>
+                line.save(f.name, f.state.value, f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
             <LineSaveHint s={line.fields[f.name]} />
@@ -409,9 +441,41 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
-              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
+              onBlur={() =>
+                line.save(f.name, f.state.value, f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
+            <LineSaveHint s={line.fields[f.name]} />
+          </div>
+        )}
+      </form.Field>
+      <form.Field name="degree_level">
+        {(f) => (
+          <div className="space-y-1">
+            <Label htmlFor={f.name}>Degree level</Label>
+            <Select
+              value={String(f.state.value)}
+              onValueChange={(v) => {
+                f.handleChange(Number(v));
+                line.save(f.name, Number(v));
+              }}
+            >
+              <SelectTrigger id={f.name}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DEGREE_LEVELS.map(([value, label]) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              What you earned, not what you studied toward. "No degree" renders
+              as "(no degree)"; your highest is pinned onto every generated CV.
+            </p>
             <LineSaveHint s={line.fields[f.name]} />
           </div>
         )}
@@ -425,7 +489,9 @@ function EducationEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
-              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
+              onBlur={() =>
+                line.save(f.name, f.state.value, f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
             <LineSaveHint s={line.fields[f.name]} />

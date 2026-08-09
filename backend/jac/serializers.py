@@ -3,12 +3,8 @@ import re
 from typing import TypeVar
 
 from django.conf import settings
-from llm_connector.catalog import validate_params
-from llm_connector.conf import ExecutorError, resolve_executor
-from lukehirsch.mixin import ScopeRelatedToUserMixin
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
-from spa.models import PersonalityProfile
 
 from jac.models import (
     ApplicationLayout,
@@ -28,6 +24,10 @@ from jac.models import (
     Skill,
     normalize_mode,
 )
+from llm_connector.catalog import validate_params
+from llm_connector.conf import ExecutorError, resolve_executor
+from lukehirsch.mixin import ScopeRelatedToUserMixin
+from spa.models import PersonalityProfile
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,7 @@ class EducationSerializer(
             "started",
             "ended",
             "degree",
+            "degree_level",
             "grade",
             "description",
             "location",
@@ -566,7 +567,7 @@ class JobPostingSerializer(serializers.ModelSerializer):
 
     def get_address(self, obj) -> dict | None:
         addr = getattr(obj, "address", None)
-        return JobPostAddressSerializer(addr).data if addr else None
+        return JobPostAddressSerializer(addr).data if addr else None  # type: ignore
 
 
 class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSerializer):
@@ -767,7 +768,9 @@ class CvAttachmentSerializer(ScopeRelatedToUserMixin, serializers.ModelSerialize
         set_links = [
             name
             for name in self._LINK_FIELDS
-            if (attrs.get(name) if name in attrs else getattr(self.instance, name, None))
+            if (
+                attrs.get(name) if name in attrs else getattr(self.instance, name, None)
+            )
             is not None
         ]
         if len(set_links) > 1:

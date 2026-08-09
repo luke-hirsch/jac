@@ -186,6 +186,77 @@ describe("entryParts — skills leave the visible meta line", () => {
   });
 });
 
+/**
+ * `[fullstack]-education-degree` — the ACTIVE guide (activated 2026-08-07). Red until
+ * `EducationRow.degree_level` and the heading composition land. It lives in this file
+ * because the printed heading is this file's subject; the editor-list twin sits in
+ * `cv-doc.test.ts`.
+ *
+ * The suffix is the literal string on purpose — importing `NO_DEGREE` would make the
+ * assertion agree with whatever the implementation happens to say.
+ */
+describe("entryParts — an unfinished study period says so", () => {
+  const eduDb = {
+    ...db,
+    educations: [
+      {
+        id: 5,
+        institution: "FU Berlin",
+        degree: "",
+        field_of_study: "Physics",
+        started: "2016-10-01",
+        ended: "2018-09-30",
+        // graded and still not a degree: the grade is display data, nothing more
+        grade: "2.6",
+        degree_level: 0,
+        skills: [],
+        description: "",
+        favourite: false,
+      },
+      {
+        id: 6,
+        institution: "TU",
+        degree: "B.Sc.",
+        field_of_study: "CS",
+        started: "2012-10-01",
+        ended: "2015-09-30",
+        grade: "",
+        degree_level: 3,
+        skills: [],
+        description: "",
+        favourite: false,
+      },
+    ],
+  } as unknown as CvEntriesResponse;
+
+  const dropout = {
+    id: "education:5",
+    label: "Physics @ FU Berlin",
+    relevance_score: null,
+  };
+  const bsc = {
+    id: "education:6",
+    label: "B.Sc. CS @ TU",
+    relevance_score: null,
+  };
+
+  it("marks the heading rather than trusting the free-text degree field", () => {
+    expect(entryParts(eduDb, "educations", dropout).heading).toBe(
+      "Physics @ FU Berlin (no degree)",
+    );
+  });
+
+  it("leaves a degree's heading alone", () => {
+    expect(entryParts(eduDb, "educations", bsc).heading).toBe("B.Sc. CS @ TU");
+  });
+
+  it("keeps the marker out of the machine layer's date column", () => {
+    const p = entryParts(eduDb, "educations", dropout);
+    expect(p.dateFrom).toBe(`Oct${NBSP}2016`);
+    expect(p.dateTo).toBe(`–${NBSP}Sep${NBSP}2018`);
+  });
+});
+
 describe("skillGroups — proficiency in the space the cloud freed", () => {
   it("qualifies technical and domain skills", () => {
     expect(

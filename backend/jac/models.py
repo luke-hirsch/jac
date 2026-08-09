@@ -6,6 +6,7 @@ from django.db import models
 from django.db.models import OuterRef, Subquery, UniqueConstraint
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
 from lukehirsch.managers import SystemScopedManager
 
 
@@ -224,6 +225,19 @@ class Education(CvEntry):
 
     FAVOURITE_LIMIT = 2
 
+    class DegreeLevel(models.IntegerChoices):
+        """What this entry EARNED — not what it aimed at. Ordered, so "highest" is a max()
+        and not a lookup table; that ordering is what makes the force-keep computable. A
+        study period that ended without a qualification is `none`, and the level it was
+        aiming at stays in the free-text `degree` / `field_of_study`."""
+
+        none = 0, _("No degree")
+        secondary = 1, _("Abitur / High School")
+        vocational = 2, _("Vocational / Ausbildung")
+        bachelor = 3, _("Bachelor")
+        master = 4, _("Master / Diplom / Magister / Staatsexamen")
+        doctorate = 5, _("Doctorate")
+
     location = models.ForeignKey(
         Location, on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -232,9 +246,18 @@ class Education(CvEntry):
     started = models.DateField()
     ended = models.DateField(null=True, blank=True)
     degree = models.CharField(max_length=100, null=True, blank=True)
+    degree_level = models.PositiveSmallIntegerField(
+        choices=DegreeLevel, default=DegreeLevel.none
+    )
+    # `grade` is display data and stays that way: leaving a mediocre grade off the CV
+    # must not change what the entry IS.
     grade = models.CharField(max_length=50, null=True, blank=True)
     skills = models.ManyToManyField("Skill", blank=True)
     domains = models.ManyToManyField(Domain, blank=True)
+
+    @property
+    def is_degree(self) -> bool:
+        return self.degree_level > self.DegreeLevel.none
 
 
 class Certification(CvEntry):
@@ -679,7 +702,11 @@ class CvAttachment(models.Model):
     file = models.FileField(upload_to="cv_attachments")
     label = models.CharField(max_length=120, blank=True)
     job = models.ForeignKey(
-        Job, null=True, blank=True, on_delete=models.SET_NULL, related_name="attachments"
+        Job,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="attachments",
     )
     education = models.ForeignKey(
         Education,

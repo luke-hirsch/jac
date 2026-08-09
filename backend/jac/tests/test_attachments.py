@@ -5,6 +5,9 @@ at-most-one), owner-scoping, entry-link filtering, delete — plus the applicati
 The attachment is a reusable, user-owned career-DB item (not per-application); an application
 references chosen attachments by id in `JobApplication.attachments`. File uploads land under a
 throwaway MEDIA_ROOT.
+
+Both classes carry the `files` skip group (`manage.py test --skip files`): they write real
+files to disk, which is what makes them ~3s of the suite.
 """
 
 import shutil
@@ -12,7 +15,7 @@ import tempfile
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import override_settings, tag
 from rest_framework.test import APITestCase
 
 from jac.models import Certification, CvAttachment, Education
@@ -32,6 +35,7 @@ def _education(user, institution="TU Berlin"):
     )
 
 
+@tag("files")
 @override_settings(MEDIA_ROOT=_TMP_MEDIA)
 class CvAttachmentApiTests(APITestCase):
     URL = "/api/jac/attachments/"
@@ -130,6 +134,7 @@ class CvAttachmentApiTests(APITestCase):
         self.assertFalse(CvAttachment.objects.filter(pk=att.pk).exists())
 
 
+@tag("files")
 @override_settings(MEDIA_ROOT=_TMP_MEDIA)
 class ApplicationAttachmentSelectionTests(APITestCase):
     """The application's `attachments` field = an ordered, ownership-validated id list."""
