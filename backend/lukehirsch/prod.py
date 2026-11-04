@@ -14,6 +14,8 @@ from django.core.exceptions import ImproperlyConfigured
 # `verify_production_secrets` refuses to boot with DEBUG off while either is still in place.
 DEV_SECRET_KEY = "django-insecure-g4pj@dk!pf+e#+8^5t-ic(avl(ng9e=@3%ziwrls-!5sq%y6s5"
 DEV_ENCRYPTION_KEY = "ZGphbmdvLWluc2VjdXJlLWxsbS1kZXYta2V5LW9ubHk="
+# A laptop's own Postgres over its socket, as the logged-in user. Production must set DATABASE_URL.
+DEV_DATABASE_URL = "postgres:///jac"
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -73,10 +75,16 @@ def env_list(name: str, default: list[str]) -> list[str]:
 
 
 def verify_production_secrets(
-    *, debug: bool, secret_key: str, encryption_key: str, base_domain: str | None = None
+    *,
+    debug: bool,
+    secret_key: str,
+    encryption_key: str,
+    base_domain: str | None = None,
+    database_url: str | None = None,
 ) -> None:
     """Raise ImproperlyConfigured if running with DEBUG off on a checked-in dev secret, or with
-    BASE_DOMAIN still at its dev default (every absolute URL and ALLOWED_HOSTS derive from it).
+    BASE_DOMAIN (every absolute URL and ALLOWED_HOSTS derive from it) or DATABASE_URL still at its
+    dev default.
 
     No-op in DEBUG (local dev is allowed to use the placeholders). Called once at the end of
     settings.py so a misconfigured production deploy fails fast on boot instead of silently
@@ -100,4 +108,9 @@ def verify_production_secrets(
         raise ImproperlyConfigured(
             "Refusing to start with DEBUG off while BASE_DOMAIN is unset: ALLOWED_HOSTS and "
             "every absolute URL derive from it. Set it to the bare domain, e.g. example.com."
+        )
+    if database_url == DEV_DATABASE_URL:
+        raise ImproperlyConfigured(
+            "Refusing to start with DEBUG off while DATABASE_URL is unset. Set it to "
+            "postgres://user:password@host:5432/name, with the password URL-encoded."
         )
