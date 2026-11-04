@@ -38,7 +38,16 @@ from jac.llm_prompts import (
     ShortenLetter,
     address_clause,
 )
-from jac.models import Education, GenerationRun, Job, JobApplication, Mode, Project
+from jac.models import (
+    Education,
+    GenerationRun,
+    Job,
+    JobApplication,
+    JobPostAddress,
+    JobPosting,
+    Mode,
+    Project,
+)
 from jac.register import detect_address_form, register_leaks, resolve_address_form
 from jac.render import CvRender
 from jac.tasks import (
@@ -1020,6 +1029,26 @@ class GenerationRunLifecycleTests(TestCase):
         self.assertEqual(run.status, GenerationRun.Status.done)
         self.assertEqual(run.attempts, 1)
 
+    def test_a_chatty_extraction_fits_its_columns(self):
+        """The extractor hands over up to 200 characters for any field, and Postgres refuses a
+        value longer than its column. One long address line must not cost the run."""
+        run = self._run()
+        long = "x" * 200
+        fields = {f: long for f in ("zip", "phone", "city", "country", "company")}
+        with self._pipeline(extracted={**fields, "title": long, "language": long}):
+            generate_run(run.pk)
+        run.refresh_from_db()
+        self.assertEqual(run.status, GenerationRun.Status.done, run.error)
+        address = JobPostAddress.objects.get(job_posting=self.application.posting)
+        for field in fields:
+            limit = JobPostAddress._meta.get_field(field).max_length
+            self.assertEqual(len(getattr(address, field)), limit, field)
+        posting = JobPosting.objects.get(pk=self.application.posting_id)
+        self.assertEqual(len(posting.title), JobPosting._meta.get_field("title").max_length)
+        self.assertEqual(
+            len(posting.language), JobPosting._meta.get_field("language").max_length
+        )
+
     def test_a_redelivered_run_is_claimed_again_and_finishes(self):
         """The old rule claimed only `pending`: with acks_late a redelivered run stayed
         `running` forever."""
@@ -1288,7 +1317,8 @@ class ReapStuckRunsTests(TestCase):
             GenerationRun.Status.pending,
             settings.GENERATION_EXPIRES_S + REAP_MARGIN_S + 60,
         )
-        self.assertEqual(reap_stuck_runs(), 1)
+        with _muted():  # the reaper logs what it closes
+            self.assertEqual(reap_stuck_runs(), 1)
         run.refresh_from_db()
         self.assertEqual(run.status, GenerationRun.Status.failed)
         self.assertIn("start it again", run.error)
@@ -1300,7 +1330,8 @@ class ReapStuckRunsTests(TestCase):
     def test_a_silent_running_run_past_the_visibility_timeout_is_closed(self):
         visibility = settings.CELERY_BROKER_TRANSPORT_OPTIONS["visibility_timeout"]
         run = self._run(GenerationRun.Status.running, visibility + REAP_MARGIN_S + 60)
-        self.assertEqual(reap_stuck_runs(), 1)
+        with _muted():  # the reaper logs what it closes
+            self.assertEqual(reap_stuck_runs(), 1)
         run.refresh_from_db()
         self.assertIn("worker stopped", run.error)
 

@@ -49,9 +49,9 @@ def _under(path, root) -> bool:
 
 
 def _body(response) -> bytes:
-    data = b"".join(response.streaming_content)
-    response.close()
-    return data
+    # Don't close the response here: the test client does once the content is consumed, with
+    # close_old_connections unplugged. A second close() really drops the test's connection.
+    return b"".join(response.streaming_content)
 
 
 def _results(body):
@@ -195,8 +195,9 @@ class PrivateSignatureTests(APITestCase):
             signature.name, rf"^signatures/{self.alice.pk}/{UUID_HEX}\.png$"
         )
         self.assertTrue(_under(signature.path, _TMP_PRIVATE), signature.path)
+        # Not any *.png: other tests in this module leave public avatars in the same folder.
         self.assertFalse(
-            list(Path(_TMP_MEDIA).rglob("*.png")), "a copy leaked to /media/"
+            list(Path(_TMP_MEDIA).glob("signatures/**/*.png")), "a copy leaked to /media/"
         )
 
     def test_profile_returns_the_owner_only_path(self):
@@ -340,8 +341,7 @@ ONE_UPLOAD_A_DAY = {
     REST_FRAMEWORK=ONE_UPLOAD_A_DAY,
 )
 class UploadThrottleTests(APITestCase):
-    """One rate over everything that puts a file on disk: a loop on any of them fills it, and a
-    full disk stops SQLite writes too."""
+    """One rate over everything that puts a file on disk: a loop on any of them fills it."""
 
     def setUp(self):
         cache.clear()  # scoped-throttle history lives in the default cache
