@@ -21,7 +21,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nginx \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
 
-# The lock is hashed, so pip verifies every download. SQLite is Python's stdlib: nothing to install.
+# The lock is hashed, so pip verifies every download. psycopg-binary brings its own libpq.
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
@@ -33,11 +33,10 @@ COPY --from=spa /spa/dist ./spa
 # is needed for it, and none enters the image. Its RELEASE, SECRET_KEY and the rest come at run time.
 RUN DEBUG=1 python manage.py collectstatic --noinput
 
-# Mount points, owned by the app user. A fresh named volume copies this ownership, so the database
-# can write without root. /data is a directory because SQLite puts -wal/-shm files next to the file.
+# The uploads' mount point, owned by the app user.
 RUN useradd --system --uid 10001 --home-dir /app jac \
-    && mkdir -p /data /files /backup \
-    && chown jac:jac /data /files /backup
+    && mkdir -p /files \
+    && chown jac:jac /files
 USER jac
 
 # Last, so a new commit only rebuilds this layer.

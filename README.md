@@ -49,12 +49,8 @@ machine wrote, and a grounding check flags claims your career database doesn't s
 | --- | --- |
 | Backend | Django 6, DRF, Channels, Celery, allauth headless (MFA + passkeys) |
 | Frontend | React 19, Vite, TanStack Router / Query / Form, Tailwind v4, shadcn/ui, react-pdf |
-| Data | SQLite in WAL mode, in dev and prod; Valkey for broker, channel layer and cache |
+| Data | Postgres in dev, the test suite, CI and prod; Valkey for broker, channel layer and cache |
 | AI | Ollama behind a URL; Anthropic and OpenAI on the user's key |
-
-SQLite in production is deliberate: a tiny read-mostly box, and prod runs the engine the test suite
-runs. The reasoning, and the settings that make several writing processes safe, are in
-[guide 03](.claude/plans/to-do/03_[backend]-prod-readiness.md).
 
 ## Run it (dev)
 
@@ -62,6 +58,8 @@ runs. The reasoning, and the settings that make several writing processes safe, 
 pyenv virtualenv 3.12 jac && pyenv local jac
 pip install -r requirements.txt
 echo DEBUG=1 > backend/.env.local      # without a DEBUG variable, the app runs in production mode
+brew services start postgresql@18
+createdb jac                           # the default: a local server, over its socket
 
 cd backend
 python manage.py migrate
@@ -105,9 +103,9 @@ docker buildx build --platform linux/amd64 --build-arg RELEASE=$(git rev-parse -
 ```
 
 It runs on any box with Docker behind a TLS proxy: [`.env.example`](.env.example) documents every
-variable, and a test keeps it honest. Migrations are a deploy step (`./migrate`), and `./snapshot`
-writes a consistent copy of the database. This instance runs on a homelab; the only file that knows
-is [`deploy/compose.lab.yaml`](deploy/compose.lab.yaml).
+variable, and a test keeps it honest. Migrations are a deploy step (`./migrate`). Postgres and Valkey
+stay outside the stack, behind `DATABASE_URL` and `REDIS_URL`. This instance runs on a homelab; the
+only file that knows is [`deploy/compose.lab.yaml`](deploy/compose.lab.yaml).
 
 ## License
 

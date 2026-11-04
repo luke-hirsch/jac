@@ -1,10 +1,10 @@
 # Runs on any box with Docker behind a TLS proxy: nothing here knows where it's hosted. A proxy reaches
 # `web` on port 8000. Add a host's specifics with an override (see deploy/compose.lab.yaml); on a
-# plain rented box that's `ports: ["127.0.0.1:8000:8000"]` under `web`. Valkey is not in here:
-# REDIS_URL points at one.
+# plain rented box that's `ports: ["127.0.0.1:8000:8000"]` under `web`. Postgres and Valkey are not
+# in here: DATABASE_URL and REDIS_URL point at them.
 #
-# Next to this file: `.env` (from .env.example, chmod 600), and `files/` + `backup/` writable by
-# uid 10001 on Linux.
+# Next to this file: `.env` (from .env.example, chmod 600), and `files/` writable by uid 10001 on
+# Linux.
 name: jac
 
 x-logging: &logging
@@ -18,9 +18,8 @@ x-app: &app
   build: .
   restart: unless-stopped
   logging: *logging
-  env_file: config/.env
+  env_file: .env
   volumes:
-    - data:/data
     - ./files:/files
 
 x-worker: &worker
@@ -36,14 +35,10 @@ x-worker: &worker
 
 services:
   # nginx + the built SPA, /static/, /media/ and private files; everything else goes to `app`. This
-  # is what a proxy talks to. It also mounts the backup folder: `docker compose exec web ./snapshot`.
+  # is what a proxy talks to.
   web:
     <<: *app
     command: ["./serve-web"]
-    volumes:
-      - data:/data
-      - ./files:/files
-      - ./backup:/backup
     depends_on:
       - app
     healthcheck:
@@ -133,6 +128,3 @@ services:
       - /tmp/celerybeat-schedule
       - -l
       - info
-
-volumes:
-  data:
