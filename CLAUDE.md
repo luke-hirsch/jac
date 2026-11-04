@@ -27,7 +27,7 @@ portfolio is the product; jac feeds it.
 | `backend/llm_connector/` | reusable multi-provider LLM connector with per-user encrypted configs                 |
 | `backend/spa/`           | portfolio / per-visitor profile app                                                   |
 | `frontend/`              | Vite + React + TypeScript SPA                                                         |
-| `deploy/`                | what the image carries (`snapshot`, `migrate`, nginx) + the lab's compose override    |
+| `deploy/`                | what the image carries (`migrate`, nginx) + the lab's compose override                |
 | `config/`                | the lab board's exports (untracked: they name lab addresses)                          |
 
 don't maintain a deep file tree here — it drifts. open the dir.
@@ -39,9 +39,10 @@ don't maintain a deep file tree here — it drifts. open the dir.
   mandatory email verification, admin MFA gate via middleware.
 - **frontend**: React 19 + Vite + TypeScript — TanStack Router/Query/Form/Table, Tailwind v4,
   shadcn/ui.
-- **db**: SQLite in dev **and** prod (decided 2026-10-22: tiny read-mostly box, prod runs the
-  engine the suite tests). WAL + `transaction_mode: IMMEDIATE` + 20 s timeout are load-bearing:
-  three processes write the one file. Path via `SQLITE_PATH`. See [[sqlite-in-prod]].
+- **db**: Postgres in dev, the suite, CI and prod (decided 2026-11-04: the lab already runs one, and
+  prod runs the engine the suite tests). URL via `DATABASE_URL`; unset on a laptop means its own
+  server over the socket. **The switch is on `backend/prod-readiness`, unmerged.** See
+  [[postgres-everywhere]].
 - **llm**: `llm_connector` app — providers for Anthropic, OpenAI and Ollama (= HirschAI);
   per-user configs with Fernet-encrypted keys. zero-cost server default is the `ollama` provider.
   - HirschAI defaults (`settings.HIRSCHAI`, env-overridable): chat/writer **`qwen3.5:9b`** ·
@@ -190,9 +191,9 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   it through `useRenderSpec`. Profile PATCHes write the `["profile"]` cache, so changes apply
   without a reload.
 
-- **The launch stack (2026-11-03, implemented by the AI, on branches, tests not run).** See "Current
-  phase". In one line each:
-  - **prod-readiness:** `DEBUG` off unless set (laptops: `backend/.env.local`), SQLite, hashed lock,
+- **The launch stack (2026-11-03, implemented by the AI, one commit on `main` since the repo was
+  recreated).** See "Current phase". In one line each:
+  - **prod-readiness:** `DEBUG` off unless set (laptops: `backend/.env.local`), Postgres, hashed lock,
     private uploads behind owner-checked views.
   - **remote model:** a model server that is off or waking is normal. Runs always queue, wait and say
     so, restart safely. No probes on page loads; env wins over the system row.
@@ -205,8 +206,8 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
   - **editor safety:** three-way draft merge (`lib/draft-merge.ts`), export saves first, leave guard.
   - **first run:** "Try it with a sample career" (`POST /api/jac/sample-career/`), a way out of the
     verify page, real signup errors, error states with retry, a11y + mobile fixes.
-  - **abuse limits:** an append-only daily counter, input caps, upload quota + throttle, mail limits
-    that hold, one chat stream per user, `ObjectJSONParser`.
+  - **abuse limits:** an append-only daily counter behind a row lock, input caps, upload quota +
+    throttle, mail limits that hold, one chat stream per user, `ObjectJSONParser`.
   - **portfolio privacy:** **a handle publishes nothing until its owner says so**
     (`portfolio_public`, default off; the site owner is always public; shared links keep working),
     unguessable application slugs, `sections_off` honoured, `?q=` out of the URL.
@@ -217,25 +218,21 @@ shipped (lean inventory — mechanism + _why_ live in the code and the linked me
 > granular, code-bearing plans for each item live in `.claude/plans/to-do/` (see "how we work").
 > `/wrap-up` refreshes this section at the end of a coding phase.
 
-> **Current phase — test the launch stack, then deploy.** On 2026-11-03 the AI implemented every open
-> guide on a **linear stack of branches**, unmerged and unpushed. **The test suites have not been run
-> on any of it**, only static checks plus a scripted run of the image (`.claude/handovers/
-> 2026-11-04-launch-stack-close-out.md` says exactly what). Merge order, each branch stacked on the one before:
-> `backen/prod-ready` → `backend/remote-model` → `fullstack/queues` → `infra/lab-image` →
-> `fullstack/legal-pages` → `infra/github-actions` → `frontend/editor-safety` → `fullstack/first-run`
-> → `fullstack/portfolio-privacy` → `backend/abuse-limits` → `docs/readme`. Nothing is deployed.
+> **Current phase — finish verifying the launch stack on Postgres, then deploy.** The launch stack the
+> AI implemented on 2026-11-03 landed on `main` as one commit when the repo was recreated on
+> 2026-11-04, which also purged the certificates from the public history. **CI is red on `main`.** The
+> fix is guide 03's Postgres amendment, implemented by the AI on `backend/prod-readiness`, unmerged and
+> unpushed. Lukas logged both suites clean on that branch; its Verification 3–8 are still open, and it
+> merges once they're logged. Nothing is deployed.
 >
 > **Hosting changed on 2026-11-03: the homelab replaces the VPS plan.** Guide 04 is the runbook now.
 >
 > **This is also a test of the board:** work from the exports + this repo, not the server repo or
-> the homelab skill, until Lukas lifts that ([[jac-on-the-lab]]).
->
-> **Urgent, outside any guide:** `backend/media/` is untracked now, but
-> `cv_attachments/01_Bachelorzeugnis.pdf` + `Zeugnis_Lukas.pdf` are still in the **public** history
-> (since `0478334`). The purge (filter-repo + force-push) is Lukas's call.
+> the homelab skill, until Lukas lifts that ([[jac-on-the-lab]]). The exports predate the Postgres
+> move, so the board's database answer needs flipping and a re-export.
 
 > **Reseed after pulling layout changes:** `python manage.py migrate && python manage.py
-> seed_system_defaults`. The layout spec the SPA renders from is the **media copy in the DB**, so an
+seed_system_defaults`. The layout spec the SPA renders from is the **media copy in the DB**, so an
 > unseeded change looks like an unimplemented feature.
 
 **Unverified on `main`** (merged without a logged click-through; start any related bug hunt from
@@ -250,10 +247,11 @@ these guides' Verification lists, in `done/`):
 
 **Launch track.** Implemented, each guide in `to-do/` awaiting its Results:
 
-3. **prod-readiness** (`[backend]-prod-readiness`).
+3. **prod-readiness** (`[backend]-prod-readiness`): includes the move to Postgres.
    **3b. remote model** (`[backend]-remote-model`). **3c. queues** (`[fullstack]-queues`).
-4. **lab deploy** (`[infra]-lab-deploy`): the repo side is done. **The rest is Lukas's: SSH, DNS, the
-   data move, the launch checklist.** It needs the lab's Caddy route + wildcard route first.
+4. **lab deploy** (`[infra]-lab-deploy`): the repo side is done. **The rest is Lukas's: the board's
+   re-export, SSH, DNS, the launch checklist.** Prod starts with an empty database. It needs the lab's
+   Caddy route + wildcard route first.
 5. **GitHub Actions** (`[infra]-github-actions`): part A done, part B dropped.
 6. **tower inference server** (`[infra]-tower-inference-server`, in `done/`): superseded, never built.
    Its Ollama tuning (flash attention + q8 cache, so the 9B model + the embedder fit 8 GB) moved to
@@ -356,6 +354,8 @@ testing adn merging still stays with the human.
   decision, run from the laptop through the lab's deploy script (per the board's exports).
 - **memory** (`/Users/lukas/.claude/projects/-Users-lukas-Coding-jac/memory/`) = durable
   cross-session facts the repo doesn't record. distilled, not a session log.
+- **`.claude/` is gitignored** since the repo was recreated: plans and handovers live on this machine
+  only, so `/wrap-up` commits nothing but this file.
 
 ## skills (slash commands)
 
@@ -370,3 +370,4 @@ checked into this repo. listed here because the working style above leans on the
   used to be separate `/update-claude`, `/handover`, and `/commit-message` skills.
 - **`/pickup`** — the inverse of wrap-up: read the latest handover + git state + open to-do plans
   and give the lay of the land when returning to a dormant project. read-only.
+- **`agents`** - use as many agents you like on a task if it benefits the time
