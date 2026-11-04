@@ -55,9 +55,8 @@ def has_career_entries(user: User) -> bool:
 def load_sample_career(user: User) -> dict[str, int]:
     """Load the fictional sample into `user`'s EMPTY career. Raises CareerNotEmpty otherwise.
 
-    The check runs twice: the first turns a refused request away without touching SQLite's one
-    write lock, the second is what makes a double click safe. BEGIN IMMEDIATE already serialises
-    these transactions on SQLite; the row lock does the same on an engine that has one.
+    The check runs twice: the first turns a refused request away without taking the row lock, the
+    second is what makes a double click safe.
     """
     if has_career_entries(user):
         raise CareerNotEmpty

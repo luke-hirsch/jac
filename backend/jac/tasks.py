@@ -36,7 +36,7 @@ from jac.cv import CV
 from jac.filter import GenerationError
 from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import AddressExtract
-from jac.models import GenerationRun, JobApplication, JobPostAddress, Mode
+from jac.models import GenerationRun, JobApplication, JobPostAddress, JobPosting, Mode
 from llm_connector.base import WAITING_STAGE, LLMTransportError, LLMUnavailable
 from llm_connector.client import retry_reporter, wait_for_compute
 from llm_connector.executor import Executor
@@ -69,6 +69,12 @@ _ADDRESS_FIELDS = (
     "email",
     "phone",
 )
+
+
+def _clipped(model, field: str, value: str) -> str:
+    """LLM output for a bounded column: Postgres refuses what doesn't fit, and one chatty address
+    line must not cost the run."""
+    return value[: model._meta.get_field(field).max_length]
 
 
 def _parse_deadline(value: str):
@@ -232,12 +238,14 @@ def generate_run(run_id: int) -> None:
             _progress(run, "reading posting")
 
             extracted = AddressExtract(jp.posting_text, executor=executor).extract()
-            jp.title = extracted.get("title", "") or jp.title
-            jp.language = extracted.get("language", "en") or "en"
+            jp.title = _clipped(JobPosting, "title", extracted.get("title", "")) or jp.title
+            jp.language = _clipped(JobPosting, "language", extracted.get("language", "en")) or "en"
             jp.save(update_fields=["title", "language", "updated_at"])
             addr, _ = JobPostAddress.objects.update_or_create(
                 job_posting=jp,
-                defaults={f: extracted.get(f, "") for f in _ADDRESS_FIELDS},
+                defaults={
+                    f: _clipped(JobPostAddress, f, extracted.get(f, "")) for f in _ADDRESS_FIELDS
+                },
             )
             deadline = _parse_deadline(extracted.get("deadline", ""))
             if deadline:

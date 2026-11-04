@@ -9,6 +9,7 @@ import sys
 
 import redis
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.db.models import F
 from django.utils import timezone
@@ -52,6 +53,13 @@ def daily_generation_cap() -> int | None:
     """The `generation` throttle's number, as the one daily budget. None = no cap configured."""
     rate = settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"].get("generation")
     return int(rate.split("/")[0]) if rate else None
+
+
+def lock_generation_budget(user) -> None:
+    """Hold this user's budget until the transaction ends. Call it first inside the `atomic()` that
+    checks and spends: under READ COMMITTED parallel requests all read the same count, so without
+    the row lock every one of them could take the last slot."""
+    User.objects.select_for_update().get(pk=user.pk)
 
 
 def generation_budget_left(user) -> int:
