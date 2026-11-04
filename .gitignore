@@ -33,6 +33,7 @@ dump.*
 backend/media/
 backend/private_media/
 backend/staticfiles/
+/files/
 
 # The board's exports name lab addresses: they stay on this machine
 config/*lab*
