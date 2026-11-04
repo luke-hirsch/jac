@@ -1,0 +1,138 @@
+# Runs on any box with Docker behind a TLS proxy: nothing here knows where it's hosted. A proxy reaches
+# `web` on port 8000. Add a host's specifics with an override (see deploy/compose.lab.yaml); on a
+# plain rented box that's `ports: ["127.0.0.1:8000:8000"]` under `web`. Valkey is not in here:
+# REDIS_URL points at one.
+#
+# Next to this file: `.env` (from .env.example, chmod 600), and `files/` + `backup/` writable by
+# uid 10001 on Linux.
+name: jac
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app: &app
+  image: ${JAC_IMAGE:-jac:current}
+  build: .
+  restart: unless-stopped
+  logging: *logging
+  env_file: config/.env
+  volumes:
+    - data:/data
+    - ./files:/files
+
+x-worker: &worker
+  <<: *app
+  # SIGQUIT, not the default SIGTERM: Celery's soft shutdown only runs on the way to a cold one. A
+  # running job gets CELERY_WORKER_SOFT_SHUTDOWN_TIMEOUT (4 min), then goes straight back on the
+  # queue. After SIGTERM + a kill it would sit unseen until the visibility timeout (60 min).
+  stop_signal: SIGQUIT
+  stop_grace_period: 5m
+  environment:
+    # Web and workers may carry different keys for one model server.
+    HIRSCHAI_API_KEY: ${HIRSCHAI_WORKER_API_KEY:-${HIRSCHAI_API_KEY:-}}
+
+services:
+  # nginx + the built SPA, /static/, /media/ and private files; everything else goes to `app`. This
+  # is what a proxy talks to. It also mounts the backup folder: `docker compose exec web ./snapshot`.
+  web:
+    <<: *app
+    command: ["./serve-web"]
+    volumes:
+      - data:/data
+      - ./files:/files
+      - ./backup:/backup
+    depends_on:
+      - app
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"
+      interval: 15s
+      retries: 5
+
+  # daphne: Django, the API and the WebSockets.
+  app:
+    <<: *app
+
+  # The model server's single lane.
+  worker-ai:
+    <<: *worker
+    command:
+      - celery
+      - -A
+      - lukehirsch
+      - worker
+      - -Q
+      - jac-ai
+      - -c
+      - "1"
+      - -n
+      - ai@%h
+      - --max-tasks-per-child=50
+      - -l
+      - info
+
+  # Runs on a user's own commercial key: minutes long, but no model server to wait for.
+  worker-cloud:
+    <<: *worker
+    command:
+      - celery
+      - -A
+      - lukehirsch
+      - worker
+      - -Q
+      - jac-cloud
+      - -c
+      - "2"
+      - -n
+      - cloud@%h
+      - --max-tasks-per-child=50
+      - -l
+      - info
+
+  # Short AI jobs somebody is waiting for. They may sleep in their slot while the model server wakes.
+  worker-quick:
+    <<: *worker
+    command:
+      - celery
+      - -A
+      - lukehirsch
+      - worker
+      - -Q
+      - jac-quick
+      - -c
+      - "2"
+      - -n
+      - quick@%h
+      - --max-tasks-per-child=50
+      - -l
+      - info
+
+  # Mail and housekeeping, so a verification code never waits behind AI. Also the one scheduler.
+  worker-mail:
+    <<: *worker
+    command:
+      - celery
+      - -A
+      - lukehirsch
+      - worker
+      - -Q
+      - jac-mail
+      - -c
+      - "1"
+      - -n
+      - mail@%h
+      - --max-tasks-per-child=200
+      - -B
+      - -s
+      - /tmp/celerybeat-schedule
+      - -l
+      - info
+
+volumes:
+  data:

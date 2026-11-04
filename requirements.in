@@ -1,0 +1,23 @@
+# Top-level dependencies. Edit THIS file, then regenerate the lock (uv resolves it for every
+# platform, so the Mac and the linux/amd64 image install from the same file):
+#   uv pip compile --universal --python-version 3.12 --generate-hashes -o requirements.txt requirements.in
+# Install from the lock: pip install -r requirements.txt  (hashes are checked automatically)
+
+# Django
+celery
+channels
+channels-redis      # CHANNEL_LAYERS is channels_redis.pubsub (settings.py), never the core layer
+daphne
+Django[argon2]      # the extra pulls argon2-cffi — see PASSWORD_HASHERS in settings.py
+django-allauth[mfa]
+django-cors-headers
+django-filter
+djangorestframework
+drf-spectacular
+Pillow
+qdrant-client
+redis
+
+# LLM provider SDKs
+anthropic
+openai

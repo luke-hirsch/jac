@@ -1,0 +1,313 @@
+{# DRAFT: not legal advice; review before the DNS goes public #}
+{% extends "spa/legal/base.html" %}
+{% block content %}
+<p>
+  Diese Erklärung sagt, welche personenbezogenen Daten dieser Dienst verarbeitet, wozu und wie lange.
+  Sie gilt für alle Adressen unter {{ base_domain }}: die Startseite, die Anwendung auf
+  app.{{ base_domain }} und die Portfolios auf &lt;name&gt;.{{ base_domain }}.
+</p>
+
+<h2>1. Verantwortlicher</h2>
+{% if operator %}
+<p>
+  {{ operator.name }}, Anschrift siehe <a href="/legal/imprint/">Impressum</a>.<br />
+  E-Mail: <a href="mailto:{{ operator.email }}">{{ operator.email }}</a>
+</p>
+{% else %}
+<p class="warn">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
+{% endif %}
+<p>Der Dienst ist kostenlos und nicht kommerziell.</p>
+
+<h2>2. Wo der Dienst läuft</h2>
+{# TODO(Lukas): sign the data processing agreements (AV-Vertrag) with IONOS and Strato, then keep the word "Auftragsverarbeiter" below. #}
+{# TODO(Lukas): does the forwarding server log connections? The repo doesn't show it. If it does, state what and for how long here. #}
+{# TODO(Lukas): Cloudflare is the plan, not yet live. Confirm this paragraph when the DNS moves, and add the safeguard for the US transfer. #}
+<p>
+  Die Anwendung, die Datenbank und alle hochgeladenen Dateien liegen auf einem Mac mini des
+  Betreibers, das KI-Modell läuft auf einem weiteren Rechner des Betreibers mit Grafikkarte. Beide
+  Geräte stehen bei ihm zu Hause in Deutschland.
+</p>
+<p>
+  Von außen erreichbar ist der Dienst über einen bei IONOS gemieteten Server
+  (Auftragsverarbeiter). Er leitet die verschlüsselten Verbindungen nur weiter und entschlüsselt sie
+  nicht: Die TLS-Verschlüsselung endet erst auf dem Rechner des Betreibers. IONOS kann daher
+  IP-Adressen und Verbindungsdaten sehen, aber keine Inhalte. Rechtsgrundlage ist Art. 6 Abs. 1
+  lit. f DSGVO (sicherer und erreichbarer Betrieb).
+</p>
+<p>
+  Die DNS-Einträge verwaltet Cloudflare, ausschließlich als DNS-Dienst. Cloudflare sieht die
+  Namensanfragen der Resolver, nicht den Datenverkehr mit dieser Website.
+</p>
+
+<h2>3. Protokolle beim Aufruf</h2>
+{# TODO(Lukas): check the access log's fields against the proxy's config (not in this repo). This draft assumes IP, time, address, user agent. #}
+<p>
+  Der Reverse Proxy auf dem Rechner des Betreibers schreibt ein Zugriffsprotokoll mit IP-Adresse,
+  Zeitpunkt, aufgerufener Adresse und Browserkennung. Es wird nach 7 Tagen gelöscht. Die
+  Zugriffsstatistik des Betreibers speichert keine IP-Adressen, sondern nur einen Hash, der sich
+  täglich ändert. Der nginx-Server dahinter führt kein Zugriffsprotokoll.
+</p>
+<p>
+  Anwendungsprotokolle mit Fehlermeldungen und technischen Ereignissen liegen in Docker-Logdateien.
+  Diese sind auf dreimal 10 MB begrenzt und überschreiben sich dann selbst, eine feste Frist gibt es
+  deshalb nicht.
+</p>
+<p>
+  Um Missbrauch zu begrenzen, zählt die Anwendung Anfragen je Konto oder, ohne Anmeldung, je
+  IP-Adresse. Die IP-Adresse steht dabei im Schlüssel eines Zählers im Zwischenspeicher auf demselben
+  Rechner und verschwindet spätestens eine Stunde nach der letzten Anfrage.
+</p>
+<p>Rechtsgrundlage ist jeweils Art. 6 Abs. 1 lit. f DSGVO (Betrieb, Fehlersuche, Missbrauchsabwehr).</p>
+
+<h2>4. Cookies und Speicher im Browser</h2>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Art und Ort</th><th>Zweck</th><th>Dauer</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sessionid</code></td>
+        <td>Cookie, nur auf app.{{ base_domain }}</td>
+        <td>hält Sie angemeldet</td>
+        <td>höchstens 2 Wochen</td>
+      </tr>
+      <tr>
+        <td><code>csrftoken</code></td>
+        <td>Cookie, nur auf app.{{ base_domain }}</td>
+        <td>schützt Formulare vor Fälschung</td>
+        <td>bis zu 1 Jahr</td>
+      </tr>
+      <tr>
+        <td><code>portfolio.stamp.v1</code></td>
+        <td>localStorage, je Portfolio-Adresse</td>
+        <td>
+          zeigt Ihnen beim nächsten Besuch wieder Ihr Ergebnis: gewählte Themen und Stil oder der
+          aufgerufene Link, nicht Ihr Freitext
+        </td>
+        <td>bis Sie die Browserdaten löschen</td>
+      </tr>
+      <tr>
+        <td><code>appearance</code></td>
+        <td>localStorage</td>
+        <td>merkt sich Farbschema und Kontrast</td>
+        <td>bis Sie die Browserdaten löschen</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p>
+  All das ist für eine von Ihnen gewünschte Funktion unbedingt erforderlich (§ 25 Abs. 2 Nr. 2
+  TDDDG), deshalb gibt es keinen Cookie-Banner. Der Dienst lädt im Browser keine Analyse-Werkzeuge
+  und keine Skripte von Dritten. Schriften liegen auf dem eigenen Server.
+</p>
+
+<h2>5. Wenn Sie ein Portfolio besuchen</h2>
+<p>
+  Portfolios lassen sich ohne Konto ansehen. Der Fragebogen fragt nach Themen und Stil, dazu kommt
+  ein freiwilliges Freitextfeld. Daraus wird die Auswahl der angezeigten Inhalte. Rechtsgrundlage ist
+  Art. 6 Abs. 1 lit. f DSGVO (Inhalte passend zum Interesse des Besuchers zeigen).
+</p>
+<ul>
+  <li>
+    <strong>Sortierung:</strong> Ihr Freitext geht an das KI-Modell des Betreibers, um die Einträge
+    zu sortieren. Dieser Schritt speichert ihn nicht.
+  </li>
+  <li>
+    <strong>KI-Begrüßung:</strong> Für den kurzen Begrüßungstext wird Ihr Freitext kurz auf dem
+    Server gespeichert, als Auftrag für das KI-Modell. Die Eingabe wird gelöscht, sobald der Auftrag
+    endet. Den Auftrag selbst, mit dem erzeugten Text oder einer liegen gebliebenen Eingabe, löscht
+    ein nächtlicher Aufräumlauf, sobald er älter als einen Tag ist, also nach spätestens zwei Tagen.
+    Der Auftrag gehört technisch zum Konto des Portfolio-Inhabers, dem der Dienst Ihren Text aber
+    nicht anzeigt. Personenbezogene Angaben über Sie enthält er nur, wenn Sie welche hineinschreiben.
+  </li>
+  <li>
+    <strong>Adresse der Ergebnisseite:</strong> Ihr Freitext steht nicht in der Adresse. Er bleibt
+    nur im Browser-Tab und erreicht deshalb das Zugriffsprotokoll aus Abschnitt 3 nicht. Ein kopierter
+    Link enthält nur Ihre Themen und Ihren Stil.
+  </li>
+  <li>
+    <strong>Besuchszähler:</strong> Je Link und Tag speichert der Dienst nur eine Zahl, ohne
+    IP-Adresse und ohne Browserkennung. Der Inhaber des Links sieht die Summe.
+  </li>
+</ul>
+
+<h2>6. Daten in Ihrem Konto</h2>
+<p>
+  Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO (Nutzung des Dienstes), soweit nichts anderes
+  dasteht. Gespeichert wird alles bis zur Löschung des Kontos, außer wo die Tabelle eine andere Dauer
+  nennt.
+</p>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Bereich</th><th>Daten</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Konto</td>
+        <td>E-Mail-Adresse, Passwort (nur als Argon2-Hash), Name, Benutzername, Portfolio-Adresse</td>
+      </tr>
+      <tr>
+        <td>Profil</td>
+        <td>
+          Anzeigename, Telefon, Website, LinkedIn und GitHub, Postanschrift, Kurzbiografie,
+          Profilbild, Unterschrift, Zeitzone, Darstellung (Farbschema, Kontrast, Akzentfarbe),
+          E-Mail-Benachrichtigungen
+        </td>
+      </tr>
+      <tr>
+        <td>Anmeldung</td>
+        <td>
+          TOTP-Geheimnis, Passkeys und Wiederherstellungscodes, bis Sie sie entfernen. Eigene
+          API-Schlüssel für Anthropic oder OpenAI, verschlüsselt gespeichert, bis Sie sie entfernen.
+        </td>
+      </tr>
+      <tr>
+        <td>Sitzungen</td>
+        <td>
+          IP-Adresse und Browserkennung je Sitzung, sichtbar in Ihrer Sitzungsliste. Rechtsgrundlage
+          ist Art. 6 Abs. 1 lit. f DSGVO (Kontosicherheit). Einträge beendeter Sitzungen entfernt der
+          Dienst bei Ihrer nächsten Anmeldung, wenn Sie die Sitzungsliste öffnen, und spätestens mit
+          dem Konto.
+        </td>
+      </tr>
+      <tr>
+        <td>Werdegang</td>
+        <td>
+          Stellen, Projekte, Ausbildung (mit Noten), Zertifikate, Fähigkeiten, Sprachen, Orte und
+          Themen, dazu hochgeladene Anhänge wie Zeugnisse
+        </td>
+      </tr>
+      <tr>
+        <td>Bewerbungen</td>
+        <td>
+          Stellenausschreibungen samt daraus gelesener Kontaktdaten des Arbeitgebers, Bewerbungen,
+          erzeugte Lebensläufe und Anschreiben. Ausschreibungen bleiben bis zur Löschung des Kontos
+          gespeichert.
+        </td>
+      </tr>
+      <tr>
+        <td>Persönlichkeit</td>
+        <td>Antworten auf den Fragebogen, Schreibprobe und die daraus erzeugten Dossiers</td>
+      </tr>
+      <tr>
+        <td>Portfolio</td>
+        <td>Eigene Text- und Bildblöcke, Links, Besuchszahlen je Link und Tag</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>7. Was öffentlich ist</h2>
+<p>
+  Mit der Registrierung wird die Adresse &lt;name&gt;.{{ base_domain }} für Sie reserviert. Öffentlich
+  wird dort nichts, bis Sie Ihr Portfolio ausdrücklich veröffentlichen, und Sie können das jederzeit
+  zurücknehmen. Ein Link, den Sie selbst anlegen und weitergeben (zum Beispiel der QR-Code auf einer
+  Bewerbung), ist auch ohne Veröffentlichung erreichbar und zeigt nur seine Auswahl. Avatar und
+  Bilder von Portfolio-Blöcken liegen unter schwer zu erratenden, aber öffentlich abrufbaren
+  Adressen. Nach der Veröffentlichung kann jeder ohne Anmeldung sehen:
+</p>
+<ul>
+  <li>Ihren Anzeigenamen (ohne Anzeigenamen Ihren Namen oder Benutzernamen), Kurzbiografie und Profilbild;</li>
+  <li>Website, LinkedIn und GitHub, wenn Sie das im Profil einschalten;</li>
+  <li>
+    alle Einträge Ihres Werdegangs mit Titel, Arbeitgeber oder Einrichtung, Beschreibung, Zeitraum,
+    Link und Themen;
+  </li>
+  <li>Ihre aktiven Portfolio-Blöcke mit Bildern, und die Links, die Sie anlegen, mit Titel und Einleitung.</li>
+</ul>
+<p>
+  Nicht öffentlich sind E-Mail-Adresse, Telefon, Postanschrift, Noten, Unterschrift, Anhänge,
+  Bewerbungen und Ihre Antworten aus dem Persönlichkeitsfragebogen. Anhänge und Unterschrift liegen
+  in einem eigenen Speicher, den nur Sie über Ihr Konto erreichen.
+</p>
+
+<h2>8. KI-Verarbeitung</h2>
+<p>
+  <strong>HirschAI</strong> ist die Voreinstellung: ein Modell auf dem Rechner des Betreibers. Es ist
+  kein Dritter beteiligt. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO.
+</p>
+<p>
+  <strong>Anthropic und OpenAI</strong> (USA) kommen nur zum Einsatz, wenn Sie dort einen eigenen
+  API-Schlüssel hinterlegen und den Anbieter als Standard oder für einen Lauf wählen. Dann gehen die
+  für den Lauf nötigen Daten, etwa Werdegang, Ausschreibung und Dossiers, unter Ihrem Konto an diesen
+  Anbieter, der dafür auch seine Websuche nutzen kann. Das geschieht auf Ihre Anweisung, und es gilt
+  Ihr Vertrag mit dem Anbieter.
+</p>
+<p>
+  <strong>Kurze KI-Aufträge</strong> (eine Textstelle umschreiben oder kürzen, ein Dossier erstellen)
+  liegen als Auftrag auf dem Server, bis sie enden. Die Eingabe wird dann gelöscht. Den Auftrag mit
+  dem Ergebnis löscht ein nächtlicher Aufräumlauf, sobald er älter als einen Tag ist, also nach
+  spätestens zwei Tagen.
+</p>
+<p>
+  <strong>Protokoll:</strong> Je KI-Anfrage speichert der Dienst Anbieter, Modell, Token-Zahlen,
+  Dauer, eine etwaige Fehlermeldung und das zugehörige Konto, aber keinen Prompt- und keinen
+  Antworttext. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO (Kosten und Missbrauch im Blick
+  behalten). Die Zeilen werden nach {{ llm_log_retention_days }} Tagen gelöscht, oder früher mit dem
+  Konto.
+</p>
+
+<h2>9. E-Mail</h2>
+{# TODO(Lukas): spa/models.py has email_reminders default=True, so the run mail is on until switched off (opt-out), not opt-in. Flip the default, or keep this paragraph as written. #}
+<p>
+  Der Dienst schickt Ihnen Bestätigungscodes, Mails zum Zurücksetzen des Passworts und Hinweise zum
+  Konto. Endet ein Generierungslauf, der mindestens zwei Minuten gedauert hat, kommt außerdem eine
+  Mail mit dem Titel der Stelle und einem Link. Diese Benachrichtigung ist voreingestellt und lässt
+  sich im Profil abschalten.
+</p>
+<p>
+  Der Versand läuft über Strato (Auftragsverarbeiter). Eine Warteschlange auf dem Rechner des
+  Betreibers hält jede Mail nur, bis sie verschickt ist. Wird mit einer schon registrierten Adresse
+  ein Konto angelegt, geht an diese Adresse ein Hinweis; damit das höchstens einmal am Tag geschieht,
+  merkt sich der Zwischenspeicher die Adresse einen Tag lang. Rechtsgrundlage ist Art. 6 Abs. 1
+  lit. b DSGVO, für den Hinweis lit. f (Schutz vor Belästigung).
+</p>
+
+<h2>10. Sicherungen</h2>
+{# TODO(Lukas): state how long backups are kept and whether a copy leaves the mini. The number lives outside this repo, so this draft names none. #}
+<p>
+  Ein Sicherungslauf des Betreibers auf dem Mac mini legt eine konsistente Kopie der Datenbank und des
+  Upload-Ordners an. Gelöschte Daten bleiben in vorhandenen Sicherungen, bis diese turnusmäßig
+  überschrieben werden. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO (Schutz vor Datenverlust).
+</p>
+
+<h2>11. Empfänger und Drittländer</h2>
+{# TODO(Lukas): name the transfer safeguard for Anthropic, OpenAI and Cloudflare (Art. 44 ff. DSGVO) once your reviewer has looked at it. #}
+<p>
+  Daten gehen nur an die oben genannten Stellen: IONOS (Weiterleitung), Strato (E-Mail), Cloudflare
+  (DNS) und, wenn Sie das wählen, Anthropic oder OpenAI. Anthropic, OpenAI und Cloudflare sitzen in
+  den USA. Die Anwendung selbst, das KI-Modell und alle Dateien bleiben auf der Hardware des
+  Betreibers in Deutschland.
+</p>
+
+<h2>12. Löschung</h2>
+{# TODO(Lukas): known gap: a layout JSON replaced through PATCH /api/jac/layouts/<id>/ stays under application_layouts/ after account deletion (no per-user folder, and test_uploads pins the path). No UI uploads one today. #}
+<p>
+  Sie können Ihr Konto jederzeit selbst löschen (Account → Danger zone). Dabei verschwinden alle Daten
+  aus Abschnitt 6, Ihre KI-Protokollzeilen und alle Ihre Dateien: Anhänge, Unterschrift, Profilbild
+  und Portfolio-Bilder, auch früher ersetzte Fassungen. Bis dahin kann eine ersetzte Datei noch auf
+  dem Speicher liegen; löschen Sie einen einzelnen Anhang oder Block, ist seine Datei sofort weg.
+  Sicherungen folgen wie in Abschnitt 10 beschrieben.
+</p>
+
+<h2>13. Ihre Rechte</h2>
+{# TODO(Lukas): name the supervisory authority of your federal state. It reveals your state, so it's your call whether it goes here or stays with the general wording. #}
+<p>
+  Sie haben das Recht auf Auskunft (Art. 15 DSGVO), Berichtigung (Art. 16), Löschung (Art. 17),
+  Einschränkung der Verarbeitung (Art. 18), Datenübertragbarkeit (Art. 20) und Widerspruch gegen
+  Verarbeitungen auf Grundlage von Art. 6 Abs. 1 lit. f (Art. 21). Einen Datenexport gibt es auf
+  Anfrage per E-Mail an die Adresse aus Abschnitt 1. Außerdem können Sie sich bei einer
+  Datenschutz-Aufsichtsbehörde beschweren (Art. 77 DSGVO).
+</p>
+
+<h2>14. Pflichtangaben und automatisierte Entscheidungen</h2>
+<p>
+  Für ein Konto braucht der Dienst nur E-Mail-Adresse und Passwort, alles andere ist freiwillig. Ein
+  Portfolio lässt sich ohne Angaben ansehen. Der Dienst trifft über Sie keine automatisierten
+  Entscheidungen im Sinne von Art. 22 DSGVO.
+</p>
+
+<p>Stand: November 2026</p>
+{% endblock %}

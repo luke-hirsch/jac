@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- nginx fills this in at run time (deploy/image/spa.inc); lib/host.ts reads it. -->
+    <meta name="jac-base-domain" content="__BASE_DOMAIN__" />
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>lukehirsch</title>
+    <script>
+      // Pre-paint: a React effect runs after the first frame, which is a white flash on
+      // every load in dark mode. Hand-inlined mirror of lib/appearance.ts themeClasses() —
+      // change one, change the other.
+      (function () {
+        try {
+          var a = JSON.parse(localStorage.getItem("appearance") || "{}");
+          var dark =
+            a.theme === "dark" ||
+            (a.theme !== "light" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+          if (a.contrast === "high")
+            document.documentElement.classList.add("contrast-high");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

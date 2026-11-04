@@ -1,0 +1,46 @@
+{# DRAFT: not legal advice; review before the DNS goes public #}
+{% extends "spa/legal/base.html" %}
+{% block content %}
+{# TODO(Lukas): § 5 Abs. 1 Nr. 2 DDG wants quick direct contact besides email: fill the phone field in the operator's profile, or decide with your reviewer what else serves. #}
+{# TODO(Lukas): does § 18 Abs. 2 MStV apply (journalistic-editorial content)? This draft assumes not; if it does, add its formula with name and address from the operator block. #}
+{# TODO(Lukas): confirm the languages you take notices in (Art. 11 + 12 DSA); this draft says German and English. #}
+{% if operator %}
+<h2>Angaben gemäß § 5 DDG</h2>
+<address>
+  {{ operator.name }}<br />
+  {{ operator.street }}<br />
+  {% if operator.address_line2 %}{{ operator.address_line2 }}<br />{% endif %}
+  {{ operator.zip }} {{ operator.city }}<br />
+  {{ operator.country }}
+</address>
+
+<h2>Kontakt</h2>
+<p>
+  E-Mail: <a href="mailto:{{ operator.email }}">{{ operator.email }}</a>
+  {% if operator.phone %}<br />Telefon: {{ operator.phone }}{% endif %}
+</p>
+
+<h2>Verantwortung für Inhalte</h2>
+<p>
+  Für die Inhalte dieser Website ist {{ operator.name }} verantwortlich, soweit sie nicht von
+  Nutzern stammen. Portfolios unter <code>&lt;name&gt;.{{ base_domain }}</code> sind eigene Inhalte
+  der Nutzer, die sie angelegt haben. Der Betreiber stellt dafür nur den Dienst bereit und prüft
+  diese Inhalte nicht vorab.
+</p>
+
+<h2>Rechtswidrige Inhalte melden</h2>
+<p>
+  Kontaktstelle für Meldungen, für Nutzer und für Behörden (Art. 11 und 12 DSA) ist die oben
+  genannte E-Mail-Adresse, auf Deutsch oder Englisch. Bitte nennen Sie die genaue Adresse des
+  Inhalts und begründen Sie, warum er rechtswidrig ist, und geben Sie Ihren Namen und Ihre
+  E-Mail-Adresse an (Art. 16 DSA).
+</p>
+<p>
+  Der Betreiber prüft jede Meldung und teilt Ihnen das Ergebnis mit. Rechtswidrige Inhalte entfernt
+  er oder sperrt den Zugang zu ihnen. Näheres steht in den
+  <a href="/legal/terms/">Nutzungsbedingungen</a>.
+</p>
+{% else %}
+<p class="warn">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,181 @@
+# Plain http on 8000: TLS ends at a proxy in front of this (Caddy on the lab, anything on a rented
+# box). Runs as the image's unprivileged user, hence the /tmp paths.
+worker_processes auto;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    server_tokens off;
+    # The proxy in front keeps the access log. One place holding visitors' addresses is enough.
+    access_log off;
+
+    client_body_temp_path /tmp/nginx-body;
+    proxy_temp_path /tmp/nginx-proxy;
+    fastcgi_temp_path /tmp/nginx-fastcgi;
+    uwsgi_temp_path /tmp/nginx-uwsgi;
+    scgi_temp_path /tmp/nginx-scgi;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    upstream app {
+        server @APP_UPSTREAM@;
+    }
+
+    # Handle portfolios stay out of search engines; the app's SPA has nothing to index either way.
+    map $host $spa_robots {
+        default "noindex";
+        app.@BASE_DOMAIN@ "";
+    }
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    # Only the proxy can reach this container, so its word on the scheme stands. $scheme here is
+    # always http: passing that would make Django's SSL redirect loop forever.
+    map $http_x_forwarded_proto $forwarded_proto {
+        default $http_x_forwarded_proto;
+        '' $scheme;
+    }
+
+    # The real client: the last address in X-Forwarded-For that isn't a private network. $remote_addr
+    # alone would be the proxy for every visitor, and one attacker could rate-limit everyone out.
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
+    set_real_ip_from 100.64.0.0/10;
+    set_real_ip_from fc00::/7;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    # ── unknown hosts: health checks over the container network, nothing else ────────
+    server {
+        listen 8000 default_server;
+        server_name _;
+
+        # Whatever Host the checker sends, Django sees one it allows. /health/queues only answers
+        # here: a public host has no route to it.
+        location = /health/ {
+            proxy_pass http://app;
+            proxy_set_header Host @BASE_DOMAIN@;
+        }
+        location = /health/queues {
+            proxy_pass http://app;
+            proxy_set_header Host @BASE_DOMAIN@;
+        }
+        location / {
+            return 444;
+        }
+    }
+
+    # ── apex: the Django-rendered SEO landing ────────────────────────────────────────
+    server {
+        listen 8000;
+        server_name @BASE_DOMAIN@ www.@BASE_DOMAIN@;
+
+        location = / {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location = /health/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /legal/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /media/ {
+            include /app/media.inc;
+        }
+        location / {
+            return 302 https://app.@BASE_DOMAIN@$request_uri;
+        }
+    }
+
+    # ── app: the authed SPA + its same-origin API ────────────────────────────────────
+    server {
+        listen 8000;
+        server_name app.@BASE_DOMAIN@;
+        root /app/spa;
+
+        location /api/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+            # Attachment uploads: the serializer caps at 10 MB; multipart adds a little.
+            client_max_body_size 12m;
+            # The chat streams for up to 2 minutes, and a provider check waits on the user's API.
+            proxy_read_timeout 300s;
+            # The chat's stream is also marked X-Accel-Buffering: no.
+        }
+        location /_allauth/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /admin/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /legal/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /ws/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            # A run can wait for compute between events; the socket reconnects past this anyway.
+            proxy_read_timeout 60m;
+        }
+        location /static/ {
+            alias /app/staticfiles/;
+            expires 7d;
+            add_header X-Content-Type-Options nosniff always;
+        }
+        location /media/ {
+            include /app/media.inc;
+        }
+        # Private uploads: reachable ONLY via X-Accel-Redirect from an owner-checked view. A browser
+        # asking for /_private/… directly gets a 404: `internal`.
+        location /_private/ {
+            internal;
+            alias /files/private/;
+            add_header X-Content-Type-Options nosniff always;
+            add_header Cache-Control "private, no-store" always;
+        }
+        include /tmp/spa.inc;
+    }
+
+    # ── handles: <user>.@BASE_DOMAIN@ — the public portfolios (noindex) ──────────────
+    server {
+        listen 8000;
+        server_name *.@BASE_DOMAIN@;
+        root /app/spa;
+        add_header X-Robots-Tag "noindex" always;
+
+        # Same-origin API: Django's resolve_owner() reads the handle from Host.
+        location /api/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /legal/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+        location /media/ {
+            include /app/media.inc;
+        }
+        include /tmp/spa.inc;
+    }
+}

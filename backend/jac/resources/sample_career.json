@@ -1,0 +1,125 @@
+{
+  "_note": "SAMPLE DATA. A fictional career for trying jac: Alex Muster does not exist, and neither do these employers or this university. Every job, project and education entry is marked (sample). Never send anything generated from it. Descriptions stay short because cv.py cuts them for the writer: job and project at 300 characters, education at 200.",
+  "locations": [{ "city": "Musterstadt", "country": "Germany" }],
+  "skills": [
+    {
+      "name": "Python",
+      "proficiency": "advanced",
+      "category": "technical",
+      "first_used": "2015-10-01",
+      "domains": ["IT"]
+    },
+    {
+      "name": "Django",
+      "proficiency": "advanced",
+      "category": "technical",
+      "first_used": "2019-01-15",
+      "domains": ["web development"],
+      "builds_on": ["Python"]
+    },
+    {
+      "name": "PostgreSQL",
+      "proficiency": "intermediate",
+      "category": "technical",
+      "first_used": "2018-09-01",
+      "domains": ["IT"]
+    },
+    {
+      "name": "React",
+      "proficiency": "intermediate",
+      "category": "technical",
+      "first_used": "2019-06-01",
+      "domains": ["web development"]
+    },
+    {
+      "name": "Docker",
+      "proficiency": "intermediate",
+      "category": "technical",
+      "first_used": "2021-03-01",
+      "domains": ["IT"]
+    },
+    {
+      "name": "Data analysis",
+      "proficiency": "advanced",
+      "category": "technical",
+      "first_used": "2018-09-01",
+      "domains": ["data science"]
+    },
+    {
+      "name": "Stakeholder communication",
+      "proficiency": "advanced",
+      "category": "soft"
+    },
+    {
+      "name": "Agile collaboration",
+      "proficiency": "advanced",
+      "category": "soft"
+    }
+  ],
+  "jobs": [
+    {
+      "title": "Software Engineer",
+      "company": "Beispiel Digital GmbH (sample)",
+      "location": "Musterstadt",
+      "job_type": "ft",
+      "started": "2021-03-01",
+      "ended": null,
+      "description": "- Builds and runs the customer portal of a mid-sized online shop with Django and PostgreSQL.\n- Cut the median page load from 2.1 s to 0.8 s.\n- Moved deployments to Docker-based CI, which took releases from monthly to weekly.",
+      "skills": [
+        "Python",
+        "Django",
+        "PostgreSQL",
+        "React",
+        "Docker",
+        "Agile collaboration"
+      ],
+      "domains": ["web development", "e-commerce"]
+    },
+    {
+      "title": "Data Analyst",
+      "company": "Muster Logistik GmbH (sample)",
+      "location": "Musterstadt",
+      "job_type": "ft",
+      "started": "2018-09-01",
+      "ended": "2021-02-28",
+      "description": "- Built SQL and Python reports for route planning across 40 depots.\n- Automated a weekly spreadsheet report, which saved the team about six hours a week.\n- Presented delivery figures to the operations leads every month.",
+      "skills": [
+        "Python",
+        "PostgreSQL",
+        "Data analysis",
+        "Stakeholder communication"
+      ],
+      "domains": ["logistics", "data science"]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Depot dashboard (sample)",
+      "job": "Data Analyst",
+      "started": "2019-06-01",
+      "ended": "2020-03-31",
+      "description": "A React dashboard showing delivery delays per depot, used daily by twelve dispatchers.",
+      "skills": ["React", "Data analysis"],
+      "domains": ["logistics"]
+    }
+  ],
+  "educations": [
+    {
+      "institution": "Hochschule Musterstadt (sample)",
+      "location": "Musterstadt",
+      "field_of_study": "Business Informatics (Wirtschaftsinformatik)",
+      "degree": "B.Sc.",
+      "degree_level": 3,
+      "grade": "1.7",
+      "started": "2015-10-01",
+      "ended": "2018-08-31",
+      "description": "Thesis on forecasting late deliveries from route data.",
+      "skills": ["Python", "Data analysis"],
+      "domains": ["IT"]
+    }
+  ],
+  "languages": [
+    { "name": "German", "fluency": "native" },
+    { "name": "English", "fluency": "professional" }
+  ]
+}

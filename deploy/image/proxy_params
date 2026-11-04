@@ -1,0 +1,7 @@
+# Host: Django's resolve_owner() reads the handle from it, and allauth uses it as the passkey RP ID.
+# X-Real-IP: daphne's REMOTE_ADDR (--proxy-headers-host). X-Forwarded-Proto: SECURE_PROXY_SSL_HEADER.
+# Each one is SET, not appended: a client can't smuggle its own value through.
+proxy_set_header Host $http_host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $forwarded_proto;

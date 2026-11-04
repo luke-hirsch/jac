@@ -1,0 +1,13 @@
+#!/bin/sh
+# nginx in front of daphne. The config is rendered at start, so the domain stays an env knob and the
+# image stays the same on any domain.
+set -e
+: "${BASE_DOMAIN:?set BASE_DOMAIN}"
+render() {
+    sed -e "s|@BASE_DOMAIN@|${BASE_DOMAIN}|g" \
+        -e "s|@APP_UPSTREAM@|${APP_UPSTREAM:-app:8000}|g" \
+        "/app/$1" > "/tmp/$2"
+}
+render nginx.conf.template nginx.conf
+render spa.inc spa.inc
+exec nginx -e /dev/stderr -c /tmp/nginx.conf -g 'daemon off;'

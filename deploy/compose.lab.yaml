@@ -1,0 +1,11 @@
+# The lab's additions to compose.yaml, and the only file in this repo that knows about the lab. On the
+# mini it goes next to compose.yaml as compose.override.yaml, which Compose merges on its own.
+services:
+  web:
+    # What Caddy and the board call it, over the network `lab`.
+    container_name: jac-web
+    networks: [default, lab]
+
+networks:
+  lab:
+    external: true

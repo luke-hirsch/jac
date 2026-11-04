@@ -1,0 +1,32 @@
+#!/usr/bin/env python
+"""Write a consistent copy of the SQLite database to /backup/db.sqlite3.
+
+Never copy the live file: in WAL mode the newest commits sit in the -wal file, so a `cp` can catch
+a half-written state. SQLite's backup API copies a consistent snapshot while the app keeps writing.
+Run it in a container that mounts /data and /backup: `docker compose exec web ./snapshot`.
+"""
+
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+TARGET = Path(os.environ.get("SNAPSHOT_DIR", "/backup")) / "db.sqlite3"
+PARTIAL = TARGET.with_suffix(".sqlite3.new")
+
+PARTIAL.unlink(missing_ok=True)
+# mode=rw, not the default rwc: a snapshot must never create an empty database.
+source = sqlite3.connect(f"file:{os.environ['SQLITE_PATH']}?mode=rw", uri=True)
+copy = sqlite3.connect(PARTIAL)
+with copy:
+    source.backup(copy)
+source.close()
+verdict = copy.execute("PRAGMA integrity_check").fetchone()[0]
+# The copy inherits the WAL flag, so opening it would need a writable -shm next to it. As a plain
+# rollback-journal file it opens anywhere; the app flips it back to WAL on restore.
+copy.execute("PRAGMA journal_mode=DELETE")
+copy.close()
+if verdict != "ok":
+    PARTIAL.unlink(missing_ok=True)
+    sys.exit(f"integrity_check: {verdict}")
+os.replace(PARTIAL, TARGET)

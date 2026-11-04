@@ -1,0 +1,8 @@
+#!/bin/sh
+# A deploy step, run once before the new version takes over: three containers starting at once must
+# not race each other. The old version may still be running, so add first and remove in a later
+# release. seed_system_defaults is part of it because the SPA renders layouts from the media copy in
+# the database: it needs /files mounted, and it's idempotent.
+set -e
+python manage.py migrate --noinput
+exec python manage.py seed_system_defaults

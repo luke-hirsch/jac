@@ -1,0 +1,5 @@
+# Django templates use {% %} / {{ }} tags that prettier's HTML parser doesn't
+# understand — it reflows long lines and splits tags across newlines (e.g.
+# `{% endif` / `%}`), which Django's tokenizer then can't parse. Keep prettier off
+# them so format-on-save can't produce an invalid template.
+backend/**/templates/
