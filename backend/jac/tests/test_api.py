@@ -7,6 +7,7 @@ the task_id CharField); the tower probe is mocked wherever resolution consults i
 """
 
 import json
+import threading
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -15,10 +16,11 @@ from asgiref.sync import async_to_sync
 from django.conf import settings as dj_settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
-from django.test import override_settings
+from django.db import connection
+from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from kombu.exceptions import OperationalError
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from jac import views as jac_views
 from jac.career_import import ENTRY_MODELS, wipe_career
@@ -219,7 +221,7 @@ class GenerationRunReadTests(APITestCase):
             {
                 "id", "job_application", "status", "stage", "error", "result",
                 "mode", "provider", "model", "params", "letter_tone",
-                "letter_focus", "posting_title", "created_at", "updated_at",
+                "letter_focus", "posting_title", "queue_ahead", "created_at", "updated_at",
             },
         )
         self.assertEqual(r.data["provider"], "anthropic")
@@ -412,6 +414,82 @@ class GenerationBudgetTests(APITestCase):
         task.apply_async.assert_not_called()
 
 
+class GenerationBudgetRaceTests(TransactionTestCase):
+    """The last slot, wanted by two requests at once. `atomic()` alone doesn't serialise them on
+    Postgres: under READ COMMITTED both read the same count, so the cap needs the row lock. Each
+    request waits for the other right after reading the budget. Without the lock both get there
+    and both see the slot; with it, the second can't read until the first has committed."""
+
+    # How long the request holding the lock waits for one that can't come.
+    WAIT_S = 0.3
+
+    def setUp(self):
+        cache.clear()  # the generations endpoint's throttle history
+        self.addCleanup(cache.clear)
+        self.user = make_user()
+        self.application = make_application(self.user)
+        DailyGenerationCount.objects.create(
+            user=self.user, day=timezone.now().date(), count=daily_generation_cap() - 1
+        )
+
+    def _race(self, url, body):
+        """POST `body` to `url` from two threads at once. Returns their status codes, sorted."""
+        barrier = threading.Barrier(2)
+
+        def read_then_wait(user):
+            left = generation_budget_left(user)
+            try:
+                barrier.wait(timeout=self.WAIT_S)
+            except threading.BrokenBarrierError:
+                pass
+            return left
+
+        statuses = []
+
+        def post():
+            client = APIClient()
+            client.force_authenticate(self.user)
+            try:
+                statuses.append(client.post(url, body, format="json").status_code)
+            finally:
+                connection.close()  # this thread's own connection
+
+        with (
+            patch("jac.views.generation_budget_left", read_then_wait),
+            patch("jac.views.generate_run") as task,
+        ):
+            _mock_enqueue(task)
+            threads = [threading.Thread(target=post) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+        return sorted(statuses)
+
+    def _assert_the_last_slot_went_once(self):
+        self.assertEqual(GenerationRun.objects.count(), 1)
+        self.assertEqual(
+            DailyGenerationCount.objects.get(user=self.user).count,
+            daily_generation_cap(),
+        )
+
+    def test_two_new_runs(self):
+        statuses = self._race(RUNS_URL, {"job_application": self.application.pk})
+        self.assertEqual(statuses, [201, 429])
+        self._assert_the_last_slot_went_once()
+
+    def test_two_new_applications(self):
+        # Both applications stand; one run waits for a click.
+        statuses = self._race(APPS_URL, {"posting_text": "A cook."})
+        self.assertEqual(statuses, [201, 201])
+        self._assert_the_last_slot_went_once()
+
+    def test_two_batches(self):
+        statuses = self._race(f"{APPS_URL}batch/", {"postings": ["A cook."]})
+        self.assertEqual(statuses, [201, 429])
+        self._assert_the_last_slot_went_once()
+
+
 class ApplicationDeleteTests(APITestCase):
     """The runs leave with the application. A task still computing would go on for nobody."""
 
@@ -489,7 +567,8 @@ class QueuePositionTests(APITestCase):
         self._run(age_s=30, status=GenerationRun.Status.running)
         self.assertEqual(runs_ahead(self._run(provider="anthropic", age_s=10)), 0)
         self._run(provider="anthropic", age_s=20, status=GenerationRun.Status.running)
-        self.assertEqual(runs_ahead(self._run(provider="openai", age_s=10)), 1)
+        # Both anthropic runs and not the ollama one: the commercial providers share a lane.
+        self.assertEqual(runs_ahead(self._run(provider="openai", age_s=5)), 2)
 
     def test_a_running_run_stands_behind_nobody(self):
         self._run(age_s=30)

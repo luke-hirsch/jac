@@ -8,6 +8,7 @@ celery
 channels
 channels-redis      # CHANNEL_LAYERS is channels_redis.pubsub (settings.py), never the core layer
 daphne
+dj-database-url     # DATABASE_URL -> DATABASES (settings.py)
 Django[argon2]      # the extra pulls argon2-cffi — see PASSWORD_HASHERS in settings.py
 django-allauth[mfa]
 django-cors-headers
@@ -15,6 +16,7 @@ django-filter
 djangorestframework
 drf-spectacular
 Pillow
+psycopg[binary]     # the Postgres driver; the extra brings its own libpq
 qdrant-client
 redis
 

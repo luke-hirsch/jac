@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -32,11 +31,13 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import EmailMultiAlternatives
-from django.db.utils import ConnectionHandler
-from django.test import RequestFactory, TestCase, override_settings
+from django.core.management import call_command
+from django.db import connection
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from django.utils.log import RequireDebugTrue
 from kombu.exceptions import OperationalError
+from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.throttling import BaseThrottle
 
@@ -48,6 +49,7 @@ from llm_connector.models import AiJob, LLMRequestLog
 # hash with?" — only this can.
 from lukehirsch import settings as production_settings
 from lukehirsch.mail import QueuedEmailBackend, message_to_dict
+from lukehirsch.parsers import ObjectJSONParser
 from lukehirsch.prod import (
     DEV_ENCRYPTION_KEY,
     DEV_SECRET_KEY,
@@ -337,6 +339,8 @@ PROD_ENV = {
     "SECRET_KEY": "q8Vn2Lk7Zr4Xt1Bw9Mc6Yp3Hf5Jd0Sg8Ae2Ui4Ko6Nm1Wl3Er5Ty7",
     "LLM_ENCRYPTION_KEY": "dGVzdC1rZXktbm90LXRoZS1kZXYta2V5LTEyMzQ1Njc=",
     "BASE_DOMAIN": "example.com",
+    # Never opened: settings only parse it. %40 is an encoded @ in the password.
+    "DATABASE_URL": "postgres://jac:not%40real@db.example.com:5433/jacprod",
     "DJANGO_SETTINGS_MODULE": "lukehirsch.settings",
 }
 
@@ -368,18 +372,17 @@ class ProdBootTests(TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_prod_env_yields_the_prod_values(self):
-        # Never opened: django.setup() doesn't connect.
-        sqlite_path = str(Path(tempfile.gettempdir()) / "jac-prod-probe.sqlite3")
         probe = (
             "import json, django; django.setup(); from django.conf import settings as s; "
+            "db = s.DATABASES['default']; "
             "print(json.dumps({"
             "'bodies': s.LLM_LOG_BODIES, 'accel': s.PRIVATE_MEDIA_ACCEL, "
             "'redirect': s.SECURE_SSL_REDIRECT, 'hsts': s.SECURE_HSTS_SECONDS, "
             "'static_root': str(s.STATIC_ROOT or ''), "
-            "'db_engine': s.DATABASES['default']['ENGINE'], "
-            "'db_name': str(s.DATABASES['default']['NAME'])}))"
+            "'db': [db['ENGINE'], db['NAME'], db['USER'], db['PASSWORD'], db['HOST'], "
+            "int(db['PORT'] or 0)]}))"
         )
-        r = _python("-c", probe, env={**_prod_env(), "SQLITE_PATH": sqlite_path})
+        r = _python("-c", probe, env=_prod_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         values = json.loads(r.stdout.strip().splitlines()[-1])
         self.assertIs(
@@ -390,11 +393,38 @@ class ProdBootTests(TestCase):
         self.assertGreater(values["hsts"], 0)
         self.assertTrue(values["static_root"])
         self.assertEqual(
-            values["db_engine"], "django.db.backends.sqlite3", "SQLite in prod too"
+            values["db"],
+            [
+                "django.db.backends.postgresql",
+                "jacprod",
+                "jac",
+                "not@real",
+                "db.example.com",
+                5433,
+            ],
         )
-        self.assertEqual(
-            values["db_name"], sqlite_path, "compose pins SQLITE_PATH to the db volume"
+
+    def test_prod_refuses_to_boot_without_a_database_url(self):
+        """It would otherwise try a laptop's local socket and fail on the first query, far from
+        the cause. The loader is patched out: `.env.local` is a laptop's file."""
+        env = {k: v for k, v in _prod_env().items() if k != "DATABASE_URL"}
+        probe = (
+            "import lukehirsch.prod as p; p.load_local_env = lambda path: None; "
+            "import django; django.setup()"
         )
+        r = _python("-c", probe, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("DATABASE_URL", r.stderr)
+
+    def test_an_empty_database_url_counts_as_unset(self):
+        """`.env.example` ships `DATABASE_URL=` empty, and that reaches the process as ''."""
+        probe = (
+            "import lukehirsch.prod as p; p.load_local_env = lambda path: None; "
+            "import django; django.setup()"
+        )
+        r = _python("-c", probe, env={**_prod_env(), "DATABASE_URL": ""})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("DATABASE_URL", r.stderr)
 
     def test_a_process_with_no_debug_variable_runs_in_production_mode(self):
         """Off unless something turns it on, so a forgotten variable can't put a public site in
@@ -432,56 +462,19 @@ class ProdBootTests(TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
 
-def _prod_connection(path):
-    """A connection built from the settings module's DATABASES (one config for dev and prod),
-    pointed at a scratch file. It gets its own ConnectionHandler, so the test run's database is
-    never touched."""
-    db = {**production_settings.DATABASES["default"], "NAME": str(path)}
-    return ConnectionHandler({"default": db})["default"]
+class PostgresTests(TestCase):
+    """Postgres in dev, the suite, CI and prod (guide 03): one engine, so what the suite passes is
+    what prod runs."""
 
+    def test_the_suite_runs_on_postgres(self):
+        self.assertEqual(connection.vendor, "postgresql")
 
-class SqliteProdTests(TestCase):
-    """SQLite in prod (guide 03, decision 1). Three processes write to one file (daphne and two
-    prefork worker children), so these options are load-bearing, not tuning."""
+    def test_connections_are_not_kept_open(self):
+        # Django's docs rule persistent connections out under ASGI: daphne would leak them.
+        self.assertEqual(production_settings.DATABASES["default"]["CONN_MAX_AGE"], 0)
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)  # registered first, so it runs after the closes
-        self.path = Path(tmp.name) / "jac.sqlite3"
-        self.conn = _prod_connection(self.path)
-        self.addCleanup(self.conn.close)
-
-    def test_writers_wait_for_the_lock(self):
-        # sqlite3's default is 5 s. A migrate or loaddata one-off holds the lock longer than that.
-        options = production_settings.DATABASES["default"].get("OPTIONS", {})
-        self.assertGreaterEqual(options.get("timeout", 5), 10)
-
-    def test_connections_run_in_wal_mode(self):
-        """WAL: readers never block the writer, and the writer never blocks readers. SQLite
-        ignores an unknown journal mode without an error, so only a real connection proves the
-        init_command took."""
-        with self.conn.cursor() as c:
-            c.execute("PRAGMA journal_mode")
-            self.assertEqual(c.fetchone()[0], "wal")
-            c.execute("PRAGMA synchronous")
-            self.assertEqual(c.fetchone()[0], 1, "NORMAL: safe under WAL")
-
-    def test_a_transaction_takes_the_write_lock_at_begin(self):
-        """The trap IMMEDIATE closes. Under the DEFERRED default, a transaction that reads first
-        and writes later (update_or_create in generate_run, jac/tasks.py) fails with "database
-        is locked" as soon as another process has written meanwhile, and no timeout helps.
-        IMMEDIATE takes the lock at BEGIN, so a second writer finds it held before anything was
-        written."""
-        # What atomic() does on SQLite (django/db/transaction.py, Atomic.__enter__).
-        self.conn.set_autocommit(
-            False, force_begin_transaction_with_broken_autocommit=True
-        )
-        with self.conn.cursor() as c:
-            c.execute("SELECT 1")  # a read; nothing written yet
-        other = sqlite3.connect(self.path, timeout=0, isolation_level=None)
-        self.addCleanup(other.close)
-        with self.assertRaisesMessage(sqlite3.OperationalError, "database is locked"):
-            other.execute("BEGIN IMMEDIATE")
+    def test_the_migrations_match_the_models(self):
+        call_command("makemigrations", check=True, dry_run=True, verbosity=0)
 
 
 def _lock_requirements():
@@ -519,7 +512,10 @@ class RequirementsLockTests(TestCase):
         for needed in (
             "channels-redis",
             "daphne",
+            "dj-database-url",
             "django",
+            "psycopg",
+            "psycopg-binary",
         ):
             self.assertIn(needed, names)
 
@@ -527,6 +523,7 @@ class RequirementsLockTests(TestCase):
         """Same insurance as ArgonProductionHasherTests: CHANNEL_LAYERS names the layer as a
         string, so a missing package only shows up when the first run publishes an event."""
         import channels_redis.pubsub  # noqa: F401
+        import psycopg  # noqa: F401
 
 
 class FileRootsTests(TestCase):
@@ -652,9 +649,28 @@ class EnvExampleTests(TestCase):
             "SECRET_KEY",
             "LLM_ENCRYPTION_KEY",
             "EMAIL_HOST_PASSWORD",
+            "DATABASE_URL",
         ):
             self.assertIn(key, entries)
             self.assertEqual(entries[key], "", f"{key} must stay empty in the example")
+
+
+class ObjectJSONParserTests(SimpleTestCase):
+    """Postgres can't store U+0000 in text or jsonb. A serializer's CharField refuses it already,
+    but a JSONField takes anything, so a crafted body would reach the database and come back as a
+    500. It's never real input, so it stops at the door."""
+
+    def test_a_nul_escape_is_refused(self):
+        with self.assertRaises(ParseError):
+            ObjectJSONParser().parse(io.BytesIO(b'{"letter_meta": {"x": "a\\u0000b"}}'))
+
+    def test_a_normal_body_still_parses(self):
+        body = ObjectJSONParser().parse(io.BytesIO(b'{"a": "caf\\u00e9"}'))
+        self.assertEqual(body, {"a": "café"})
+
+    def test_a_list_is_still_refused(self):
+        with self.assertRaises(ParseError):
+            ObjectJSONParser().parse(io.BytesIO(b"[1, 2]"))
 
 
 class QueuedEmailBackendTests(TestCase):

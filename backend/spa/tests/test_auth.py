@@ -141,33 +141,18 @@ class AuthFlowTests(TestCase):
 
     # --- stuck on the verify page: resend + start over ---
 
-    def _wait_out_the_resend_limit(self):
-        """One verification mail per address per 10 s, which `..._too_soon` covers."""
-        from django.core.cache import cache
-
-        cache.clear()
-
     def test_resend_mails_a_new_code_that_verifies(self):
         self._signup()
-        self._wait_out_the_resend_limit()
         mail.outbox.clear()
         resp = self.client.post(VERIFY_RESEND)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(self._verify_email().status_code, 200)
 
-    def test_resend_too_soon_is_a_429_and_the_first_code_still_works(self):
-        self._signup()
-        resp = self.client.post(VERIFY_RESEND)
-        self.assertEqual(resp.status_code, 429)
-        self.assertEqual(self._verify_email().status_code, 200)
-
     def test_resends_run_out_with_a_409(self):
         self._signup()
         for _ in range(2):
-            self._wait_out_the_resend_limit()
             self.assertEqual(self.client.post(VERIFY_RESEND).status_code, 200)
-        self._wait_out_the_resend_limit()
         self.assertEqual(self.client.post(VERIFY_RESEND).status_code, 409)
 
     def test_start_over_clears_the_pending_signup(self):
@@ -191,7 +176,6 @@ class AuthFlowTests(TestCase):
         which is why the verify page points at signing in. Signing in mails a fresh code."""
         self._signup()
         self.client.delete(LOGOUT)
-        self._wait_out_the_resend_limit()
         mail.outbox.clear()
         resp = self._login()
         self.assertEqual(resp.status_code, 401)

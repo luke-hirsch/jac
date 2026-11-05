@@ -12,10 +12,8 @@ no live tower in tests, mirroring the rank discipline.
 
 import json
 from datetime import date
-from importlib import import_module
 from unittest import mock
 
-from django.apps import apps as django_apps
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
@@ -282,14 +280,6 @@ class ProfilePublishTests(TestCase):
         self.client.force_login(_owner("jane", published=False))
         r = self._patch(portfolio_always_public=True)
         self.assertFalse(r.json()["portfolio_always_public"])
-
-
-class PublishMigrationTests(TestCase):
-    def test_everyone_already_here_stays_public(self):
-        jane = _owner("jane", published=False)
-        migration = import_module("spa.migrations.0011_userprofile_portfolio_public")
-        migration.publish_existing(django_apps, None)
-        self.assertTrue(UserProfile.objects.get(user=jane).portfolio_public)
 
 
 class MintHandleTests(TestCase):
@@ -740,7 +730,6 @@ class PublicPortfolioEndpointTests(TestCase):
             override_settings(PORTFOLIO_INTRO_WAIT_S=0),
             mock.patch("llm_connector.client.time.sleep"),
             self.assertLogs("spa.portfolio", level="WARNING"),
-            mock.patch("spa.ai_jobs.build_intro", return_value=""),
         ):
             run_ai_job(r.json()["id"])
         body = self.client.get(

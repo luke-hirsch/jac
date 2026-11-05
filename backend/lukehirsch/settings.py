@@ -8,9 +8,11 @@ Section order, top to bottom:
 import os
 from pathlib import Path
 
+import dj_database_url
 from celery.schedules import crontab
 
 from lukehirsch.prod import (
+    DEV_DATABASE_URL,
     DEV_ENCRYPTION_KEY,
     DEV_SECRET_KEY,
     env_bool,
@@ -140,29 +142,11 @@ ASGI_APPLICATION = "lukehirsch.asgi.application"
 # ─────────────────────────────────────────────────────────────────────────────
 # Database
 # ─────────────────────────────────────────────────────────────────────────────
-# SQLite in dev AND prod (guide 03, "SQLite in prod"): a tiny read-mostly box, and the suite runs
-# on this engine. Several processes write to the one file, and SQLite allows one writer at a
-# time: the OPTIONS are what make that safe, not tuning.
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        # SQLite writes -wal/-shm files next to it, so the directory has to be writable too.
-        "NAME": Path(os.getenv("SQLITE_PATH", BASE_DIR / "db.sqlite3")),
-        "OPTIONS": {
-            # BEGIN IMMEDIATE takes the write lock up front. Under the DEFERRED default, a
-            # transaction that reads first and writes later (update_or_create, the delete
-            # collector) fails with "database is locked" as soon as another process wrote
-            # meanwhile, and the timeout can't help.
-            "transaction_mode": "IMMEDIATE",
-            # Seconds a writer waits for the lock. sqlite3's default is 5; a migrate or loaddata
-            # one-off can hold the lock longer.
-            "timeout": 20,
-            # WAL: readers never block the writer, and the writer never blocks readers. NORMAL is
-            # safe under WAL: a power cut can lose the last commits but never corrupts the file.
-            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
-        },
-    }
-}
+# Postgres in dev, the suite, CI and prod: what the suite passes is what prod runs. `or`, not a
+# getenv default: `.env.example` ships `DATABASE_URL=` empty, and empty has to count as unset.
+DATABASE_URL = os.getenv("DATABASE_URL") or DEV_DATABASE_URL
+# parse() leaves CONN_MAX_AGE at 0, which is what Django's docs ask for under ASGI.
+DATABASES = {"default": dj_database_url.parse(DATABASE_URL)}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Redis: Channels, cache, Celery
@@ -427,7 +411,7 @@ REST_FRAMEWORK = {
         "ai-job": os.getenv("AI_JOB_RATE", "60/hour"),
         # Only a user who keeps emptying their career can get past the 409 to the writes.
         "sample-career": "20/hour",
-        # Anything that puts a file on disk, per account: a full disk stops SQLite writes too.
+        # Anything that puts a file on disk, per account.
         "uploads": os.getenv("UPLOAD_RATE", "100/day"),
     },
 }
@@ -561,4 +545,5 @@ verify_production_secrets(
     secret_key=SECRET_KEY,
     encryption_key=LLM_ENCRYPTION_KEY,
     base_domain=BASE_DOMAIN,
+    database_url=DATABASE_URL,
 )

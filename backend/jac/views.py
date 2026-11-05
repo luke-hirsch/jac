@@ -59,7 +59,12 @@ from jac.models import (
     Skill,
     TransitionError,
 )
-from jac.queues import count_generations, generation_budget_left, queue_for
+from jac.queues import (
+    count_generations,
+    generation_budget_left,
+    lock_generation_budget,
+    queue_for,
+)
 from jac.register import ADDRESS_FORMS
 from jac.serializers import (
     ApplicationBatchSerializer,
@@ -491,9 +496,10 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         """Create the application and queue its first generation run."""
         application = serializer.save()
         executor = default_executor(self.request.user)
-        # One write transaction (BEGIN IMMEDIATE): the check, the row and the count are one step,
-        # so parallel requests can't all take the last slot.
+        # The check, the row and the count are one step, so parallel requests can't all take the
+        # last slot.
         with transaction.atomic():
+            lock_generation_budget(self.request.user)
             if generation_budget_left(self.request.user) <= 0:
                 return  # over today's cap: the application stands, the run waits for a click
             run = GenerationRun.objects.create(
@@ -539,8 +545,9 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
                 {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
             )
         applications, runs = [], []
-        # The rows first, the broker after: an open transaction holds SQLite's one write lock.
+        # The rows first, the broker after: an open transaction holds the budget's row lock.
         with transaction.atomic():
+            lock_generation_budget(request.user)
             left = generation_budget_left(request.user)
             if len(data["postings"]) > left:
                 return Response(
@@ -886,6 +893,7 @@ class GenerationRunViewSet(
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
         with transaction.atomic():  # one step, see JobApplicationViewSet.perform_create
+            lock_generation_budget(request.user)
             if generation_budget_left(request.user) <= 0:
                 return Response(
                     {"detail": "You've reached today's generation limit."},

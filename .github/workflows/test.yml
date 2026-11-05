@@ -12,7 +12,16 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-24.04
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/jac
     services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
       # The channel layer is channels_redis.pubsub; the cancel test publishes through it.
       valkey:
         image: valkey/valkey:8-alpine
@@ -30,7 +39,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
       - run: pip install -r ../requirements.txt
-      - run: pip install ruff==0.17.3 # separate: the lock is hash-checked, ruff isn't in it
+      # Separate: the lock is hash-checked and neither is in it. Without tblib, the first failure
+      # under --parallel crashes the run (`cannot pickle 'traceback'`) and hides the rest.
+      - run: pip install ruff==0.17.3 tblib==3.2.2
       - run: ruff check .
       # No DEBUG here: `manage.py test` selects lukehirsch.test_settings, which sets it itself.
       # --skip llm: the live prompt tests need ollama / the tower answering.
