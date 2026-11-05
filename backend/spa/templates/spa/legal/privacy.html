@@ -47,7 +47,10 @@
   IP-Adresse steht dabei in einem Zwischenspeicher und verschwindet spätestens eine Stunde nach der
   letzten Anfrage.
 </p>
-<p>Rechtsgrundlage ist jeweils Art. 6 Abs. 1 lit. f DSGVO (Betrieb, Fehlersuche, Missbrauchsabwehr).</p>
+<p>
+  Rechtsgrundlage ist jeweils Art. 6 Abs. 1 lit. f DSGVO (Betrieb, Fehlersuche, Missbrauchsabwehr,
+  Zugriffsstatistik).
+</p>
 
 <h2>4. Cookies und Speicher im Browser</h2>
 <div class="table-wrap">
@@ -82,6 +85,14 @@
         <td>localStorage</td>
         <td>merkt sich Farbschema und Kontrast</td>
         <td>bis du die Browserdaten löschst</td>
+      </tr>
+      <tr>
+        <td><code>jac-pending-email</code></td>
+        <td>sessionStorage, nur auf app.{{ base_domain }}</td>
+        <td>
+          zeigt beim Bestätigen der Registrierung, an welche E-Mail-Adresse der Code ging
+        </td>
+        <td>bis zur Bestätigung, höchstens bis du den Tab schließt</td>
       </tr>
     </tbody>
   </table>
@@ -151,8 +162,8 @@
 <p>
   <strong>Sitzungen:</strong> Je Sitzung speichern wir IP-Adresse und Browserkennung, sichtbar in
   deiner Sitzungsliste. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO (Kontosicherheit). Einträge
-  beendeter Sitzungen entfernen wir bei deiner nächsten Anmeldung, wenn du die Sitzungsliste öffnest,
-  und spätestens mit dem Konto.
+  beendeter Sitzungen entfernen wir bei deiner nächsten Anmeldung oder wenn du die Sitzungsliste
+  öffnest, spätestens mit dem Konto.
 </p>
 
 <h2>7. Was öffentlich ist</h2>
@@ -172,7 +183,7 @@
   <li>Website, LinkedIn und GitHub, wenn du das im Profil einschaltest;</li>
   <li>
     alle Einträge deines Werdegangs mit Titel, Arbeitgeber oder Einrichtung, Beschreibung, Zeitraum,
-    Link und Themen;
+    Link, Themen und Niveau (bei Fähigkeiten und Sprachen);
   </li>
   <li>deine aktiven Portfolio-Blöcke mit Bildern, und die Links, die du anlegst, mit Titel und Einleitung.</li>
 </ul>
@@ -229,10 +240,10 @@
 {# TODO(Lukas): when nightly backups run, state their retention here. If a copy goes to an outside provider, add that category to section 11. #}
 <p>
   Vor jeder Aktualisierung sichern wir die Datenbank und behalten die letzten fünf Sicherungen.
-  Gelöschte Daten können darin liegen, bis fünf neuere Sicherungen sie ablösen. Diese nutzen wir nur
-  zur Wiederherstellung. Spielen wir eine zurück, löschen wir bereits gelöschte Konten erneut; dafür
-  merken wir uns nur die interne Nummer eines gelöschten Kontos. Rechtsgrundlage ist Art. 6 Abs. 1
-  lit. f DSGVO (Schutz vor Datenverlust).
+  Gelöschte Daten können darin liegen, bis fünf neuere Sicherungen sie ablösen. Die Sicherungen nutzen
+  wir nur zur Wiederherstellung. Spielen wir eine zurück, löschen wir bereits gelöschte Konten erneut;
+  dafür merken wir uns nur die interne Nummer eines gelöschten Kontos, bis keine Sicherung das Konto
+  mehr enthält. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO (Schutz vor Datenverlust).
 </p>
 
 <h2>11. Empfänger und Drittländer</h2>
@@ -271,9 +282,9 @@
 
 <h2>14. Pflichtangaben und automatisierte Entscheidungen</h2>
 <p>
-  Für ein Konto brauchen wir nur E-Mail-Adresse und Passwort, alles andere ist freiwillig. Ein
-  Portfolio lässt sich ohne Angaben ansehen. Der Dienst trifft über dich keine automatisierten
-  Entscheidungen im Sinne von Art. 22 DSGVO.
+  Für ein Konto brauchen wir nur E-Mail-Adresse und Passwort oder Passkey, alles andere ist
+  freiwillig. Ein Portfolio lässt sich ohne Angaben ansehen. Der Dienst trifft über dich keine
+  automatisierten Entscheidungen im Sinne von Art. 22 DSGVO.
 </p>
 
 <p>Stand: November 2026</p>
