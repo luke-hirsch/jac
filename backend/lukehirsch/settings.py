@@ -511,7 +511,8 @@ LEGAL_CONTACT_EMAIL = os.getenv("LEGAL_CONTACT_EMAIL", "")
 RESERVED_SUBDOMAINS = set(
     env_list(
         "RESERVED_SUBDOMAINS",
-        ["app", "api", "www", "admin", "static", "media", "mail", "ns", "ns1", "ns2"],
+        # "system": the inactive system user's handle used to hold it; nobody should claim it.
+        ["app", "api", "www", "admin", "static", "media", "mail", "ns", "ns1", "ns2", "system"],
     )
 )
 PORTFOLIO_ORIGIN_TEMPLATE = os.getenv(

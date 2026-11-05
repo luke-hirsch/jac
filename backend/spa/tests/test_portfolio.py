@@ -364,6 +364,12 @@ class HandleClaimTests(TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("handle", r.json())
 
+    def test_system_cannot_be_claimed(self):
+        # Handles are random now, so nothing holds "system" by accident any more.
+        r = self._patch("system")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("handle", r.json())
+
     def test_handle_taken_by_another_user_is_rejected(self):
         _owner("jane")  # handle "jane"
         r = self._patch("Jane")  # normalizes to "jane" → clash
