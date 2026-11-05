@@ -35,7 +35,7 @@ from llm_connector.probe import (
     note_hirschai_failed,
 )
 
-from ._helpers import TEST_HIRSCHAI, FakeAdapter, fake_row
+from ._helpers import TEST_HIRSCHAI, FakeAdapter, fake_row, keyed_row
 
 
 class CryptoTests(TestCase):
@@ -93,6 +93,15 @@ class LLMConfigModelTests(TestCase):
         cfg.api_key = ""
         self.assertEqual(cfg.api_key_encrypted, "")
         self.assertFalse(cfg.has_api_key)
+
+    def test_usable_needs_the_key_and_the_consent(self):
+        """`has_api_key` is the badge; `usable` decides whether data goes out."""
+        self.assertTrue(keyed_row(self.user).usable)
+        unstamped = keyed_row(self.other, consent=False)
+        self.assertTrue(unstamped.has_api_key)
+        self.assertFalse(unstamped.usable)
+        stamp_only = keyed_row(self.user, "openai", api_key="")
+        self.assertFalse(stamp_only.usable)
 
     def test_one_row_per_user_and_provider(self):
         LLMConfig.objects.create(user=self.user, provider="anthropic")
@@ -235,11 +244,22 @@ class ResolveConfigTests(TestCase):
         self.assertEqual(cfg["model"], "fake-override")
 
     def test_commercial_model_defaults_from_the_catalog(self):
-        row = LLMConfig(user=self.alice, provider="anthropic")
-        row.api_key = "sk-a"
-        row.save()
+        keyed_row(self.alice)
         cfg = resolve_config("anthropic", user=self.alice)
         self.assertEqual(cfg["model"], default_model("anthropic"))
+
+    def test_a_key_without_consent_never_leaves_the_database(self):
+        """The gate under every call on a user's key, the pipeline's included: it builds its
+        Executor from the run and never asks `resolve_executor` again."""
+        keyed_row(self.alice, consent=False)
+        with self.assertRaisesRegex(ExecutorError, "agree to the transfer"):
+            resolve_config("anthropic", user=self.alice)
+
+    def test_no_provider_with_an_unconsented_default_row_is_hirschai(self):
+        fake_row(self.alice, default=True, consent=False)
+        cfg = resolve_config(user=self.alice)
+        self.assertEqual(cfg["provider"], HIRSCHAI_PROVIDER)
+        self.assertNotIn("sk-test", cfg.values())
 
     def test_missing_commercial_row_raises(self):
         with self.assertRaises(ExecutorError):
@@ -260,12 +280,8 @@ class ResolveExecutorTests(TestCase):
     def setUpTestData(cls):
         cls.alice = User.objects.create(username="alice")
 
-    def _anthropic_row(self, *, key="sk-a", default=False):
-        row = LLMConfig(user=self.alice, provider="anthropic", default=default)
-        if key:
-            row.api_key = key
-        row.save()
-        return row
+    def _anthropic_row(self, *, key="sk-a", default=False, consent=True):
+        return keyed_row(self.alice, api_key=key, default=default, consent=consent)
 
     def test_hirschai_ignores_a_client_sent_model(self):
         ex = resolve_executor(self.alice, HIRSCHAI_PROVIDER, "sneaky-model")
@@ -280,6 +296,25 @@ class ResolveExecutorTests(TestCase):
         self._anthropic_row(key="")
         with self.assertRaises(ExecutorError):
             resolve_executor(self.alice, "anthropic")
+
+    def test_a_key_without_consent_counts_as_unconfigured(self):
+        """A key set in the admin, or older than the consent: re-saving it is the fix, so the
+        message says that rather than "no key"."""
+        self._anthropic_row(consent=False)
+        with self.assertRaises(ExecutorError) as raised:
+            resolve_executor(self.alice, "anthropic")
+        message = str(raised.exception)
+        self.assertIn("save the key again and agree to the transfer", message)
+        self.assertNotIn("No 'anthropic' API key", message)
+
+    def test_the_same_key_with_consent_runs(self):
+        self._anthropic_row()
+        ex = resolve_executor(self.alice, "anthropic")
+        self.assertEqual((ex.provider, ex.model), ("anthropic", default_model("anthropic")))
+
+    def test_blank_provider_skips_an_unconsented_default(self):
+        self._anthropic_row(default=True, consent=False)
+        self.assertTrue(resolve_executor(self.alice).is_hirschai)
 
     def test_commercial_model_defaults_and_validates_against_catalog(self):
         self._anthropic_row()
@@ -326,15 +361,17 @@ class DefaultExecutorTests(TestCase):
         cls.alice = User.objects.create(username="alice")
 
     def test_prefers_the_commercial_default_row(self):
-        row = LLMConfig(user=self.alice, provider="anthropic", default=True)
-        row.api_key = "sk-a"
-        row.save()
+        keyed_row(self.alice, default=True)
         ex = default_executor(self.alice)
         self.assertEqual(ex.provider, "anthropic")
         self.assertEqual(ex.model, default_model("anthropic"))
 
     def test_default_row_without_key_falls_through_to_hirschai(self):
         LLMConfig.objects.create(user=self.alice, provider="anthropic", default=True)
+        self.assertTrue(default_executor(self.alice).is_hirschai)
+
+    def test_default_row_without_consent_falls_through_to_hirschai(self):
+        keyed_row(self.alice, default=True, consent=False)
         self.assertTrue(default_executor(self.alice).is_hirschai)
 
     def test_no_reachability_gate(self):
@@ -423,6 +460,12 @@ class ExecutorObjectTests(TestCase):
         fake_row(self.alice, model="fake-1")
         Executor("fake", None, self.alice).complete("hi")
         self.assertEqual(FakeAdapter.instances[-1].config["model"], "fake-1")
+
+    def test_a_key_without_consent_sends_nothing(self):
+        fake_row(self.alice, consent=False)
+        with self.assertRaises(ExecutorError):
+            Executor("fake", None, self.alice).complete("hi")
+        self.assertEqual(FakeAdapter.instances, [])  # no adapter, so no request
 
     def test_web_search_routes_to_the_adapter(self):
         fake_row(self.alice, provider="fakesearch", model="fs-1")

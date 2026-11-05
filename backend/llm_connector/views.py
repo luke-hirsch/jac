@@ -96,7 +96,8 @@ class ExecutorListView(APIView):
 
     def get(self, request):
         own = {c.provider: c for c in LLMConfig.objects.filter(user=request.user)}
-        commercial_default = any(c.default and c.has_api_key for c in own.values())
+        # A key without the transfer consent counts as unconfigured: nothing runs on it.
+        commercial_default = any(c.default and c.usable for c in own.values())
         rows = [
             {
                 "provider": HIRSCHAI_PROVIDER,
@@ -117,9 +118,9 @@ class ExecutorListView(APIView):
                     "provider": provider,
                     "label": Provider(provider).label,
                     "self_hosted": False,
-                    "configured": bool(row and row.has_api_key),
+                    "configured": bool(row and row.usable),
                     "reachable": None,
-                    "default": bool(row and row.default and row.has_api_key),
+                    "default": bool(row and row.default and row.usable),
                     "models": models_for(provider),
                     "modes": ["standard", "high"],
                     "knobs": knobs_for(provider),

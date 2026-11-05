@@ -15,7 +15,7 @@ from llm_connector.catalog import CATALOG, models_for
 from llm_connector.conf import HIRSCHAI_PROVIDER, hirschai_row
 from llm_connector.models import LLMConfig, LLMRequestLog
 
-from ._helpers import TEST_HIRSCHAI, fake_row
+from ._helpers import TEST_HIRSCHAI, fake_row, keyed_row
 
 CONFIGS_URL = "/api/llm/configs/"
 EXECUTORS_URL = "/api/llm/executors/"
@@ -248,6 +248,13 @@ class PrewarmApiTests(APITestCase):
         self.assertEqual(r.status_code, 204)
         prewarm.assert_not_called()
 
+    def test_a_key_without_consent_runs_on_hirschai_so_it_wakes_the_tower(self):
+        keyed_row(self.user, default=True, consent=False)
+        self.client.force_login(self.user)
+        with patch(self.REQUEST) as prewarm:
+            self.client.post(self.URL)
+        prewarm.assert_called_once()
+
     def test_anonymous_is_refused(self):
         with patch(self.REQUEST) as prewarm:
             r = self.client.post(self.URL)
@@ -290,21 +297,26 @@ class ExecutorListApiTests(APITestCase):
             self.assertEqual(row["modes"], ["standard", "high"])
 
     def test_configured_default_marks_the_row_and_unmarks_hirschai(self):
-        row = LLMConfig(user=self.alice, provider="anthropic", default=True)
-        row.api_key = "sk-a"
-        row.save()
+        keyed_row(self.alice, default=True)
         rows = self._rows()
         self.assertTrue(rows["anthropic"]["configured"])
         self.assertTrue(rows["anthropic"]["default"])
         self.assertFalse(rows[HIRSCHAI_PROVIDER]["default"])
 
+    def test_a_key_without_consent_is_not_configured(self):
+        """Set in the admin, or older than the consent: nothing runs on it, so the panel
+        mustn't offer it, and HirschAI stays the default."""
+        keyed_row(self.alice, default=True, consent=False)
+        rows = self._rows()
+        self.assertFalse(rows["anthropic"]["configured"])
+        self.assertFalse(rows["anthropic"]["default"])
+        self.assertTrue(rows[HIRSCHAI_PROVIDER]["default"])
+
     def test_hirschai_is_default_without_a_commercial_default(self):
         self.assertTrue(self._rows()[HIRSCHAI_PROVIDER]["default"])
 
     def test_configs_do_not_leak_across_users(self):
-        row = LLMConfig(user=self.bob, provider="openai", default=True)
-        row.api_key = "sk-b"
-        row.save()
+        keyed_row(self.bob, "openai", api_key="sk-b", default=True)
         rows = self._rows()
         self.assertFalse(rows["openai"]["configured"])
         self.assertFalse(rows["openai"]["default"])
@@ -345,6 +357,13 @@ class LLMConfigCheckActionTests(APITestCase):
     def test_other_users_config_is_404(self):
         self.client.force_login(self.bob)
         self.assertEqual(self._check(self.row.pk).status_code, 404)
+
+    def test_a_key_without_consent_is_not_tried(self):
+        row = fake_row(self.alice, provider="fakesearch", consent=False)
+        r = self._check(row.pk)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["ok"])
+        self.assertIn("agree to the transfer", r.data["error"])
 
 
 class LLMRequestLogApiTests(APITestCase):

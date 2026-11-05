@@ -95,15 +95,35 @@ TEST_HIRSCHAI = {
 }
 
 
+def keyed_row(user, provider="anthropic", *, api_key="sk-a", default=False,
+              consent=True):
+    """A user's commercial row with a key, stamped with the transfer consent the API asks for
+    before it saves one. `consent=False` is the row the admin or an older schema leaves behind."""
+    from django.utils import timezone
+
+    from llm_connector.models import LLMConfig
+
+    row = LLMConfig(user=user, provider=provider, default=default)
+    if api_key:
+        row.api_key = api_key
+    if consent:
+        row.transfer_consent_at = timezone.now()
+    row.save()
+    return row
+
+
 def fake_row(user, provider="fake", *, model="fake-1", default=False,
-             api_key="sk-test", **extra):
+             api_key="sk-test", consent=True, **extra):
     """An LLMConfig row whose executor resolves to the in-memory FakeAdapter.
 
     The new LLMConfig stores no model field — per-run models come from the
     catalog — so fake rows carry theirs in `extra`, exactly like the HirschAI
     row does. Extra kwargs must be JSON-serialisable (exception objects for the
-    retry tests go through test_client's `client_for` instead).
+    retry tests go through test_client's `client_for` instead). Stamped with the
+    transfer consent unless `consent=False`: without it nothing runs on the key.
     """
+    from django.utils import timezone
+
     from llm_connector.models import LLMConfig
 
     row = LLMConfig(
@@ -111,5 +131,7 @@ def fake_row(user, provider="fake", *, model="fake-1", default=False,
     )
     if api_key:
         row.api_key = api_key
+    if consent:
+        row.transfer_consent_at = timezone.now()
     row.save()
     return row

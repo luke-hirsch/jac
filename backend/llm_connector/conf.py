@@ -55,17 +55,37 @@ def _hirschai_config() -> dict:
     return config
 
 
+def _usable_row(user, provider: str):
+    """The user's row for a commercial provider, if data may go out on it (`LLMConfig.usable`).
+    Raises ExecutorError with a user-facing message otherwise: a key without the consent stamp
+    counts as unconfigured, and is told how to fix that."""
+    from .models import LLMConfig, Provider
+
+    row = LLMConfig.objects.filter(user=user, provider=provider).first()
+    if row is None or not row.has_api_key:
+        raise ExecutorError(f"No {provider!r} API key configured.")
+    if not row.usable:
+        label = dict(Provider.choices).get(provider, provider)
+        raise ExecutorError(
+            f"Your {label} key has no consent to the data transfer yet: save the key again "
+            "and agree to the transfer."
+        )
+    return row
+
+
 def resolve_config(
     provider: str | None = None, *, user=None, model: str | None = None
 ) -> dict:
     """Adapter config dict for an executor.
 
-    - provider None  -> the user's `default` commercial row, else the HirschAI row
-                        (the "no personal config" flows).
+    - provider None  -> the user's `default` commercial row if it's usable, else the
+                        HirschAI row (the "no personal config" flows), like
+                        `default_executor`.
     - provider ollama -> the HirschAI system row (users never own tower rows).
-    - commercial     -> the user's row for that provider; missing row raises
-                        ExecutorError (the API validates upstream — reaching this
-                        from a view is a caller bug).
+    - commercial     -> the user's usable row for that provider; a missing row, a
+                        missing key or a missing consent raises ExecutorError (the API
+                        validates upstream). This is where the key leaves the database,
+                        so every call on a user's key passes this gate.
     `model` (the per-run catalog pick) overrides the dict's model; when absent the
     catalog default fills in for commercial providers.
     """
@@ -77,14 +97,12 @@ def resolve_config(
             if user is not None
             else None
         )
-        if row is not None and row.provider != HIRSCHAI_PROVIDER:
+        if row is not None and row.provider != HIRSCHAI_PROVIDER and row.usable:
             return _finish(row.to_config_dict(), row.provider, model)
         return _finish(_hirschai_config(), HIRSCHAI_PROVIDER, model)
     if provider == HIRSCHAI_PROVIDER:
         return _finish(_hirschai_config(), provider, model)
-    row = LLMConfig.objects.filter(user=user, provider=provider).first()
-    if row is None:
-        raise ExecutorError(f"No {provider!r} config — add an API key first.")
+    row = _usable_row(user, provider)
     return _finish(row.to_config_dict(), provider, model)
 
 
@@ -117,13 +135,11 @@ def resolve_executor(user, provider: str = "", model: str = ""):
     if provider == HIRSCHAI_PROVIDER:
         # The tower's model is fixed server-side; a client-sent model is ignored.
         return Executor(HIRSCHAI_PROVIDER, None, user)
-    from .models import LLMConfig, Provider
+    from .models import Provider
 
     if provider not in Provider.values:
         raise ExecutorError(f"Unknown provider {provider!r}.")
-    row = LLMConfig.objects.filter(user=user, provider=provider).first()
-    if row is None or not row.has_api_key:
-        raise ExecutorError(f"No {provider!r} API key configured.")
+    _usable_row(user, provider)
     model = model or default_model(provider) or ""
     if not is_known_model(provider, model):
         raise ExecutorError(f"Unknown model {model!r} for {provider!r}.")
@@ -132,13 +148,14 @@ def resolve_executor(user, provider: str = "", model: str = ""):
 
 def default_executor(user):
     """The executor auto-runs use: the user's default commercial row (with a stored
-    key), else HirschAI. There is no reachability gate on purpose: a model server that
-    is asleep is normal, and a queued run simply waits for it."""
+    key and the consent to the transfer), else HirschAI. There is no reachability gate
+    on purpose: a model server that is asleep is normal, and a queued run simply waits
+    for it."""
     from .executor import Executor
     from .models import LLMConfig
 
     row = LLMConfig.objects.filter(user=user, default=True).first()
-    if row is not None and row.provider != HIRSCHAI_PROVIDER and row.has_api_key:
+    if row is not None and row.provider != HIRSCHAI_PROVIDER and row.usable:
         from .catalog import default_model
 
         return Executor(row.provider, default_model(row.provider), user)

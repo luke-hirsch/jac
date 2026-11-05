@@ -71,6 +71,13 @@ class LLMConfig(models.Model):
     def has_api_key(self) -> bool:
         return bool(self.api_key_encrypted)
 
+    @property
+    def usable(self) -> bool:
+        """A key AND the consent to the transfer: only then may data go out on this row. A key
+        without the stamp (set in the admin, or older than the consent) counts as unconfigured.
+        Commercial rows only: the HirschAI row carries neither and is never asked."""
+        return self.has_api_key and self.transfer_consent_at is not None
+
     def to_config_dict(self) -> dict:
         """Shape that matches a single entry in settings.LLM — what the adapter
         constructors expect.
