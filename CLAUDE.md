@@ -63,13 +63,14 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 # where things stand
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, and its status table says
-where things are: next is Part 2, Lukas's local verification.** It holds the audit results, the fixes, the lab
-runbook, the legal TODOs, the launch checklist and what's parked. It replaced every earlier launch guide.
+where things are: the code is merged, Part 2's click-through is partly logged, and Part 4, the board's
+re-export, is the next hard stop.** It holds the audit results, the fixes, the lab runbook, the legal TODOs, the
+launch checklist and what's parked. It replaced every earlier launch guide.
 
-- **Branches:** `main` is one commit, with red CI. `backend/prod-readiness` is the Postgres move, unpushed.
-  `fullstack/launch` is cut from it. The guide's fixes and tests are in its working tree, **uncommitted**:
-  Part 3 commits them, once Part 2 is logged.
-- **Nothing is deployed.** Nobody has opened the UI since the launch stack landed.
+- **Branches:** `main` holds the Postgres move, the guide's fixes and prewarm. CI passed that code on Postgres
+  and 3.12.
+- **Nothing is deployed, and merged isn't verified.** The click-through has only logged a first visit, German
+  letters and letter fit. Part 2's other checks stay open, and belong before going live.
 - **The tower's wake** is planned on the lab, not built: a proxy that reacts to any request, so jac needs no
   change. Until then it's by hand, so a recruiter's run fails after 15 minutes with the tower off (Part 0).
   Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set (Part 1b).
