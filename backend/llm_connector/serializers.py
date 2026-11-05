@@ -53,6 +53,11 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "HirschAI is built in — configure commercial providers only."
             )
+        # Consent is given to one provider, so a row can't carry it over to another.
+        if self.instance is not None and value != self.instance.provider:
+            raise serializers.ValidationError(
+                "A row keeps its provider: delete it and add the other one."
+            )
         return value
 
     def validate(self, attrs):

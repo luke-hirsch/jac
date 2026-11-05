@@ -200,6 +200,29 @@ class TransferConsentTests(APITestCase):
         self.client.delete(f"{CONFIGS_URL}{pk}/")
         self.assertEqual(self._post().status_code, 400)
 
+    def test_consent_does_not_move_to_another_provider(self):
+        """Consent names one provider. Switching the row would send the data elsewhere unasked."""
+        pk = self._post(transfer_consent=True).data["id"]
+        r = self.client.patch(
+            f"{CONFIGS_URL}{pk}/",
+            {"provider": "openai", "api_key": "sk-y"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("provider", r.data)
+        row = LLMConfig.objects.get(pk=pk)
+        self.assertEqual((row.provider, row.api_key), ("anthropic", "sk-x"))
+
+    def test_resending_the_same_provider_is_fine(self):
+        # The SPA sends the row's own provider with every PATCH.
+        pk = self._post(transfer_consent=True).data["id"]
+        r = self.client.patch(
+            f"{CONFIGS_URL}{pk}/",
+            {"provider": "anthropic", "api_key": "sk-y"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class PrewarmApiTests(APITestCase):

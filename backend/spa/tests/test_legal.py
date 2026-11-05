@@ -13,6 +13,7 @@ The deletion class carries the `files` skip group: real files under throwaway ro
 
 import base64
 from pathlib import Path
+from smtplib import SMTPException
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -197,6 +198,29 @@ class AccountDeletionTests(APITestCase):
     def test_no_operator_means_no_mail_and_the_deletion_still_works(self):
         self._delete_account()
         self.assertEqual(mail.outbox, [])
+        self.assertFalse(User.objects.filter(username="alice").exists())
+
+    @override_settings(
+        PORTFOLIO_OWNER_USERNAME="bob", LEGAL_CONTACT_EMAIL="ops@example.com"
+    )
+    def test_an_account_the_operator_deletes_is_recorded_too(self):
+        """The terms let the operator delete accounts in the admin, and a restore brings those
+        back as well."""
+        alice_id = self.alice.pk
+        with self.captureOnCommitCallbacks(execute=True):
+            User.objects.filter(pk=alice_id).delete()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(str(alice_id), mail.outbox[0].subject)
+
+    @override_settings(
+        PORTFOLIO_OWNER_USERNAME="bob", LEGAL_CONTACT_EMAIL="ops@example.com"
+    )
+    def test_a_mail_that_fails_does_not_fail_the_deletion(self):
+        with (
+            patch("spa.signals.send_mail", side_effect=SMTPException("down")),
+            self.assertLogs("django.test", level="ERROR"),
+        ):
+            self._delete_account()
         self.assertFalse(User.objects.filter(username="alice").exists())
 
     def test_the_users_files_are_gone_from_disk(self):
