@@ -2,77 +2,77 @@
 {% extends "spa/legal/base.html" %}
 {% block content %}
 {# TODO(Lukas): set a minimum age if you want one. Nothing in the code enforces one, so this draft names none. #}
-{# TODO(Lukas): have the liability section reviewed. It leans on the service being free; revisit all of this if that changes. #}
+{# TODO(Lukas): have the liability section and section 6 reviewed. Both lean on the service being free; revisit all of this if that changes. #}
 <h2>1. Anbieter und Geltung</h2>
 <p>
   Diese Bedingungen gelten für die Nutzung des Dienstes unter {{ base_domain }}. Er besteht aus dem
   Bewerbungswerkzeug jac und den Portfolios auf &lt;name&gt;.{{ base_domain }}. Anbieter ist
   {% if operator %}{{ operator.name }}{% else %}der Betreiber{% endif %}, siehe
-  <a href="/legal/imprint/">Impressum</a>. Mit dem Anlegen eines Kontos akzeptieren Sie diese
+  <a href="/legal/imprint/">Impressum</a>. Mit dem Anlegen eines Kontos akzeptierst du diese
   Bedingungen.
 </p>
 
 <h2>2. Der Dienst</h2>
 <p>
   Der Dienst ist kostenlos und nicht kommerziell. Er ist auch ein Vorführprojekt: Es gibt keinen
-  Anspruch darauf, dass er verfügbar ist oder bestimmte Funktionen behält. Das KI-Modell läuft auf
-  einem Rechner, der nicht immer eingeschaltet ist. Aufträge warten dann in einer Warteschlange oder
-  schlagen fehl. Für jedes Konto gelten Grenzen, etwa ein Tageslimit für Generierungen.
+  Anspruch darauf, dass er verfügbar ist oder bestimmte Funktionen behält. Das KI-Modell ist nicht
+  immer sofort verfügbar. Aufträge warten dann in einer Warteschlange oder schlagen fehl. Für jedes
+  Konto gelten Grenzen, etwa ein Tageslimit für Generierungen.
 </p>
 <p>
   Der Betreiber kann die Registrierung jederzeit schließen und den Dienst ändern oder einstellen.
-  Bewahren Sie von allem, was Ihnen wichtig ist, eine eigene Kopie auf.
+  Bewahre von allem, was dir wichtig ist, eine eigene Kopie auf.
 </p>
 
-<h2>3. Ihr Konto</h2>
+<h2>3. Dein Konto</h2>
 <p>
-  Für ein Konto brauchen Sie eine E-Mail-Adresse, die Ihnen gehört. Halten Sie Ihre Zugangsdaten
-  geheim. Für alles, was über Ihr Konto geschieht, sind Sie verantwortlich, soweit Sie den Zugriff zu
-  vertreten haben.
+  Für ein Konto brauchst du eine E-Mail-Adresse, die dir gehört. Halte deine Zugangsdaten geheim. Für
+  alles, was über dein Konto geschieht, bist du verantwortlich, soweit du den Zugriff zu vertreten
+  hast.
 </p>
 
-<h2>4. Ihre Inhalte</h2>
+<h2>4. Deine Inhalte</h2>
 <p>
-  Ihre Inhalte bleiben Ihre. Sie räumen dem Betreiber nur das Recht ein, sie zu speichern, zu
+  Deine Inhalte bleiben deine. Du räumst dem Betreiber nur das Recht ein, sie zu speichern, zu
   verarbeiten und anzuzeigen, soweit der Dienst das braucht. Dieses Recht endet mit der Löschung der
   Inhalte oder des Kontos.
 </p>
 <p>
-  <strong>Ihr Portfolio ist öffentlich.</strong> Was dort erscheint, steht in der
-  <a href="/legal/privacy/">Datenschutzerklärung</a> unter „Was öffentlich ist“. Für diese Inhalte
-  sind Sie selbst verantwortlich, auch für Daten anderer Personen, die Sie dort nennen.
+  <strong>Dein Portfolio ist öffentlich, sobald du es veröffentlichst.</strong> Was dort erscheint,
+  steht in der <a href="/legal/privacy/">Datenschutzerklärung</a> unter „Was öffentlich ist“. Für diese
+  Inhalte bist du selbst verantwortlich, auch für Daten anderer Personen, die du dort nennst.
 </p>
 <p>
-  Laden Sie nur hoch und veröffentlichen Sie nur, was Sie dürfen. Nicht erlaubt sind rechtswidrige
-  Inhalte, Verletzungen von Rechten Dritter, Belästigung, Täuschung über Ihre Identität und
-  Schadsoftware.
+  Lade nur hoch und veröffentliche nur, was du darfst. Nicht erlaubt sind rechtswidrige Inhalte,
+  Verletzungen von Rechten Dritter, Belästigung, Täuschung über deine Identität und Schadsoftware.
 </p>
 
 <h2>5. KI-Ergebnisse</h2>
 <p>
   Lebensläufe, Anschreiben und andere Texte erzeugt ein Sprachmodell. Sie können falsch oder erfunden
-  sein. Auch Kennzahlen wie der KI-Anteil oder die Prüfung auf Belege sind keine Garantie. Prüfen Sie
-  jedes Ergebnis, bevor Sie es verwenden. Für das, was Sie verschicken, sind Sie verantwortlich.
+  sein. Auch die Prüfung auf Belege ist keine Garantie. Prüfe jedes Ergebnis, bevor du es verwendest.
+  Für das, was du verschickst, bist du verantwortlich.
 </p>
 
 <h2>6. Eigene API-Schlüssel</h2>
 <p>
-  Hinterlegen Sie einen eigenen Schlüssel für Anthropic oder OpenAI, gilt für diese Nutzung Ihr
-  Vertrag mit dem Anbieter, und die Kosten tragen Sie. Welche Daten dabei wohin gehen, steht in der
-  <a href="/legal/privacy/">Datenschutzerklärung</a>.
+  Hinterlegst du einen eigenen Schlüssel für Anthropic oder OpenAI, gilt für diese Nutzung dein Vertrag
+  mit dem Anbieter, und die Kosten trägst du. Deine Daten verlassen damit die EU. Das ist deine
+  Entscheidung: Was der Anbieter mit den Daten macht, verantwortet er, nicht der Betreiber. Welche
+  Daten dabei wohin gehen, steht in der <a href="/legal/privacy/">Datenschutzerklärung</a>.
 </p>
 
 <h2>7. Faire Nutzung</h2>
 <p>
-  Der Dienst läuft auf privater Hardware, und seine Grenzen sind Absicht. Umgehen Sie sie nicht, etwa
-  mit mehreren Konten oder automatisierten Abrufen, und greifen Sie den Dienst nicht an.
+  Die Grenzen des Dienstes sind Absicht. Umgehe sie nicht, etwa mit mehreren Konten oder automatisierten
+  Abrufen, und greife den Dienst nicht an.
 </p>
 
 <h2>8. Rechtswidrige Inhalte melden</h2>
 <p>
-  Meldungen gehen an die E-Mail-Adresse im <a href="/legal/imprint/">Impressum</a>. Bitte nennen Sie
-  die genaue Adresse des Inhalts, begründen Sie, warum er rechtswidrig ist, und geben Sie Ihren Namen
-  und Ihre E-Mail-Adresse an (Art. 16 DSA).
+  Meldungen gehen an die E-Mail-Adresse im <a href="/legal/imprint/">Impressum</a>. Bitte nenne die
+  genaue Adresse des Inhalts, begründe, warum er rechtswidrig ist, und gib deinen Namen und deine
+  E-Mail-Adresse an (Art. 16 DSA).
 </p>
 <p>
   Der Betreiber prüft jede Meldung und teilt das Ergebnis mit. Ist ein Inhalt rechtswidrig oder
@@ -82,7 +82,7 @@
 
 <h2>9. Sperrung und Ende</h2>
 <p>
-  Sie können Ihr Konto jederzeit selbst löschen (Account → Danger zone). Bei Verstößen gegen diese
+  Du kannst dein Konto jederzeit selbst löschen (Account → Danger zone). Bei Verstößen gegen diese
   Bedingungen kann der Betreiber Inhalte entfernen und Konten sperren oder löschen.
 </p>
 
@@ -95,9 +95,9 @@
 
 <h2>11. Änderungen und Recht</h2>
 <p>
-  Änderungen dieser Bedingungen veröffentlicht der Betreiber auf dieser Seite. Sind Sie mit einer
-  Änderung nicht einverstanden, können Sie Ihr Konto löschen. Es gilt deutsches Recht; zwingende
-  Verbraucherschutzvorschriften Ihres Aufenthaltsstaates bleiben unberührt.
+  Änderungen dieser Bedingungen veröffentlicht der Betreiber auf dieser Seite. Bist du mit einer
+  Änderung nicht einverstanden, kannst du dein Konto löschen. Es gilt deutsches Recht; zwingende
+  Verbraucherschutzvorschriften deines Aufenthaltsstaates bleiben unberührt.
 </p>
 
 <p>Stand: November 2026</p>

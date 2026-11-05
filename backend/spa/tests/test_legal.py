@@ -103,6 +103,23 @@ class LegalPagesTests(TestCase):
             for target in PAGES:
                 self.assertContains(r, f'href="/legal/{target}/"', msg_prefix=page)
 
+    def test_the_legal_pages_name_no_infrastructure(self):
+        """They say what data goes where and why. What it runs on is nobody's business."""
+        for page in PAGES:
+            r = self.client.get(f"/legal/{page}/")
+            for word in (
+                "Mac mini",
+                "Grafikkarte",
+                "zu Hause",
+                "Hardware",
+                "Docker",
+                "nginx",
+                "Reverse Proxy",
+                "IONOS",
+                "Strato",
+            ):
+                self.assertNotContains(r, word, msg_prefix=page)
+
     def test_the_landing_links_the_legal_pages(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
