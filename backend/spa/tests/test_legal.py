@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings, tag
 from rest_framework.test import APITestCase
@@ -176,6 +177,27 @@ class AccountDeletionTests(APITestCase):
         ):
             r = self.client.delete(self.URL)
         self.assertEqual(r.status_code, 204, r.content)
+
+    @override_settings(
+        PORTFOLIO_OWNER_USERNAME="bob", LEGAL_CONTACT_EMAIL="ops@example.com"
+    )
+    def test_the_operator_learns_the_deleted_id_and_nothing_else(self):
+        """Privacy section 10: a restore brings deleted accounts back, and they get deleted again.
+        So the list has to live outside the backups, and it holds a number."""
+        User.objects.filter(pk=self.alice.pk).update(email="alice@example.com")
+        alice_id = self.alice.pk
+        self._delete_account()
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["ops@example.com"])
+        text = f"{message.subject} {message.body}"
+        self.assertIn(str(alice_id), text)
+        self.assertNotIn("alice", text)
+
+    def test_no_operator_means_no_mail_and_the_deletion_still_works(self):
+        self._delete_account()
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(User.objects.filter(username="alice").exists())
 
     def test_the_users_files_are_gone_from_disk(self):
         paths = [

@@ -33,7 +33,12 @@ class LLMConfigApiTests(APITestCase):
     def test_create_returns_row_without_key_material(self):
         r = self.client.post(
             CONFIGS_URL,
-            {"provider": "anthropic", "api_key": "sk-x", "default": True},
+            {
+                "provider": "anthropic",
+                "api_key": "sk-x",
+                "default": True,
+                "transfer_consent": True,
+            },
             format="json",
         )
         self.assertEqual(r.status_code, 201, r.data)
@@ -49,28 +54,44 @@ class LLMConfigApiTests(APITestCase):
 
     def test_ollama_provider_is_rejected(self):
         r = self.client.post(
-            CONFIGS_URL, {"provider": "ollama", "api_key": "k"}, format="json"
+            CONFIGS_URL,
+            {"provider": "ollama", "api_key": "k", "transfer_consent": True},
+            format="json",
         )
         self.assertEqual(r.status_code, 400)
 
     def test_duplicate_provider_is_rejected(self):
         self.client.post(
-            CONFIGS_URL, {"provider": "anthropic", "api_key": "a"}, format="json"
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "a", "transfer_consent": True},
+            format="json",
         )
         r = self.client.post(
-            CONFIGS_URL, {"provider": "anthropic", "api_key": "b"}, format="json"
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "b", "transfer_consent": True},
+            format="json",
         )
         self.assertEqual(r.status_code, 400)
 
     def test_default_is_exclusive_through_the_api(self):
         self.client.post(
             CONFIGS_URL,
-            {"provider": "anthropic", "api_key": "a", "default": True},
+            {
+                "provider": "anthropic",
+                "api_key": "a",
+                "default": True,
+                "transfer_consent": True,
+            },
             format="json",
         )
         self.client.post(
             CONFIGS_URL,
-            {"provider": "openai", "api_key": "b", "default": True},
+            {
+                "provider": "openai",
+                "api_key": "b",
+                "default": True,
+                "transfer_consent": True,
+            },
             format="json",
         )
         rows = self.client.get(CONFIGS_URL).data["results"]
@@ -79,7 +100,9 @@ class LLMConfigApiTests(APITestCase):
 
     def test_patch_without_key_preserves_it(self):
         create = self.client.post(
-            CONFIGS_URL, {"provider": "anthropic", "api_key": "sk-keep"}, format="json"
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "sk-keep", "transfer_consent": True},
+            format="json",
         )
         pk = create.data["id"]
         r = self.client.patch(
@@ -107,6 +130,75 @@ class LLMConfigApiTests(APITestCase):
     def test_unauthenticated_request_is_forbidden(self):
         self.client.logout()
         self.assertEqual(self.client.get(CONFIGS_URL).status_code, 403)
+
+
+class TransferConsentTests(APITestCase):
+    """A key sends data out of the EU, so saving one takes explicit consent (Art. 49(1)(a)), with a
+    timestamp as the proof Art. 7(1) asks for. Deleting the row is the withdrawal."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice", password="pw")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def _post(self, **body):
+        return self.client.post(
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "sk-x", **body},
+            format="json",
+        )
+
+    def test_a_key_without_consent_is_refused(self):
+        r = self._post()
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("transfer_consent", r.data)
+        self.assertFalse(LLMConfig.objects.filter(user=self.alice).exists())
+
+    def test_an_unticked_box_counts_as_no_consent(self):
+        self.assertEqual(self._post(transfer_consent=False).status_code, 400)
+
+    def test_consent_is_stamped_and_readable(self):
+        r = self._post(transfer_consent=True)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIsNotNone(LLMConfig.objects.get(user=self.alice).transfer_consent_at)
+        self.assertTrue(r.data["transfer_consent_at"])
+        self.assertNotIn("transfer_consent", r.data)
+
+    def test_the_client_cannot_write_the_timestamp(self):
+        self._post(transfer_consent=True, transfer_consent_at="2020-01-01T00:00:00Z")
+        row = LLMConfig.objects.get(user=self.alice)
+        self.assertNotEqual(row.transfer_consent_at.year, 2020)
+
+    def test_replacing_a_key_keeps_the_first_consent(self):
+        pk = self._post(transfer_consent=True).data["id"]
+        first = LLMConfig.objects.get(pk=pk).transfer_consent_at
+        r = self.client.patch(
+            f"{CONFIGS_URL}{pk}/", {"api_key": "sk-new"}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        row = LLMConfig.objects.get(pk=pk)
+        self.assertEqual(row.api_key, "sk-new")
+        self.assertEqual(row.transfer_consent_at, first)
+
+    def test_adding_a_key_to_a_row_without_consent_is_refused(self):
+        pk = self.client.post(
+            CONFIGS_URL, {"provider": "anthropic"}, format="json"
+        ).data["id"]
+        r = self.client.patch(f"{CONFIGS_URL}{pk}/", {"api_key": "sk-x"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(LLMConfig.objects.get(pk=pk).has_api_key)
+
+    def test_making_a_row_default_needs_no_new_consent(self):
+        pk = self._post(transfer_consent=True).data["id"]
+        r = self.client.patch(f"{CONFIGS_URL}{pk}/", {"default": True}, format="json")
+        self.assertEqual(r.status_code, 200, r.data)
+
+    def test_deleting_the_key_withdraws_the_consent(self):
+        pk = self._post(transfer_consent=True).data["id"]
+        self.client.delete(f"{CONFIGS_URL}{pk}/")
+        self.assertEqual(self._post().status_code, 400)
 
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
