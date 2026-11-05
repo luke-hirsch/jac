@@ -40,6 +40,19 @@ describe("configPayload", () => {
       default: false,
     });
   });
+
+  it("consent travels only when the box is ticked", () => {
+    expect(
+      configPayload({ provider: "openai", apiKey: "k", transferConsent: true }),
+    ).toEqual({ provider: "openai", api_key: "k", transfer_consent: true });
+    expect(
+      configPayload({
+        provider: "openai",
+        apiKey: "k",
+        transferConsent: false,
+      }),
+    ).toEqual({ provider: "openai", api_key: "k" });
+  });
 });
 
 describe("LLMConfigRow (five-field shape)", () => {
@@ -49,6 +62,7 @@ describe("LLMConfigRow (five-field shape)", () => {
       provider: "anthropic",
       default: true,
       has_api_key: true,
+      transfer_consent_at: null,
       created_at: "",
       updated_at: "",
     };

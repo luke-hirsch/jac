@@ -12,33 +12,25 @@ The deletion class carries the `files` skip group: real files under throwaway ro
 """
 
 import base64
-import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings, tag
 from rest_framework.test import APITestCase
 
 from jac.models import CvAttachment
 from llm_connector.models import LLMRequestLog
+from lukehirsch.test_media import own_media_roots
 from spa.models import PersonalityProfile, PortfolioBlock, UserProfile
-
-_TMP_MEDIA = tempfile.mkdtemp(prefix="jac-legal-media-")
-_TMP_PRIVATE = tempfile.mkdtemp(prefix="jac-legal-private-")
 
 PDF = b"%PDF-1.5\nzeugnis"
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 PAGES = ("imprint", "privacy", "terms")
-
-
-def tearDownModule():
-    shutil.rmtree(_TMP_MEDIA, ignore_errors=True)
-    shutil.rmtree(_TMP_PRIVATE, ignore_errors=True)
 
 
 @override_settings(
@@ -112,6 +104,23 @@ class LegalPagesTests(TestCase):
             for target in PAGES:
                 self.assertContains(r, f'href="/legal/{target}/"', msg_prefix=page)
 
+    def test_the_legal_pages_name_no_infrastructure(self):
+        """They say what data goes where and why. What it runs on is nobody's business."""
+        for page in PAGES:
+            r = self.client.get(f"/legal/{page}/")
+            for word in (
+                "Mac mini",
+                "Grafikkarte",
+                "zu Hause",
+                "Hardware",
+                "Docker",
+                "nginx",
+                "Reverse Proxy",
+                "IONOS",
+                "Strato",
+            ):
+                self.assertNotContains(r, word, msg_prefix=page)
+
     def test_the_landing_links_the_legal_pages(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
@@ -124,7 +133,7 @@ def _png(name="x.png"):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class AccountDeletionTests(APITestCase):
     """DELETE /api/spa/account/ keeps the privacy policy's Art. 17 promise."""
 
@@ -169,6 +178,27 @@ class AccountDeletionTests(APITestCase):
             r = self.client.delete(self.URL)
         self.assertEqual(r.status_code, 204, r.content)
 
+    @override_settings(
+        PORTFOLIO_OWNER_USERNAME="bob", LEGAL_CONTACT_EMAIL="ops@example.com"
+    )
+    def test_the_operator_learns_the_deleted_id_and_nothing_else(self):
+        """Privacy section 10: a restore brings deleted accounts back, and they get deleted again.
+        So the list has to live outside the backups, and it holds a number."""
+        User.objects.filter(pk=self.alice.pk).update(email="alice@example.com")
+        alice_id = self.alice.pk
+        self._delete_account()
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["ops@example.com"])
+        text = f"{message.subject} {message.body}"
+        self.assertIn(str(alice_id), text)
+        self.assertNotIn("alice", text)
+
+    def test_no_operator_means_no_mail_and_the_deletion_still_works(self):
+        self._delete_account()
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(User.objects.filter(username="alice").exists())
+
     def test_the_users_files_are_gone_from_disk(self):
         paths = [
             self.attachment.file.path,
@@ -209,7 +239,7 @@ class AccountDeletionTests(APITestCase):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class SingleDeleteRemovesTheFileTests(APITestCase):
     """The same promise at row level: deleting one upload deletes its file."""
 

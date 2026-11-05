@@ -81,6 +81,7 @@ export type LLMConfigRow = {
   provider: string;
   default: boolean;
   has_api_key: boolean;
+  transfer_consent_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -90,6 +91,7 @@ export type ConfigPayload = {
   provider: string;
   default?: boolean;
   api_key?: string;
+  transfer_consent?: boolean;
 };
 
 // clean up the payload (whitepace etc)
@@ -97,11 +99,13 @@ export function configPayload(input: {
   provider: string;
   apiKey?: string;
   makeDefault?: boolean;
+  transferConsent?: boolean;
 }): ConfigPayload {
   const p: ConfigPayload = { provider: input.provider };
   const key = (input.apiKey ?? "").trim();
   if (key) p.api_key = key;
   if (input.makeDefault !== undefined) p.default = input.makeDefault;
+  if (input.transferConsent) p.transfer_consent = true;
   return p;
 }
 
