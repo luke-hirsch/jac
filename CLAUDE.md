@@ -64,7 +64,7 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, holding only what's left for
 Lukas, in the order of the work:**
-- step 1 merges `fullstack/legal-text`;
+- step 1, merging `fullstack/legal-text`, is done, and CI on `main` is green;
 - step 2 is what only he can do: the browser checks, three decisions and the legal TODOs;
 - step 3 sets up the mini;
 - step 4 is the live checklist.
@@ -73,9 +73,9 @@ The AI implemented and tested everything else on 2026-11-05, at his request. Tha
 the earlier ones are in `.claude/plans/done/`. The board's `-6` export is right, and the lab's open questions are
 answered.
 
-- **Branches:** `main` holds the Postgres move, the guide's fixes and prewarm, but its CI is red on a test-only race.
-  `fullstack/legal-text` carries the race fix, the rewritten legal pages, and what they promise (consent for a key, the
-  deleted-account mail), plus the fixes the test pass found. One merge brings all of it (step 1).
+- **Branches:** only `main`. It holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they
+  promise (consent for a key, the deleted-account mail), plus the fixes the test pass found. CI is green since
+  2026-11-06.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Of what their text commits jac
   to ([[legal-consent-and-restore]]), consent and the deleted-account record are built. The shortened log address waits
   on the lab, and the visitor hash on the board.
