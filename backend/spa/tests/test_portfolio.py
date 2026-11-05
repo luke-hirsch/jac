@@ -773,6 +773,19 @@ class LandingTests(TestCase):
         self.assertIn("text/html", r["Content-Type"])
         self.assertContains(r, "Lukas")
 
+    @override_settings(PORTFOLIO_ORIGIN_TEMPLATE="https://{handle}.testserver")
+    def test_explore_leads_to_the_owners_questionnaire(self):
+        """The questionnaire lives on the owner's handle host. The app host only redirects to
+        /applications, and from there a stranger lands on a login form."""
+        owner = User.objects.create_user(username="lukas", password="pw")
+        r = self.client.get("/")
+        self.assertContains(r, f'href="https://{owner.profile.handle}.testserver"')
+
+    def test_without_an_owner_theres_nothing_to_explore(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "Explore my work")
+
     def test_health_endpoint(self):
         r = self.client.get("/health/")
         self.assertEqual(r.status_code, 200)
@@ -784,6 +797,37 @@ class LandingTests(TestCase):
         r = self.client.get("/health/")
         self.assertEqual(r["X-Release"], "0123abc")
         self.assertEqual(r.json(), {"message": "I am alive!"})
+
+
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
+class PortfolioPrewarmTests(TestCase):
+    """A visitor has started the questionnaire: wake the model server ahead of the rank and the
+    intro. No login, and nothing for a portfolio that isn't there."""
+
+    URL = "/api/spa/portfolio/native/prewarm/"
+
+    def setUp(self):
+        cache.clear()  # scoped-throttle history lives in the default cache
+
+    def test_a_visitor_asks_for_it(self):
+        _owner("lukas")
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 204)
+        prewarm.assert_called_once()
+
+    def test_no_portfolio_nothing_wakes(self):
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 404)
+        prewarm.assert_not_called()
+
+    def test_loading_the_questionnaire_wakes_nothing(self):
+        """Crawlers load pages. Only the POST a person's first click sends may wake the tower."""
+        _owner("lukas")
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            self.client.get("/api/spa/portfolio/native/meta/")
+        prewarm.assert_not_called()
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")

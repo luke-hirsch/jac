@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from collections.abc import Generator
+from contextlib import contextmanager
+
+from celery.exceptions import SoftTimeLimitExceeded
 
 # A job's stage while the model server is off or starting. The SPA tells it apart from ordinary
 # progress (frontend lib/queries/generations.ts).
@@ -25,6 +28,22 @@ class LLMWarmingUp(LLMTransportError):
 
 class LLMUnavailable(RuntimeError):
     """503 without Retry-After: the server says it isn't coming. Don't wait for it."""
+
+
+# What a rung's "degrade on a bad reply" must let through: the server is gone, or the task is out of
+# time (SoftTimeLimitExceeded is a plain Exception). Swallowed, a run ends `done` with a stub letter.
+LLM_GONE = (LLMTransportError, LLMUnavailable, SoftTimeLimitExceeded)
+
+
+@contextmanager
+def translated_sdk_errors(sdk, provider: str):
+    """A commercial SDK's failures in the connector's vocabulary: the API couldn't be reached or is
+    having a bad moment, so the client's one retry fires. An API that answered "no" stays its own
+    error. Anthropic's and OpenAI's SDKs use the same names."""
+    try:
+        yield
+    except (sdk.APIConnectionError, sdk.InternalServerError) as exc:
+        raise LLMTransportError(f"LLM {provider} provider: {exc}") from exc
 
 
 class LLMAdapter(ABC):

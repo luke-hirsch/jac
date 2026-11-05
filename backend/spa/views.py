@@ -21,6 +21,7 @@ from llm_connector.conf import ExecutorError, resolve_executor
 from llm_connector.jobs import start_ai_job
 from llm_connector.models import AiJob
 from llm_connector.serializers import AiJobSerializer
+from llm_connector.tasks import request_prewarm
 from lukehirsch.private_media import private_file_response
 from lukehirsch.throttling import UploadThrottle
 from spa.models import (
@@ -373,6 +374,20 @@ class PortfolioIntroView(PublicPortfolioAPIView):
             },
         )
         return Response({"id": str(job.pk)}, status=status.HTTP_202_ACCEPTED)
+
+
+class PortfolioPrewarmView(PublicPortfolioAPIView):
+    """POST: a visitor has started the questionnaire, so the rank and the AI intro are coming. Wake the
+    model server ahead of them. The page sends it on a first interaction, not on load: crawlers load
+    pages. Answers like every public path on a portfolio that isn't there."""
+
+    throttle_scope = "prewarm"
+
+    def post(self, request):
+        if resolve_owner(request) is None:
+            raise Http404
+        request_prewarm()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PortfolioIntroStatusView(PublicPortfolioAPIView):

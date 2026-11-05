@@ -149,6 +149,17 @@ class VerifyProductionSecretsTests(TestCase):
                 encryption_key=DEV_ENCRYPTION_KEY,
             )
 
+    def test_raises_when_a_secret_is_blank(self):
+        """`.env.example` ships both empty, and that reaches the process as ''. A blank SECRET_KEY
+        would boot and then 500 every request; a blank LLM_ENCRYPTION_KEY would look healthy until
+        the first saved API key."""
+        for keys in (
+            {"secret_key": "", "encryption_key": "real-b"},
+            {"secret_key": "real-a", "encryption_key": ""},
+        ):
+            with self.subTest(keys), self.assertRaises(ImproperlyConfigured):
+                verify_production_secrets(debug=False, **keys)
+
     def test_silent_in_debug(self):
         # Local dev is allowed to run on the placeholders.
         verify_production_secrets(
@@ -426,6 +437,18 @@ class ProdBootTests(TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("DATABASE_URL", r.stderr)
 
+    def test_the_from_address_follows_the_domain(self):
+        """One image on any domain: nothing but BASE_DOMAIN should have to change."""
+        env = {k: v for k, v in _prod_env().items() if k != "DEFAULT_FROM_EMAIL"}
+        probe = (
+            "import lukehirsch.prod as p; p.load_local_env = lambda path: None; "
+            "import django; django.setup(); from django.conf import settings as s; "
+            "print(s.DEFAULT_FROM_EMAIL)"
+        )
+        r = _python("-c", probe, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(r.stdout.strip(), "no-reply@example.com")
+
     def test_a_process_with_no_debug_variable_runs_in_production_mode(self):
         """Off unless something turns it on, so a forgotten variable can't put a public site in
         debug mode. `.env.local` is a laptop's opt-in, so the probe patches its loader out; the
@@ -632,6 +655,26 @@ def _example_entries():
     return entries
 
 
+class DeployFilesTests(SimpleTestCase):
+    """Repo facts a deploy depends on and no running test would notice."""
+
+    def test_nginx_serves_the_spa_and_nothing_else(self):
+        """The build copied into /app/spa, which is also the Django app `spa`, so nginx served
+        /views.py and /models.py from its web root."""
+        template = (REPO_ROOT / "deploy" / "image" / "nginx.conf.template").read_text()
+        roots = set(re.findall(r"^\s*root\s+(\S+);", template, re.MULTILINE))
+        self.assertTrue(roots, "regex found no root in the template: fix the test")
+        self.assertNotIn("/app/spa", roots)
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+        built = re.search(r"^COPY --from=spa /spa/dist \./(\S+)$", dockerfile, re.MULTILINE)
+        self.assertEqual(roots, {f"/app/{built.group(1)}"})
+
+    def test_a_checkout_merges_no_compose_override_on_its_own(self):
+        """Compose picks up compose.override.yaml by name. The laptop's (DEBUG on, a laptop's
+        database) would land on any box that clones the repo."""
+        self.assertFalse((REPO_ROOT / "compose.override.yaml").exists())
+
+
 class EnvExampleTests(TestCase):
     """.env.example is the deploy's env template (compose `env_file`). It drifts the moment
     settings.py grows an os.getenv nobody documents — this is the tripwire."""
@@ -731,6 +774,21 @@ class QueuedEmailBackendTests(TestCase):
         self.assertEqual(routes["spa.tasks.send_email"]["queue"], "jac-mail")
         self.assertEqual(routes["spa.tasks.housekeeping"]["queue"], "jac-mail")
         self.assertEqual(routes["llm_connector.tasks.run_ai_job"]["queue"], "jac-quick")
+        self.assertEqual(
+            routes["llm_connector.tasks.prewarm_model_server"]["queue"], "jac-quick"
+        )
+
+    def test_a_hung_smtp_server_gives_the_lane_back(self):
+        """Django's default is no timeout: one hung connection would hold worker-mail's single
+        slot past the life of the verification code it's meant to deliver."""
+        self.assertIsNotNone(settings.EMAIL_TIMEOUT)
+        self.assertLessEqual(settings.EMAIL_TIMEOUT, 60)
+
+    def test_lost_ai_jobs_get_closed_on_a_schedule(self):
+        routes = settings.CELERY_TASK_ROUTES
+        self.assertEqual(routes["llm_connector.tasks.reap_lost_jobs"]["queue"], "jac-mail")
+        scheduled = {e["task"] for e in settings.CELERY_BEAT_SCHEDULE.values()}
+        self.assertIn("llm_connector.tasks.reap_lost_jobs", scheduled)
 
     def test_a_mail_that_gave_up_is_counted_for_the_queue_report(self):
         cache.clear()

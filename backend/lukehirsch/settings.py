@@ -203,15 +203,21 @@ CELERY_TASK_ROUTES = {
     "jac.tasks.generate_run": {"queue": QUEUE_AI},  # jac-cloud is chosen at enqueue
     "jac.tasks.sync_user_vectors": {"queue": QUEUE_AI},
     "llm_connector.tasks.run_ai_job": {"queue": QUEUE_QUICK},
+    "llm_connector.tasks.prewarm_model_server": {"queue": QUEUE_QUICK},
     "jac.tasks.notify_run_results": {"queue": QUEUE_MAIL},
     "jac.tasks.reap_stuck_runs": {"queue": QUEUE_MAIL},
     "spa.tasks.send_email": {"queue": QUEUE_MAIL},
     "spa.tasks.housekeeping": {"queue": QUEUE_MAIL},
+    "llm_connector.tasks.reap_lost_jobs": {"queue": QUEUE_MAIL},
 }
 # Periodic jobs. One scheduler only: the worker that serves jac-mail runs it (`-B`).
 CELERY_BEAT_SCHEDULE = {
     "reap-stuck-runs": {
         "task": "jac.tasks.reap_stuck_runs",
+        "schedule": 15 * 60,
+    },
+    "reap-lost-ai-jobs": {
+        "task": "llm_connector.tasks.reap_lost_jobs",
         "schedule": 15 * 60,
     },
     "housekeeping": {
@@ -332,6 +338,9 @@ HIRSCHAI_ENV = {
 
 # A visitor is waiting: past this, the portfolio shows its standard selection instead.
 PORTFOLIO_RANK_TIMEOUT_S = env_int("PORTFOLIO_RANK_TIMEOUT_S", 8)
+# A token for waking the model server ahead of a request (the board's AI_PREWARM_KEY). Unset = off:
+# a plain Ollama has nothing to wake, and whatever needs it simply waits.
+HIRSCHAI_PREWARM_KEY = os.getenv("HIRSCHAI_PREWARM_KEY", "")
 
 LLM_LOGGING = True
 # Prompt + response bodies carry career data, postings and the personality dossier. Kept in dev
@@ -407,8 +416,13 @@ REST_FRAMEWORK = {
         # A page polling for its intro: one request every few seconds, for a few minutes.
         "portfolio-poll": os.getenv("PORTFOLIO_POLL_RATE", "600/hour"),
         "generation": os.getenv("GENERATION_RATE", "20/day"),
+        # The daily cap only counts runs: past it, an application still gets created.
+        "application-create": os.getenv("APPLICATION_CREATE_RATE", "100/day"),
         # The editor's AI tools + dossier rebuilds: free compute on an open-signup site.
         "ai-job": os.getenv("AI_JOB_RATE", "60/hour"),
+        # Asking for the model server ahead of a request. The real limit is the site-wide cooldown
+        # (llm_connector/tasks.py); this one keeps a single address from leaning on it.
+        "prewarm": os.getenv("PREWARM_RATE", "30/hour"),
         # Only a user who keeps emptying their career can get past the 409 to the writes.
         "sample-career": "20/hour",
         # Anything that puts a file on disk, per account.
@@ -482,7 +496,9 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@luke-hirsch.de")
+# Django's default is none: one hung connection would hold worker-mail's single slot.
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", f"no-reply@{BASE_DOMAIN}")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # ─────────────────────────────────────────────────────────────────────────────

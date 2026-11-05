@@ -9,8 +9,9 @@ import time
 from contextlib import contextmanager
 from datetime import date, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.core import mail
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -31,7 +32,11 @@ from jac.cv import CV
 from jac.filter import CVFilter, GenerationError
 from jac.generation_result import serialize_cv_selection
 from jac.llm_prompts import (
+    AddressExtract,
+    CompanyResearcher,
+    Conversational,
     CoverLetterWriter,
+    FaithfulnessCheck,
     Instruct,
     LetterChat,
     ParagraphRewrite,
@@ -58,7 +63,7 @@ from jac.tasks import (
     notify_run_results,
     reap_stuck_runs,
 )
-from llm_connector.base import WAITING_STAGE, LLMTransportError
+from llm_connector.base import WAITING_STAGE, LLMTransportError, LLMUnavailable
 from llm_connector.client import _compute_wait
 from llm_connector.executor import Executor
 from llm_connector.tests._helpers import FakeAdapter
@@ -567,6 +572,67 @@ class ShortenLetterTests(TestCase):
     def test_a_good_reply_is_returned_stripped(self):
         with patch("jac.llm_prompts.complete", return_value="  Shorter.\n"):
             self.assertEqual(self._s(self.BODY).shorten(), "Shorter.")
+
+
+class RungOutageTests(SimpleTestCase):
+    """A rung degrades on a bad reply. A server that's gone, or a task out of time, has to reach
+    the task instead: swallowed, a run ends `done` with a stub letter and a "your CV is ready"
+    mail, and past the soft limit it keeps going until the hard kill."""
+
+    RUNGS = {
+        "conversational": lambda: Conversational(POST, ENTRIES, executor=None).selection(),
+        "instruct": lambda: Instruct(POST, ENTRIES, executor=None).ranked_entries(),
+        "address": lambda: AddressExtract(POST, executor=None).extract(),
+        "writer": lambda: CoverLetterWriter(executor=None, cv_facts="- A fact").write(),
+        "rewrite": lambda: ParagraphRewrite("A passage.", executor=None).rewrite(),
+        "shorten": lambda: ShortenLetter(
+            "A body.", executor=None, target_words=100
+        ).shorten(),
+    }
+
+    def test_an_outage_reaches_the_task(self):
+        gone = (LLMTransportError("down"), LLMUnavailable("down"), SoftTimeLimitExceeded())
+        for name, rung in self.RUNGS.items():
+            for exc in gone:
+                with (
+                    self.subTest(rung=name, exc=type(exc).__name__),
+                    patch("jac.llm_prompts.complete", side_effect=exc),
+                    self.assertRaises(type(exc)),
+                ):
+                    rung()
+
+    def test_a_bad_reply_still_degrades(self):
+        for name, rung in self.RUNGS.items():
+            with (
+                self.subTest(rung=name),
+                _muted(),
+                patch("jac.llm_prompts.complete", side_effect=RuntimeError("HTTP 500")),
+            ):
+                self.assertFalse(rung())
+
+    def test_a_lost_audit_keeps_the_letter_but_not_past_the_soft_limit(self):
+        """The letter is written by then: "not checked" beats throwing it away."""
+        audit = FaithfulnessCheck("Body.", "Sources.", executor=None)
+        with (
+            _muted(),
+            patch("jac.llm_prompts.complete", side_effect=LLMTransportError("down")),
+        ):
+            self.assertIsNone(audit.critique()["count"])
+        with (
+            patch("jac.llm_prompts.complete", side_effect=SoftTimeLimitExceeded()),
+            self.assertRaises(SoftTimeLimitExceeded),
+        ):
+            audit.critique()
+
+    def test_lost_research_goes_on_without_it_but_not_past_the_soft_limit(self):
+        executor = MagicMock()
+        research = CompanyResearcher("Acme", POST, executor=executor)
+        executor.web_search.side_effect = LLMTransportError("down")
+        with _muted():
+            self.assertFalse(research.research()["ok"])
+        executor.web_search.side_effect = SoftTimeLimitExceeded()
+        with self.assertRaises(SoftTimeLimitExceeded):
+            research.research()
 
 
 BODY_DEFAULT = "One.\n\nTwo.\n\nThree."
@@ -1109,6 +1175,19 @@ class GenerationRunLifecycleTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, GenerationRun.Status.failed)
         self.assertNotIn("10.0.0.9", run.error)
+
+    def test_a_failure_asks_for_nothing_a_visitor_cant_do(self):
+        """Someone trying jac on the spot has no key and no other provider, and "grade" is a word
+        from before the executor rework."""
+        for exc in (LLMTransportError("down"), SoftTimeLimitExceeded()):
+            with self.subTest(type(exc).__name__):
+                run = self._run()
+                with self._pipeline(filter_cv=exc), self.assertLogs("jac.tasks", "WARNING"):
+                    generate_run(run.pk)
+                run.refresh_from_db()
+                self.assertEqual(run.status, GenerationRun.Status.failed)
+                self.assertNotIn("provider", run.error)
+                self.assertNotIn("grade", run.error)
 
     def test_an_unexpected_error_fails_without_its_text(self):
         run = self._run()

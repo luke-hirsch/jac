@@ -376,7 +376,7 @@ export function ExportCard({
               value={scope}
               onValueChange={(v) => setScope(v as ExportScope)}
             >
-              <SelectTrigger className="w-40">
+              <SelectTrigger className="w-40" aria-label="Scope">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

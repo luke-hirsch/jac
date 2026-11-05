@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { prewarmForVisitor } from "@/lib/prewarm";
 import { useNativeMeta } from "@/lib/queries/portfolio";
 import {
   DEFAULT_FOCUS,
@@ -73,7 +74,12 @@ export function Questionnaire({
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10">
-      <Card className="w-full max-w-lg">
+      {/* The first click or key in here, not the page load: only a person gets this far. */}
+      <Card
+        className="w-full max-w-lg"
+        onPointerDownCapture={prewarmForVisitor}
+        onKeyDownCapture={prewarmForVisitor}
+      >
         <CardHeader>
           <CardTitle>What do you want to see?</CardTitle>
         </CardHeader>

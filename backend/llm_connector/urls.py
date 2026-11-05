@@ -13,6 +13,7 @@ from llm_connector.views import (
     ExecutorListView,
     LLMConfigViewSet,
     LLMRequestLogViewSet,
+    PrewarmView,
 )
 
 router = DefaultRouter()
@@ -22,5 +23,6 @@ router.register("request-logs", LLMRequestLogViewSet, basename="llmrequestlog")
 urlpatterns = [
     path("executors/", ExecutorListView.as_view(), name="llmexecutor-list"),
     path("jobs/<uuid:pk>/", AiJobView.as_view(), name="ai-job"),
+    path("prewarm/", PrewarmView.as_view(), name="llm-prewarm"),
     *router.urls,
 ]

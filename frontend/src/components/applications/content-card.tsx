@@ -136,7 +136,7 @@ export function ApplicationContentCard({
         <CardTitle>Application content</CardTitle>
         <div className="flex items-center gap-2">
           <Select value={String(app.layout)} onValueChange={onLayoutChange}>
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Layout">
               <SelectValue placeholder="Layout" />
             </SelectTrigger>
             <SelectContent>
@@ -318,7 +318,7 @@ function CvEditorSection({
               return (
                 <li
                   key={e.id}
-                  className={`flex items-center gap-1 rounded px-1 text-sm transition-colors duration-1000 ${
+                  className={`flex flex-wrap items-center gap-1 rounded px-1 text-sm transition-colors duration-1000 ${
                     e.deselected ? "opacity-50" : ""
                   } ${isFresh ? "bg-emerald-100 dark:bg-emerald-900/40" : isOver ? "bg-amber-50 dark:bg-amber-900/20" : ""}`}
                 >
@@ -344,7 +344,7 @@ function CvEditorSection({
                     </span>
                   )}
                   <span
-                    className={`flex-1 ${e.deselected ? "line-through" : ""}`}
+                    className={`min-w-40 flex-1 ${e.deselected ? "line-through" : ""}`}
                   >
                     {row ? labelFor(section, row) : e.label}
                     {gone && (
@@ -468,7 +468,10 @@ function CvEditorSection({
                 if (row) onEdit((c) => addEntry(c, section, row));
               }}
             >
-              <SelectTrigger className="mt-1 h-8 w-72 text-xs">
+              <SelectTrigger
+                className="mt-1 h-8 w-72 max-w-full text-xs"
+                aria-label={`Add ${SECTION_TITLES[section].toLowerCase()}`}
+              >
                 <SelectValue
                   placeholder={`Add ${SECTION_TITLES[section].toLowerCase()}…`}
                 />

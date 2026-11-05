@@ -319,14 +319,14 @@ def generate_run(run_id: int) -> None:
         _fail(
             run,
             "generation timed out — the model took too long; "
-            "try again or pick a lighter grade",
+            "start the run again, or shorten the posting",
         )
     except (LLMTransportError, LLMUnavailable) as exc:
         logger.warning("generate_run %s: LLM unavailable: %s", run_id, exc)
         _fail(
             run,
             "the language model isn't available right now — "
-            "try again later, or pick another provider",
+            "your application is saved, start the run again later",
         )
     except GenerationError as exc:
         logger.warning("generate_run %s: %s", run_id, exc)

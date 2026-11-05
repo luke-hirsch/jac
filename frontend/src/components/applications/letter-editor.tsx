@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
   useRewriteParagraph,
   useShortenLetter,
@@ -118,7 +117,6 @@ export function LetterEditor({
   const shorten = useShortenLetter();
   const bodyId = useId();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [stubDraft, setStubDraft] = useState("");
 
   // Selection popover (Apple-Pages-style writing tools): tracked from the textarea's
   // own selection events; the range is state, not read at click time, so popover
@@ -458,19 +456,10 @@ export function LetterEditor({
       </div>
 
       {hasStub(body) && (
-        <div className="space-y-2 rounded border border-destructive/50 bg-destructive/10 p-3">
-          <p className="text-xs font-medium">
-            The body still contains the personal-paragraph stub — not sendable.
-            Write your own paragraph to replace it:
-          </p>
-          <Textarea
-            aria-label="Your own paragraph"
-            rows={4}
-            value={stubDraft}
-            onChange={(e) => setStubDraft(e.target.value)}
-            placeholder="Why this company, in your own words…"
-          />
-        </div>
+        <p className="rounded border border-destructive/50 bg-destructive/10 p-3 text-xs font-medium">
+          The model couldn't write this letter, so it can't be exported yet.
+          Start a new run, or replace the warning line with your own text.
+        </p>
       )}
 
       <RefineChat

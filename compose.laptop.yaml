@@ -1,0 +1,45 @@
+# The production image on a laptop, over plain http, with its own Postgres and Valkey: no .env, and
+# nothing shared with the dev database. `./dev stack` runs it. Compose never merges this file on its
+# own, so a checkout on a server can't pick it up.
+x-laptop: &laptop
+  env_file: !reset []
+  environment:
+    DEBUG: "1"
+    BASE_DOMAIN: localhost
+    FRONTEND_URL: http://app.localhost:8000
+    PORTFOLIO_ORIGIN_TEMPLATE: http://{handle}.localhost:8000
+    CSRF_TRUSTED_ORIGINS: http://app.localhost:8000,http://localhost:8000
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/jac
+    REDIS_URL: redis://valkey:6379/0
+    HIRSCHAI_URL: http://host.docker.internal:11434
+    MEDIA_ROOT: /files/media
+    PRIVATE_MEDIA_ROOT: /files/private
+  volumes: !override
+    - files:/files
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: jac
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d jac"]
+      interval: 2s
+      retries: 30
+  valkey:
+    image: valkey/valkey:8-alpine
+  web:
+    <<: *laptop
+    ports: ["127.0.0.1:8000:8000"]
+  app: *laptop
+  worker-ai: *laptop
+  worker-cloud: *laptop
+  worker-quick: *laptop
+  worker-mail: *laptop
+
+volumes:
+  postgres:
+  files:

@@ -156,8 +156,9 @@ describe("verifyErrorMessage", () => {
 });
 
 describe("resendErrorMessage", () => {
-  it("asks for a moment on a 429", () => {
-    expect(resendErrorMessage(new ApiError(429, {}))).toContain("few seconds");
+  it("says the resends ran out for today on a 429", () => {
+    // confirm_email is 5/d/key: "give it a few seconds" sends them back into the same wall.
+    expect(resendErrorMessage(new ApiError(429, {}))).toContain("today");
   });
 
   it("points at starting over on a 409: the resends ran out", () => {

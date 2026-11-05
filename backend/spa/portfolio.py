@@ -678,6 +678,12 @@ def landing_context(request) -> dict:
     return {
         "owner": _owner_block(owner) if owner else None,
         "domains": owner_domains(owner) if owner else [],
-        "explore_url": settings.FRONTEND_URL,  # guide 3: the handle-root questionnaire
+        # The questionnaire lives on the owner's handle host. The app host only redirects to
+        # /applications, and from there a stranger lands on a login form.
+        "explore_url": (
+            settings.PORTFOLIO_ORIGIN_TEMPLATE.format(handle=owner.profile.handle)
+            if owner
+            else ""
+        ),
         "signup_url": f"{settings.FRONTEND_URL}/auth/signup",
     }

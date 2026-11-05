@@ -19,8 +19,8 @@ place in line, and you can leave the page: you get a mail when it's done.
 
 Small self-hosted models are a viable alternative to a large hosted one: a 9B model on an 8 GB
 consumer GPU, with an embedding model as the ranking floor. Commercial models are an opt-in on the
-user's own key, never required. And every AI-written part is measured: `ai_share` says how much the
-machine wrote, and a grounding check flags claims your career database doesn't support.
+user's own key, never required. And every letter is audited: a grounding check flags claims your
+career database doesn't support.
 
 ## What's in it
 
@@ -54,28 +54,39 @@ machine wrote, and a grounding check flags claims your career database doesn't s
 
 ## Run it (dev)
 
-```bash
-pyenv virtualenv 3.12 jac && pyenv local jac
-pip install -r requirements.txt
-echo DEBUG=1 > backend/.env.local      # without a DEBUG variable, the app runs in production mode
-brew services start postgresql@18
-createdb jac                           # the default: a local server, over its socket
-
-cd backend
-python manage.py migrate
-python manage.py seed_system_defaults  # the SPA renders layouts from the database's media copy
-```
-
-Then five processes. Generation and the editor's AI tools run on the queue, so **the web server alone
-isn't enough**:
+You need `brew install postgresql@18 valkey`, Node 24 and pyenv. Once:
 
 ```bash
-brew services start valkey                     # broker + channel layer
-ollama serve                                   # the zero-cost default model
-cd backend && python manage.py runserver       # web + WebSockets
-cd backend && celery -A lukehirsch worker -Q jac-ai,jac-cloud,jac-quick,jac-mail -c 3 -l info
-cd frontend && npm install && npm run dev
+pyenv install -s 3.12.10 && pyenv virtualenv 3.12.10 jac && pyenv local jac
 ```
+
+Then, every time:
+
+```bash
+./dev
+```
+
+That's the web server, the worker and vite in one terminal; Ctrl-C stops all three. It starts Postgres
+and Valkey if they're down, creates the database, and catches up on whatever a pull changed: the lock,
+migrations, layouts. Open [localhost:5173](http://localhost:5173). Signup codes are printed in the log.
+For the admin, once: `cd backend && python manage.py createsuperuser`.
+
+Two things it leaves to you:
+
+- **The model:** `ollama serve`, or the Ollama app. With no model server, runs wait and say so.
+- **Reloads:** the web server and vite reload on their own, the worker doesn't. After changing a task or
+  the pipeline, Ctrl-C and `./dev` again.
+
+`./dev stack` runs the production image on this machine instead, with its own Postgres and Valkey, at
+[app.localhost:8000](http://app.localhost:8000). `./dev stack down` stops it and deletes its data.
+
+| File | Read by | What it's for |
+| --- | --- | --- |
+| `backend/.env.local` | `manage.py` and the worker | `DEBUG=1`. `./dev` creates it. Without a `DEBUG` variable the app runs in production mode and refuses to start without its secrets, on purpose |
+| `.env` | Compose on a server | Everything production needs, from [`.env.example`](.env.example). A laptop doesn't need one |
+| `compose.yaml` | Any server | The stack, knowing nothing about where it runs |
+| `compose.laptop.yaml` | `./dev stack` | The image on a laptop, with its own database |
+| `deploy/compose.lab.yaml` | The lab | Copied there as `compose.override.yaml` |
 
 Optional: `VECTOR_STORE` turns on the RAG read path. A filesystem path runs Qdrant embedded (then the
 worker must be the only process touching it: `--pool=solo`), and an `http(s)://` URL targets a server.

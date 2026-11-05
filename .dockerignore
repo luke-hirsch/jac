@@ -4,9 +4,12 @@
 .vscode
 .env
 .env.*
+**/.env
 **/.env.local
 config
 data
+files
+dev
 dump.*
 README.md
 compose*.yaml

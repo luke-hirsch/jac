@@ -5,6 +5,9 @@ import json
 from unittest.mock import MagicMock, patch
 from urllib import error
 
+import anthropic
+import httpx
+import openai
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase
 
@@ -282,6 +285,102 @@ class AnthropicCompleteTests(TestCase):
         )
 
 
+class CommercialAvailabilityTests(TestCase):
+    """An API that can't be reached is the connector's transport error: the client's one retry
+    fires, its "retrying" message shows, and a rung can't mistake it for a bad reply. An API that
+    answered "no" stays its own error. Both SDKs raise the same names."""
+
+    MESSAGES = [{"role": "user", "content": "hi"}]
+    REQUEST = httpx.Request("POST", "https://api.example.com/v1")
+
+    def _down(self, sdk):
+        return (
+            sdk.APIConnectionError(request=self.REQUEST),
+            sdk.APITimeoutError(request=self.REQUEST),
+            sdk.InternalServerError(
+                "overloaded", response=httpx.Response(529, request=self.REQUEST), body=None
+            ),
+        )
+
+    def _refused(self, sdk):
+        return sdk.BadRequestError(
+            "no", response=httpx.Response(400, request=self.REQUEST), body=None
+        )
+
+    def _anthropic(self):
+        adapter = AnthropicAdapter({"api_key": "test", "model": "m"})
+        adapter._client = MagicMock()
+        return adapter
+
+    def _openai(self):
+        adapter = OpenAIAdapter({"api_key": "test", "model": "m"})
+        adapter._client = MagicMock()
+        return adapter
+
+    def test_anthropic_complete(self):
+        for exc in self._down(anthropic):
+            adapter = self._anthropic()
+            adapter._client.messages.create.side_effect = exc
+            with self.subTest(type(exc).__name__), self.assertRaises(LLMTransportError):
+                adapter.complete(self.MESSAGES)
+
+    def test_anthropic_stream(self):
+        adapter = self._anthropic()
+        adapter._client.messages.stream.side_effect = anthropic.APIConnectionError(
+            request=self.REQUEST
+        )
+        with self.assertRaises(LLMTransportError):
+            list(adapter.stream(self.MESSAGES))
+
+    def test_anthropic_web_search(self):
+        adapter = self._anthropic()
+        adapter._client.messages.create.side_effect = anthropic.APIConnectionError(
+            request=self.REQUEST
+        )
+        with self.assertRaises(LLMTransportError):
+            adapter.web_search(self.MESSAGES)
+
+    def test_openai_complete(self):
+        for exc in self._down(openai):
+            adapter = self._openai()
+            adapter._client.chat.completions.create.side_effect = exc
+            with self.subTest(type(exc).__name__), self.assertRaises(LLMTransportError):
+                adapter.complete(self.MESSAGES)
+
+    def test_openai_stream(self):
+        adapter = self._openai()
+        adapter._client.chat.completions.create.side_effect = openai.APIConnectionError(
+            request=self.REQUEST
+        )
+        with self.assertRaises(LLMTransportError):
+            list(adapter.stream(self.MESSAGES))
+
+    def test_openai_web_search(self):
+        adapter = self._openai()
+        adapter._client.responses.create.side_effect = openai.APIConnectionError(
+            request=self.REQUEST
+        )
+        with self.assertRaises(LLMTransportError):
+            adapter.web_search(self.MESSAGES)
+
+    def test_a_refusal_stays_its_own_error(self):
+        adapter = self._anthropic()
+        adapter._client.messages.create.side_effect = self._refused(anthropic)
+        with self.assertRaises(anthropic.BadRequestError):
+            adapter.complete(self.MESSAGES)
+        adapter = self._openai()
+        adapter._client.chat.completions.create.side_effect = self._refused(openai)
+        with self.assertRaises(openai.BadRequestError):
+            adapter.complete(self.MESSAGES)
+
+    def test_the_timeout_reaches_the_sdk(self):
+        """The SDKs default to 10 minutes: a hung chat would outlive its one-stream-per-user lock."""
+        for cls in (AnthropicAdapter, OpenAIAdapter):
+            with self.subTest(cls.__name__):
+                adapter = cls({"api_key": "test", "model": "m", "timeout": 7})
+                self.assertEqual(adapter._client.timeout, 7)
+
+
 # ---------------------------------------------------------------------------
 # [fullstack]-model-knobs — per-run knob mapping (skip-marked until that guide)
 # ---------------------------------------------------------------------------
@@ -449,6 +548,17 @@ class OllamaAvailabilityTests(TestCase):
         ):
             self._adapter().complete([{"role": "user", "content": "hi"}])
         self.assertFalse(issubclass(LLMUnavailable, LLMTransportError))
+
+    def test_a_proxy_with_no_server_behind_it_is_a_transport_error(self):
+        """Any TLS proxy in front of a model server that's off answers 502 or 504. That's the same
+        "not there yet" as a refused connection, so a run waits instead of failing on the spot."""
+        for code in (502, 504):
+            with (
+                self.subTest(code),
+                patch(self.URLOPEN, side_effect=self._http_error(code)),
+                self.assertRaises(LLMTransportError),
+            ):
+                self._adapter().complete([{"role": "user", "content": "hi"}])
 
     def test_other_http_errors_stay_runtime_errors(self):
         with (

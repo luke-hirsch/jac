@@ -27,7 +27,8 @@ RUN pip install -r /tmp/requirements.txt
 
 COPY backend/ ./
 COPY deploy/image/ ./
-COPY --from=spa /spa/dist ./spa
+# Not ./spa: that's the Django app, and nginx would serve its source from the web root.
+COPY --from=spa /spa/dist ./webroot
 
 # Static files are baked in. DEBUG=1 only so the prod guard lets this one command pass: no secret
 # is needed for it, and none enters the image. Its RELEASE, SECRET_KEY and the rest come at run time.

@@ -106,7 +106,7 @@ http {
     server {
         listen 8000;
         server_name app.@BASE_DOMAIN@;
-        root /app/spa;
+        root /app/webroot;
 
         location /api/ {
             proxy_pass http://app;
@@ -161,7 +161,7 @@ http {
     server {
         listen 8000;
         server_name *.@BASE_DOMAIN@;
-        root /app/spa;
+        root /app/webroot;
         add_header X-Robots-Tag "noindex" always;
 
         # Same-origin API: Django's resolve_owner() reads the handle from Host.
