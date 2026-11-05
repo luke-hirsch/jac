@@ -54,6 +54,11 @@ function LLMConfigPage() {
   const commercial = rows.filter((r) => !r.self_hosted);
   const configFor = (provider: string) =>
     configs.find((c) => c.provider === provider) ?? null;
+  // Consent is stored per key when it's saved; this only unlocks the inputs for this visit.
+  const [agreed, setAgreed] = useState(false);
+  const consentMissing = commercial.some(
+    (r) => !configFor(r.provider)?.transfer_consent_at,
+  );
 
   return (
     <div className="space-y-5">
@@ -83,7 +88,12 @@ function LLMConfigPage() {
 
       {executors.isLoading && <p className="text-sm">loading…</p>}
 
-      {commercial.length > 0 && <TransferWarning />}
+      {consentMissing && !agreed && (
+        <TransferConsent
+          providers={commercial}
+          onAgree={() => setAgreed(true)}
+        />
+      )}
 
       <div className="space-y-3">
         {commercial.map((row) => (
@@ -91,6 +101,8 @@ function LLMConfigPage() {
             key={row.provider}
             row={row}
             config={configFor(row.provider)}
+            agreed={agreed}
+            onDeleted={() => setAgreed(false)}
           />
         ))}
       </div>
@@ -98,7 +110,15 @@ function LLMConfigPage() {
   );
 }
 
-function TransferWarning() {
+/** Consent before any key goes in (Art. 49(1)(a) DSGVO): an "I agree", not a notice to wave
+ *  away. The server stamps it on the key that's saved next; deleting the key withdraws it. */
+function TransferConsent({
+  providers,
+  onAgree,
+}: {
+  providers: ExecutorRow[];
+  onAgree: () => void;
+}) {
   return (
     <Card className="border border-destructive/50">
       <CardHeader>
@@ -112,9 +132,30 @@ function TransferWarning() {
           be weaker than in the EU and authorities may be able to access it.
         </p>
         <p>
-          What the provider does with it is set by its own terms, and we have no
-          influence on that. Without a key, everything stays on HirschAI.
+          What the provider does with it is set by its own terms (
+          {providers.map((p, i) => (
+            <span key={p.provider}>
+              {i > 0 && ", "}
+              <a
+                href={PROVIDER_TERMS[p.provider]}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                {p.label}
+              </a>
+            </span>
+          ))}
+          ), and we have no influence on that. Without a key, everything stays
+          on HirschAI.
         </p>
+        <p>
+          I agree that the data of my runs goes to the provider whose key I
+          enter, also outside the EU. I can withdraw by deleting the key.
+        </p>
+        <Button size="sm" onClick={onAgree}>
+          I agree
+        </Button>
       </CardContent>
     </Card>
   );
@@ -123,26 +164,28 @@ function TransferWarning() {
 function ProviderCard({
   row,
   config,
+  agreed,
+  onDeleted,
 }: {
   row: ExecutorRow;
   config: LLMConfigRow | null;
+  agreed: boolean;
+  onDeleted: () => void;
 }) {
   const create = useCreateConfig();
   const update = useUpdateConfig();
   const del = useDeleteConfig();
   const check = useCheckConfig();
   const [apiKey, setApiKey] = useState("");
-  const [consent, setConsent] = useState(false);
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
   const busy = create.isPending || update.isPending;
-  // Per provider, and it lasts until the key is deleted.
-  const needsConsent = !config?.transfer_consent_at;
+  // A key's consent lasts until the key is deleted; without one, the card above unlocks this.
+  const locked = !config?.transfer_consent_at && !agreed;
 
   const saveOpts = {
     onSuccess: () => {
       toast.success(`${row.label} saved`);
       setApiKey("");
-      setConsent(false);
     },
     onError: (e: unknown) => toast.error(apiMessage(e)),
   };
@@ -151,7 +194,7 @@ function ProviderCard({
     const body = configPayload({
       provider: row.provider,
       apiKey,
-      transferConsent: consent,
+      transferConsent: agreed,
     });
     if (!config && !body.api_key) return toast.error("Enter an API key first.");
     if (config) update.mutate({ id: config.id, body }, saveOpts);
@@ -185,7 +228,11 @@ function ProviderCard({
     if (!config) return;
     if (!confirm(`Remove the ${row.label} key?`)) return;
     del.mutate(config.id, {
-      onSuccess: () => toast.success(`${row.label} key removed`),
+      onSuccess: () => {
+        toast.success(`${row.label} key removed`);
+        // Deleting withdrew the consent, so the next key asks again.
+        onDeleted();
+      },
       onError: () => toast.error("Delete failed"),
     });
   }
@@ -209,40 +256,24 @@ function ProviderCard({
               type="password"
               autoComplete="new-password"
               value={apiKey}
-              placeholder={config?.has_api_key ? "••••••••" : ""}
+              disabled={locked}
+              placeholder={
+                locked
+                  ? "Agree to the transfer above first"
+                  : config?.has_api_key
+                    ? "••••••••"
+                    : ""
+              }
               onChange={(e) => setApiKey(e.target.value)}
             />
           </div>
           <Button
             onClick={onSaveKey}
-            disabled={busy || !apiKey.trim() || (needsConsent && !consent)}
+            disabled={busy || locked || !apiKey.trim()}
           >
             {busy ? "Saving…" : config?.has_api_key ? "Replace" : "Save key"}
           </Button>
         </div>
-
-        {needsConsent && (
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={consent}
-              onChange={(e) => setConsent(e.target.checked)}
-            />
-            <span>
-              I agree that my data goes to {row.label}, also outside the EU (
-              <a
-                href={PROVIDER_TERMS[row.provider]}
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                their terms
-              </a>
-              ). I can withdraw by deleting the key.
-            </span>
-          </label>
-        )}
 
         {config && (
           <div className="flex flex-wrap items-center gap-2">
