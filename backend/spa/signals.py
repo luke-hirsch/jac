@@ -21,9 +21,9 @@ def on_mfa_authenticator_used(sender, request, user, authenticator, **kwargs):
 @receiver(post_save, sender=get_user_model())
 def _create_profile_on_user_creation(sender, instance, created, **kwargs):
     if created:
-        from spa.portfolio import mint_handle
+        from spa.portfolio import random_handle
 
-        UserProfile.objects.create(user=instance, handle=mint_handle(instance.username))
+        UserProfile.objects.create(user=instance, handle=random_handle())
         PersonalityProfile.objects.create(user=instance)
 
 

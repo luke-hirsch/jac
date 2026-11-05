@@ -93,7 +93,10 @@ class LegalPagesTests(TestCase):
 
     def test_a_handle_host_shows_the_operators_imprint(self):
         """jane.<base> is Jane's portfolio, but Lukas runs the service: his imprint, not hers."""
-        User.objects.create_user(username="jane", password="pw", first_name="Janet")
+        jane = User.objects.create_user(
+            username="jane", password="pw", first_name="Janet"
+        )
+        UserProfile.objects.filter(user=jane).update(handle="jane")
         r = self.client.get("/legal/imprint/", HTTP_HOST="jane.testserver")
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Lukas Hirsch")

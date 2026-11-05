@@ -2,7 +2,7 @@
 
 Covers the flow-rework payload/intro logic (`owner_domains` / `section_order` /
 `default_link` / `PortfolioIntroWriter` / `build_intro`) and the multi-user host-resolution
-guide (`owner_for_host` / `mint_handle` / per-user slugs / `application_slug` /
+guide (`owner_for_host` / `random_handle` / per-user slugs / `application_slug` /
 `public_portfolio_url`). Owner is resolved from the request host, so the endpoint classes
 pin `BASE_DOMAIN="testserver"` (the default test host) → apex → configured owner.
 
@@ -43,23 +43,25 @@ from spa.portfolio import (
     default_link,
     freeze_link,
     link_for_application,
-    mint_handle,
     owner_domains,
     owner_for_host,
     public_portfolio_url,
+    random_handle,
     resolve_items,
     section_order,
 )
 
 
 def _owner(username="lukas", published=True):
-    """A portfolio owner. UserProfile + PersonalityProfile are auto-created by signals.
+    """A portfolio owner at `<username>.<domain>`. UserProfile + PersonalityProfile are
+    auto-created by signals. A real signup gets a random handle (`RandomHandleTests`); this one
+    takes its username as the handle, as if claimed in the profile, so test hosts stay readable.
     Published unless a test says otherwise: most of this file is about what a public portfolio
     shows. A real signup starts unpublished (`UnpublishedPortfolioTests`)."""
     user = User.objects.create_user(username=username, password="pw")
-    if published:
-        user.profile.portfolio_public = True
-        user.profile.save(update_fields=["portfolio_public"])
+    user.profile.handle = username
+    user.profile.portfolio_public = published
+    user.profile.save(update_fields=["handle", "portfolio_public"])
     return user
 
 
@@ -93,7 +95,7 @@ def _application(owner, company="Acme", role="Backend Engineer"):
 @override_settings(BASE_DOMAIN="localhost", PORTFOLIO_OWNER_USERNAME="lukas")
 class OwnerForHostTests(TestCase):
     def test_handle_subdomain_resolves_that_user(self):
-        jane = _owner("jane")  # the signal mints handle "jane" from the username
+        jane = _owner("jane")  # handle "jane"
         self.assertEqual(owner_for_host("jane.localhost"), jane)
 
     def test_apex_resolves_configured_owner(self):
@@ -120,7 +122,8 @@ class OwnerForHostTests(TestCase):
         self.assertEqual(owner_for_host("jane.localhost:8000"), jane)
 
     def test_inactive_user_is_none(self):
-        User.objects.create_user(username="jane", password="pw", is_active=False)
+        jane = _owner("jane")
+        User.objects.filter(pk=jane.pk).update(is_active=False)
         self.assertIsNone(owner_for_host("jane.localhost"))
 
     @override_settings(PORTFOLIO_OWNER_USERNAME="Lukas")
@@ -282,17 +285,50 @@ class ProfilePublishTests(TestCase):
         self.assertFalse(r.json()["portfolio_always_public"])
 
 
-class MintHandleTests(TestCase):
-    def test_slugifies_username(self):
-        self.assertEqual(mint_handle("Jane Doe"), "jane-doe")
+HANDLE_RE = rf"^u-[{SLUG_SUFFIX_ALPHABET}]{{{SLUG_SUFFIX_LEN}}}$"
 
-    @override_settings(RESERVED_SUBDOMAINS={"app", "www", "api"})
-    def test_reserved_base_is_suffixed(self):
-        self.assertEqual(mint_handle("app"), "app-1")
 
-    def test_collision_increments(self):
-        _owner("lukas")  # the signal takes handle "lukas"
-        self.assertEqual(mint_handle("lukas"), "lukas-2")
+class RandomHandleTests(TestCase):
+    """allauth makes the username from the email's local part, so a handle minted from it put
+    `max.mustermann.<domain>` online at signup. A new account's address names no one; the owner
+    picks a real one in the profile (`HandleClaimTests`)."""
+
+    def test_a_new_users_handle_is_random_and_holds_nothing_of_the_username(self):
+        user = User.objects.create_user(
+            username="maximilian.mustermann",
+            email="maximilian.mustermann@example.com",
+            password="pw",
+        )
+        handle = user.profile.handle
+        self.assertRegex(handle, HANDLE_RE)
+        self.assertLessEqual(
+            len(handle), UserProfile._meta.get_field("handle").max_length
+        )
+        for part in ("maximilian", "mustermann"):
+            self.assertNotIn(part, handle)
+
+    def test_two_users_get_different_handles(self):
+        a = User.objects.create_user(username="jane", password="pw")
+        b = User.objects.create_user(username="jane2", password="pw")
+        for user in (a, b):
+            self.assertRegex(user.profile.handle, HANDLE_RE)
+        self.assertNotEqual(a.profile.handle, b.profile.handle)
+
+    @override_settings(RESERVED_SUBDOMAINS={"app", "u-reserved"})
+    def test_a_reserved_or_taken_candidate_is_rolled_again(self):
+        # Taken is case-insensitive, like validate_handle.
+        UserProfile.objects.filter(user=_owner("jane")).update(handle="U-TAKEN234")
+        rolls = ["reserved", "taken234", "fresh234"]
+        with mock.patch("spa.portfolio.slug_suffix", side_effect=rolls):
+            self.assertEqual(random_handle(), "u-fresh234")
+
+    def test_it_gives_up_rather_than_loop_forever(self):
+        UserProfile.objects.filter(user=_owner("jane")).update(handle="u-taken234")
+        with (
+            mock.patch("spa.portfolio.slug_suffix", return_value="taken234"),
+            self.assertRaises(IntegrityError),
+        ):
+            random_handle()
 
 
 class HandleClaimTests(TestCase):
@@ -303,7 +339,7 @@ class HandleClaimTests(TestCase):
     PROFILE_URL = "/api/spa/profile/"
 
     def setUp(self):
-        self.user = _owner("claimer")  # the signal mints handle "claimer"
+        self.user = _owner("claimer")  # handle "claimer"
         self.client.force_login(self.user)
 
     def _patch(self, handle):
@@ -329,7 +365,7 @@ class HandleClaimTests(TestCase):
         self.assertIn("handle", r.json())
 
     def test_handle_taken_by_another_user_is_rejected(self):
-        _owner("jane")  # the signal takes handle "jane"
+        _owner("jane")  # handle "jane"
         r = self._patch("Jane")  # normalizes to "jane" → clash
         self.assertEqual(r.status_code, 400)
         self.assertIn("handle", r.json())
@@ -797,6 +833,58 @@ class LandingTests(TestCase):
         r = self.client.get("/health/")
         self.assertEqual(r["X-Release"], "0123abc")
         self.assertEqual(r.json(), {"message": "I am alive!"})
+
+
+@override_settings(
+    PORTFOLIO_OWNER_USERNAME="lukas",
+    BASE_DOMAIN="testserver",
+    ALLOWED_HOSTS=[".testserver"],
+)
+class PublicNameTests(TestCase):
+    """The username is the email's local part, so no public page falls back to it: without a
+    display name or a full name, the handle stands in, which the address shows anyway."""
+
+    def setUp(self):
+        cache.clear()
+        self.owner = User.objects.create_user(
+            username="maximilian.mustermann",
+            email="maximilian.mustermann@example.com",
+            password="pw",
+        )
+        UserProfile.objects.filter(user=self.owner).update(portfolio_public=True)
+        self.handle = self.owner.profile.handle
+        self.host = {"HTTP_HOST": f"{self.handle}.testserver"}
+
+    def test_without_a_name_the_payload_shows_the_handle(self):
+        owner = build_payload(self.owner)["owner"]
+        self.assertEqual(owner["display_name"], self.handle)
+
+    def test_no_public_page_shows_the_username(self):
+        link = PortfolioLink.objects.create(
+            user=self.owner, kind=PortfolioLink.Kind.manual, slug="hello"
+        )
+        for url in (
+            "/",  # the landing: <title>, og:title, the heading, the avatar's alt
+            "/api/spa/portfolio/native/",
+            f"/api/spa/portfolio/links/{link.slug}/",
+        ):
+            r = self.client.get(url, **self.host)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertContains(r, self.handle, msg_prefix=url)
+            for part in ("maximilian", "mustermann"):
+                self.assertNotContains(r, part, msg_prefix=url)
+
+    @mock.patch("spa.portfolio.complete", return_value="Hi.")
+    def test_the_ai_intro_isnt_told_the_username(self, m_complete):
+        build_intro(self.owner)
+        prompt = m_complete.call_args.kwargs["prompt"]
+        self.assertIn(self.handle, prompt)
+        self.assertNotIn("maximilian", prompt)
+
+    def test_a_name_comes_before_the_handle(self):
+        User.objects.filter(pk=self.owner.pk).update(first_name="Max", last_name="M")
+        self.owner.refresh_from_db()
+        self.assertEqual(build_payload(self.owner)["owner"]["display_name"], "Max M")
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
