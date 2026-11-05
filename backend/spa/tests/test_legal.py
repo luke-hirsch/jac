@@ -12,8 +12,6 @@ The deletion class carries the `files` skip group: real files under throwaway ro
 """
 
 import base64
-import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,21 +22,14 @@ from rest_framework.test import APITestCase
 
 from jac.models import CvAttachment
 from llm_connector.models import LLMRequestLog
+from lukehirsch.test_media import own_media_roots
 from spa.models import PersonalityProfile, PortfolioBlock, UserProfile
-
-_TMP_MEDIA = tempfile.mkdtemp(prefix="jac-legal-media-")
-_TMP_PRIVATE = tempfile.mkdtemp(prefix="jac-legal-private-")
 
 PDF = b"%PDF-1.5\nzeugnis"
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 PAGES = ("imprint", "privacy", "terms")
-
-
-def tearDownModule():
-    shutil.rmtree(_TMP_MEDIA, ignore_errors=True)
-    shutil.rmtree(_TMP_PRIVATE, ignore_errors=True)
 
 
 @override_settings(
@@ -124,7 +115,7 @@ def _png(name="x.png"):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class AccountDeletionTests(APITestCase):
     """DELETE /api/spa/account/ keeps the privacy policy's Art. 17 promise."""
 
@@ -209,7 +200,7 @@ class AccountDeletionTests(APITestCase):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class SingleDeleteRemovesTheFileTests(APITestCase):
     """The same promise at row level: deleting one upload deletes its file."""
 

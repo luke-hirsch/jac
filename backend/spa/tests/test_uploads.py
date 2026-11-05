@@ -12,8 +12,6 @@ files on disk under throwaway roots.
 """
 
 import base64
-import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,10 +23,8 @@ from django.test import override_settings, tag
 from rest_framework.test import APITestCase
 
 from jac.models import ApplicationLayout, CvAttachment
+from lukehirsch.test_media import own_media_roots
 from spa.models import PortfolioBlock, UserProfile
-
-_TMP_MEDIA = tempfile.mkdtemp(prefix="jac-media-tests-")
-_TMP_PRIVATE = tempfile.mkdtemp(prefix="jac-private-tests-")
 
 PDF = b"%PDF-1.5\nhello"
 # A valid 1x1 transparent PNG (Pillow must accept it as an image).
@@ -36,11 +32,6 @@ PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 UUID_HEX = "[0-9a-f]{32}"
-
-
-def tearDownModule():
-    shutil.rmtree(_TMP_MEDIA, ignore_errors=True)
-    shutil.rmtree(_TMP_PRIVATE, ignore_errors=True)
 
 
 def _under(path, root) -> bool:
@@ -59,9 +50,7 @@ def _results(body):
 
 
 @tag("files")
-@override_settings(
-    MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE, PRIVATE_MEDIA_ACCEL=False
-)
+@override_settings(**own_media_roots(), PRIVATE_MEDIA_ACCEL=False)
 class PrivateAttachmentTests(APITestCase):
     URL = "/api/jac/attachments/"
 
@@ -88,10 +77,10 @@ class PrivateAttachmentTests(APITestCase):
         self.assertRegex(
             att.file.name, rf"^cv_attachments/{self.alice.pk}/{UUID_HEX}\.pdf$"
         )
-        self.assertTrue(_under(att.file.path, _TMP_PRIVATE), att.file.path)
+        self.assertTrue(_under(att.file.path, settings.PRIVATE_MEDIA_ROOT), att.file.path)
         self.assertTrue(Path(att.file.path).exists())
         self.assertFalse(
-            list(Path(_TMP_MEDIA).rglob("*.pdf")), "a copy leaked to /media/"
+            list(Path(settings.MEDIA_ROOT).rglob("*.pdf")), "a copy leaked to /media/"
         )
 
     def test_api_returns_the_owner_checked_path_not_a_media_url(self):
@@ -168,9 +157,7 @@ class PrivateAttachmentTests(APITestCase):
 
 
 @tag("files")
-@override_settings(
-    MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE, PRIVATE_MEDIA_ACCEL=False
-)
+@override_settings(**own_media_roots(), PRIVATE_MEDIA_ACCEL=False)
 class PrivateSignatureTests(APITestCase):
     PROFILE = "/api/spa/profile/"
     SIGNATURE = "/api/spa/profile/signature/"
@@ -194,10 +181,10 @@ class PrivateSignatureTests(APITestCase):
         self.assertRegex(
             signature.name, rf"^signatures/{self.alice.pk}/{UUID_HEX}\.png$"
         )
-        self.assertTrue(_under(signature.path, _TMP_PRIVATE), signature.path)
+        self.assertTrue(_under(signature.path, settings.PRIVATE_MEDIA_ROOT), signature.path)
         # Not any *.png: other tests in this module leave public avatars in the same folder.
         self.assertFalse(
-            list(Path(_TMP_MEDIA).glob("signatures/**/*.png")), "a copy leaked to /media/"
+            list(Path(settings.MEDIA_ROOT).glob("signatures/**/*.png")), "a copy leaked to /media/"
         )
 
     def test_profile_returns_the_owner_only_path(self):
@@ -231,7 +218,7 @@ class PrivateSignatureTests(APITestCase):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class LayoutTemplateUploadTests(APITestCase):
     """/media/ is public and served from our own origin: an uploaded `x.html` would run as a
     page on app. — next to the session. A template is a JSON object or nothing."""
@@ -287,7 +274,7 @@ def _png():
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_PRIVATE)
+@override_settings(**own_media_roots())
 class ImageSizeTests(APITestCase):
     """Attachments and templates had a cap; images only had nginx's 12 MB."""
 
@@ -335,11 +322,7 @@ ONE_UPLOAD_A_DAY = {
 
 
 @tag("files")
-@override_settings(
-    MEDIA_ROOT=_TMP_MEDIA,
-    PRIVATE_MEDIA_ROOT=_TMP_PRIVATE,
-    REST_FRAMEWORK=ONE_UPLOAD_A_DAY,
-)
+@override_settings(**own_media_roots(), REST_FRAMEWORK=ONE_UPLOAD_A_DAY)
 class UploadThrottleTests(APITestCase):
     """One rate over everything that puts a file on disk: a loop on any of them fills it."""
 

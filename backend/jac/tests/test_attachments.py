@@ -10,8 +10,6 @@ Both classes carry the `files` skip group (`manage.py test --skip files`): they 
 files to disk, which is what makes them ~3s of the suite.
 """
 
-import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,14 +18,9 @@ from django.test import override_settings, tag
 from rest_framework.test import APITestCase
 
 from jac.models import Certification, CvAttachment, Education
+from lukehirsch.test_media import own_media_roots
 
 from ._helpers import make_application, make_user
-
-_TMP_MEDIA = tempfile.mkdtemp(prefix="jacattach-tests-")
-
-
-def tearDownModule():
-    shutil.rmtree(_TMP_MEDIA, ignore_errors=True)
 
 
 def _education(user, institution="TU Berlin"):
@@ -37,7 +30,7 @@ def _education(user, institution="TU Berlin"):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_MEDIA)
+@override_settings(**own_media_roots())
 class CvAttachmentApiTests(APITestCase):
     URL = "/api/jac/attachments/"
 
@@ -173,7 +166,7 @@ class CvAttachmentApiTests(APITestCase):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_MEDIA)
+@override_settings(**own_media_roots())
 class ApplicationAttachmentSelectionTests(APITestCase):
     """The application's `attachments` field = an ordered, ownership-validated id list."""
 
