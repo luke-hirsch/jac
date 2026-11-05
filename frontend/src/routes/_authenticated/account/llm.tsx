@@ -25,6 +25,12 @@ export const Route = createFileRoute("/_authenticated/account/llm")({
   component: LLMConfigPage,
 });
 
+/** Where each provider says what it does with the data. */
+const PROVIDER_TERMS: Record<string, string> = {
+  anthropic: "https://www.anthropic.com/legal/commercial-terms",
+  openai: "https://openai.com/policies/data-processing-addendum/",
+};
+
 /** Flatten the first DRF/ApiError field error into a readable message. */
 function apiMessage(err: unknown): string {
   if (err instanceof ApiError && err.data && typeof err.data === "object") {
@@ -77,6 +83,8 @@ function LLMConfigPage() {
 
       {executors.isLoading && <p className="text-sm">loading…</p>}
 
+      {commercial.length > 0 && <TransferWarning />}
+
       <div className="space-y-3">
         {commercial.map((row) => (
           <ProviderCard
@@ -87,6 +95,28 @@ function LLMConfigPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+function TransferWarning() {
+  return (
+    <Card className="border border-destructive/50">
+      <CardHeader>
+        <CardTitle className="text-base">Your data leaves the EU</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p>
+          With your own key, the data of a run (career entries, the job posting,
+          dossiers) goes to that provider, under your account and your contract
+          with them. They may process it in the USA, where data protection can
+          be weaker than in the EU and authorities may be able to access it.
+        </p>
+        <p>
+          What the provider does with it is set by its own terms, and we have no
+          influence on that. Without a key, everything stays on HirschAI.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -102,19 +132,27 @@ function ProviderCard({
   const del = useDeleteConfig();
   const check = useCheckConfig();
   const [apiKey, setApiKey] = useState("");
+  const [consent, setConsent] = useState(false);
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
   const busy = create.isPending || update.isPending;
+  // Per provider, and it lasts until the key is deleted.
+  const needsConsent = !config?.transfer_consent_at;
 
   const saveOpts = {
     onSuccess: () => {
       toast.success(`${row.label} saved`);
       setApiKey("");
+      setConsent(false);
     },
     onError: (e: unknown) => toast.error(apiMessage(e)),
   };
 
   function onSaveKey() {
-    const body = configPayload({ provider: row.provider, apiKey });
+    const body = configPayload({
+      provider: row.provider,
+      apiKey,
+      transferConsent: consent,
+    });
     if (!config && !body.api_key) return toast.error("Enter an API key first.");
     if (config) update.mutate({ id: config.id, body }, saveOpts);
     else create.mutate(body, saveOpts);
@@ -175,10 +213,36 @@ function ProviderCard({
               onChange={(e) => setApiKey(e.target.value)}
             />
           </div>
-          <Button onClick={onSaveKey} disabled={busy || !apiKey.trim()}>
+          <Button
+            onClick={onSaveKey}
+            disabled={busy || !apiKey.trim() || (needsConsent && !consent)}
+          >
             {busy ? "Saving…" : config?.has_api_key ? "Replace" : "Save key"}
           </Button>
         </div>
+
+        {needsConsent && (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
+            <span>
+              I agree that my data goes to {row.label}, also outside the EU (
+              <a
+                href={PROVIDER_TERMS[row.provider]}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                their terms
+              </a>
+              ). I can withdraw by deleting the key.
+            </span>
+          </label>
+        )}
 
         {config && (
           <div className="flex flex-wrap items-center gap-2">

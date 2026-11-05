@@ -38,6 +38,9 @@ class LLMConfig(models.Model):
     url = models.URLField(blank=True)
     max_tokens = models.PositiveIntegerField(null=True, blank=True)
     api_key_encrypted = models.TextField(blank=True)
+    # When the user agreed to their data leaving the EU: the proof Art. 7(1) DSGVO asks for. Deleting
+    # the row is the withdrawal.
+    transfer_consent_at = models.DateTimeField(null=True, blank=True)
     extra = models.JSONField(
         default=dict,
         blank=True,

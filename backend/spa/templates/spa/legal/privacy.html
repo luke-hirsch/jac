@@ -30,13 +30,13 @@
 <h2>3. Protokolle beim Aufruf</h2>
 {# TODO(Lukas): check the access log's fields against the live proxy config. This text assumes the launch guide's log filter is in place. #}
 {# TODO(Lukas): does the forwarding server log connections? The repo doesn't show it. If it does, turn it off or state what and for how long here. #}
-{# TODO(Lukas): the statistics sentence holds only if the hash uses a random salt that's kept in memory and thrown away. Ask the server chat. #}
 <p>
   Beim Aufruf dieser Seiten speichern wir 7 Tage lang ein Zugriffsprotokoll mit gekürzter
   IP-Adresse, Zeitpunkt, aufgerufener Adresse, Browserkennung und weiteren technischen Angaben der
   Anfrage. Die IP-Adresse wird gekürzt, bevor sie gespeichert wird, die vollständige Adresse steht
-  also nicht im Protokoll. Unsere Zugriffsstatistik speichert keine IP-Adressen, sondern nur einen
-  Hash, der sich täglich ändert.
+  also nicht im Protokoll. Unsere Zugriffsstatistik zählt Besuche über einen Hash aus gekürzter
+  IP-Adresse, Browserkennung und einem täglich neuen Zufallswert. Am Ende des Tages löschen wir
+  Hashes und Zufallswert, es bleiben nur die Zahlen.
 </p>
 <p>
   Fehlermeldungen und technische Ereignisse stehen in Anwendungsprotokollen. Diese sind in der Größe
@@ -226,12 +226,13 @@
 </p>
 
 <h2>10. Sicherungen</h2>
-{# TODO(Lukas): make the backup job's real retention match the 90 days. If a copy goes to an outside provider, add that category to section 11. #}
+{# TODO(Lukas): when nightly backups run, state their retention here. If a copy goes to an outside provider, add that category to section 11. #}
 <p>
-  Gelöschte Daten können noch bis zu 90 Tage in Sicherungen liegen. Diese nutzen wir nur zur
-  Wiederherstellung. Spielen wir eine zurück, löschen wir bereits gelöschte Konten erneut; dafür merken
-  wir uns nur die interne Nummer eines gelöschten Kontos. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f
-  DSGVO (Schutz vor Datenverlust).
+  Vor jeder Aktualisierung sichern wir die Datenbank und behalten die letzten fünf Sicherungen.
+  Gelöschte Daten können darin liegen, bis fünf neuere Sicherungen sie ablösen. Diese nutzen wir nur
+  zur Wiederherstellung. Spielen wir eine zurück, löschen wir bereits gelöschte Konten erneut; dafür
+  merken wir uns nur die interne Nummer eines gelöschten Kontos. Rechtsgrundlage ist Art. 6 Abs. 1
+  lit. f DSGVO (Schutz vor Datenverlust).
 </p>
 
 <h2>11. Empfänger und Drittländer</h2>

@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from llm_connector.conf import HIRSCHAI_PROVIDER
@@ -18,6 +19,7 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         style={"input_type": "password"},
     )
     has_api_key = serializers.BooleanField(read_only=True)
+    transfer_consent = serializers.BooleanField(write_only=True, required=False)
 
     class Meta:
         model = LLMConfig
@@ -28,10 +30,18 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             "default",
             "api_key",
             "has_api_key",
+            "transfer_consent",
+            "transfer_consent_at",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "has_api_key", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "has_api_key",
+            "transfer_consent_at",
+            "created_at",
+            "updated_at",
+        )
         validators = [
             serializers.UniqueTogetherValidator(
                 queryset=LLMConfig.objects.all(), fields=("user", "provider")
@@ -45,20 +55,34 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate(self, attrs):
+        consented = self.instance is not None and self.instance.transfer_consent_at
+        if attrs.get("api_key") and not consented and not attrs.get("transfer_consent"):
+            raise serializers.ValidationError(
+                {"transfer_consent": "Agree to the transfer before saving a key."}
+            )
+        return attrs
+
     def create(self, validated_data):
         api_key = validated_data.pop("api_key", "")
+        consent = validated_data.pop("transfer_consent", False)
         instance = LLMConfig(**validated_data)
         if api_key:
             instance.api_key = api_key
+        if consent:
+            instance.transfer_consent_at = timezone.now()
         instance.save()
         return instance
 
     def update(self, instance, validated_data):
         api_key = validated_data.pop("api_key", None)
+        consent = validated_data.pop("transfer_consent", False)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if api_key:
             instance.api_key = api_key
+        if consent and not instance.transfer_consent_at:
+            instance.transfer_consent_at = timezone.now()
         instance.save()
 
         return instance

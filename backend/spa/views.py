@@ -7,6 +7,7 @@ from pathlib import Path
 from allauth.account.internal.flows.reauthentication import did_recently_authenticate
 from django.conf import settings
 from django.contrib.auth import logout
+from django.core.mail import send_mail
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
@@ -24,6 +25,7 @@ from llm_connector.serializers import AiJobSerializer
 from llm_connector.tasks import request_prewarm
 from lukehirsch.private_media import private_file_response
 from lukehirsch.throttling import UploadThrottle
+from spa.legal import operator
 from spa.models import (
     PersonalityProfile,
     PersonalityQuestion,
@@ -102,8 +104,19 @@ class AccountDeleteView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         user = request.user
+        user_id = user.pk
         logout(request)
         user.delete()
+        # Privacy page, section 10: a restore brings deleted accounts back, and they get deleted
+        # again. The list can't live in what's backed up, so it's a number in the operator's inbox.
+        contact = operator()
+        if contact and contact["email"]:
+            send_mail(
+                f"[jac] Konto {user_id} gelöscht",
+                f"Konto {user_id} wurde gelöscht. Nach einer Wiederherstellung erneut löschen.",
+                settings.DEFAULT_FROM_EMAIL,
+                [contact["email"]],
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
