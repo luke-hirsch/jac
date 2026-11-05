@@ -63,12 +63,16 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 # where things stand
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, and its status table says
-where things are: the code is merged, Part 2's click-through is partly logged, and Part 4, the board's
-re-export, is the next hard stop.** It holds the audit results, the fixes, the lab runbook, the legal TODOs, the
-launch checklist and what's parked. It replaced every earlier launch guide.
+where things are: the code is merged, Part 2's click-through is partly logged, the legal pages are rewritten on a
+branch, and Part 4, the board's re-export, is the next hard stop.** It holds the audit results, the fixes, the lab
+runbook, the legal TODOs, the launch checklist and what's parked. It replaced every earlier launch guide.
 
 - **Branches:** `main` holds the Postgres move, the guide's fixes and prewarm. CI passed that code on Postgres
-  and 3.12.
+  and 3.12 on its branch, but `main`'s own run went red on a test-only race. `backend/test-tmp-race` fixes that, so
+  merge it first. `fullstack/legal-text`, cut from it, holds the rewritten legal pages plus red tests for what they
+  promise: Lukas types the key consent and the deleted-account record (Part 6).
+- **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Their text commits jac to things
+  that aren't all built yet ([[legal-consent-and-restore]]).
 - **Nothing is deployed, and merged isn't verified.** The click-through has only logged a first visit, German
   letters and letter fit. Part 2's other checks stay open, and belong before going live.
 - **The tower's wake** is planned on the lab, not built: a proxy that reacts to any request, so jac needs no
