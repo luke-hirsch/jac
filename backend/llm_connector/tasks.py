@@ -2,10 +2,13 @@
 loop ends, and a model server that is off or starting is a stage, not a failure."""
 
 import logging
+from datetime import timedelta
+from urllib import request
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import F
 from django.utils import timezone
 
@@ -13,10 +16,16 @@ from .base import WAITING_STAGE, LLMTransportError, LLMUnavailable
 from .client import wait_for_compute
 from .jobs import AiJobFailed, handler_for
 from .models import AiJob
+from .probe import hirschai_base_url
 
 logger = logging.getLogger(__name__)
 
 MAX_JOB_ATTEMPTS = 3
+# One knock per this long, however many people are on their way. Less than the 20 minutes or so a wake
+# keeps the tower up, so a steady stream of people keeps it awake, and a crawler can't start a new one.
+PREWARM_COOLDOWN_S = 15 * 60
+PREWARM_TIMEOUT_S = 5
+_PREWARM_LOCK = "llm:hirschai:prewarmed"
 
 
 def _stage(job_id: str, stage: str) -> None:
@@ -87,3 +96,53 @@ def run_ai_job(job_id: str) -> None:
         _finish(job_id, AiJob.Status.failed, error="Something went wrong — try again.")
     else:
         _finish(job_id, AiJob.Status.done, result=result)
+
+
+@shared_task
+def reap_lost_jobs() -> int:
+    """Close the jobs nothing will ever finish: the task expired after a crash, or the broker lost
+    it. Their page polls for a day otherwise, and they count as "ahead" for everyone behind them. A
+    live job can't get this old: its hard limit is below its expiry."""
+    cutoff = timezone.now() - timedelta(seconds=settings.AI_JOB_EXPIRES_S + 60)
+    count = AiJob.objects.filter(
+        status__in=[AiJob.Status.pending, AiJob.Status.running], updated_at__lt=cutoff
+    ).update(
+        status=AiJob.Status.failed,
+        error="This got lost on the way — try again.",
+        stage="",
+        payload={},
+        updated_at=timezone.now(),
+    )
+    if count:
+        logger.warning("reap_lost_jobs: closed %s jobs", count)
+    return count
+
+
+def request_prewarm() -> None:
+    """Somebody is about to need the model server, so ask for it ahead of their request: a cold start
+    is about 3 minutes. For a person's action, never a page load: crawlers load pages, and a false wake
+    costs about 20 minutes of tower time. Off without a key. It runs inside a request, so it never
+    waits and never raises: the real request wakes the server anyway."""
+    if not settings.HIRSCHAI_PREWARM_KEY:
+        return
+    try:
+        if cache.add(_PREWARM_LOCK, 1, PREWARM_COOLDOWN_S):
+            prewarm_model_server.apply_async(expires=60)
+    except Exception:
+        logger.warning("prewarm: couldn't queue the knock", exc_info=True)
+
+
+@shared_task
+def prewarm_model_server() -> None:
+    """One knock, on its own token so the lab's usage shows what warming costs. Any request wakes the
+    proxy and this token doesn't hold, so a sleeping tower answers 503 at once: the answer doesn't
+    matter, and neither does no answer."""
+    try:
+        req = request.Request(
+            hirschai_base_url() + "/v1/models",
+            headers={"Authorization": f"Bearer {settings.HIRSCHAI_PREWARM_KEY}"},
+        )
+        with request.urlopen(req, timeout=PREWARM_TIMEOUT_S):
+            pass
+    except Exception:  # noqa: BLE001 — see above. The text can name the server: not worth logging
+        logger.info("prewarm: no answer yet, which is normal while it wakes")

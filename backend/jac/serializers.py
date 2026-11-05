@@ -44,6 +44,11 @@ T = TypeVar("T", bound=serializers.Serializer)
 # A posting goes into every prompt of its run and every chat turn; the longest real ones are a few
 # thousand characters.
 MAX_POSTING_CHARS = 50_000
+# What one application may hold. Far above any real one (a two-page CV's content is a few KB);
+# every account can write these, and until now only nginx's 12 MB bounded them.
+MAX_LETTER_CHARS = 20_000
+MAX_NOTES_CHARS = 20_000
+MAX_APPLICATION_JSON_BYTES = 256 * 1024
 
 
 class FavouriteLimitMixin:
@@ -687,7 +692,11 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "sent_at",
             "responded_at",
         ]
-        extra_kwargs = {"posting": {"required": False}}
+        extra_kwargs = {
+            "posting": {"required": False},
+            "cover_letter": {"max_length": MAX_LETTER_CHARS},
+            "notes": {"max_length": MAX_NOTES_CHARS},
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -716,6 +725,18 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
     _SECTIONS = frozenset(
         ("jobs", "educations", "projects", "skills", "certifications", "languages")
     )
+
+    @staticmethod
+    def _small_json(value):
+        if len(json.dumps(value)) > MAX_APPLICATION_JSON_BYTES:
+            raise serializers.ValidationError("This is too large to store.")
+        return value
+
+    def validate_cv_content(self, value):
+        return self._small_json(value)
+
+    def validate_letter_meta(self, value):
+        return self._small_json(value)
 
     def validate_sections_off(self, value):
         """A list of known section keys, deduped. Unknown keys are rejected rather than

@@ -232,6 +232,58 @@ class GenerationRunReadTests(APITestCase):
         self.assertEqual([row["id"] for row in r.data["results"]], [self.gen_run.pk])
 
 
+CREATE_ONCE_A_MINUTE = {
+    **dj_settings.REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {"application-create": "1/min"},
+}
+
+
+class ApplicationLimitTests(APITestCase):
+    """Every account can write these, and until now only nginx's 12 MB bounded them. The numbers are
+    far above any real application: a two-page CV's content is a few KB."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.application = make_application(self.user)
+        self.client.force_login(self.user)
+        cache.clear()  # scoped-throttle history lives in the default cache
+
+    def _patch(self, **fields):
+        return self.client.patch(
+            f"{APPS_URL}{self.application.pk}/", fields, format="json"
+        )
+
+    def test_text_over_its_cap_is_refused(self):
+        for field, cap in (("cover_letter", 20_000), ("notes", 20_000)):
+            with self.subTest(field):
+                r = self._patch(**{field: "x" * (cap + 1)})
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(field, r.data)
+
+    def test_json_over_its_cap_is_refused(self):
+        for field in ("cv_content", "letter_meta"):
+            with self.subTest(field):
+                r = self._patch(**{field: {"subject": "x" * (256 * 1024)}})
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(field, r.data)
+
+    def test_real_sizes_pass(self):
+        r = self._patch(cover_letter="x" * 20_000, notes="x" * 20_000)
+        self.assertEqual(r.status_code, 200)
+        r = self._patch(letter_meta={"subject": "Application", "salutation": "Dear team,"})
+        self.assertEqual(r.status_code, 200)
+
+    @override_settings(REST_FRAMEWORK=CREATE_ONCE_A_MINUTE)
+    def test_creating_applications_is_throttled(self):
+        """The daily cap only counts runs: past it, an application still gets created."""
+        with patch("jac.views.generate_run") as task:
+            _mock_enqueue(task)
+            first = self.client.post(APPS_URL, {"posting_text": "One."}, format="json")
+            second = self.client.post(APPS_URL, {"posting_text": "Two."}, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 429)
+
+
 class GenerationRunCancelTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
@@ -240,6 +292,10 @@ class GenerationRunCancelTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.user)
+        # A cancel reports the runs before it. Unpatched, that queues a real task on the dev broker.
+        patcher = patch("jac.views.notify_when_drained")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_cancel_revokes_and_fails_a_pending_run(self):
         run = GenerationRun.objects.create(

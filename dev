@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# The dev stack in one command. Ctrl-C stops all of it.
+#
+#   ./dev              web + worker + vite on this machine; sets up whatever is missing first
+#   ./dev stack        the production image instead, with its own database (http://localhost:8000)
+#   ./dev stack down   stop that stack and delete its data
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# The repo's own virtualenv, whatever this shell has pinned.
+PYENV_VERSION=$(cat .python-version)
+export PYENV_VERSION
+export PYTHONUNBUFFERED=1
+
+setup() {
+    [ -f backend/.env.local ] || echo DEBUG=1 > backend/.env.local
+    pg_isready -q || brew services start postgresql@18
+    until pg_isready -q; do sleep 0.2; done
+    valkey-cli ping > /dev/null 2>&1 || brew services start valkey
+    createdb jac 2> /dev/null || true
+
+    # Only what a pull changed: a new lock, new migrations, a new layout.
+    local stamp
+    stamp="$(python -c 'import sys; print(sys.prefix)')/.jac-requirements"
+    if [ requirements.txt -nt "$stamp" ]; then
+        pip install -q -r requirements.txt
+        touch "$stamp"
+    fi
+    if [ frontend/package-lock.json -nt frontend/node_modules/.package-lock.json ]; then
+        (cd frontend && npm install)
+    fi
+    (cd backend && python manage.py migrate --noinput -v 0)
+    (cd backend && python manage.py seed_system_defaults > /dev/null)
+}
+
+# One log, with each line saying who wrote it.
+run() {
+    local label=$1 dir=$2
+    shift 2
+    (cd "$dir" && exec "$@") 2>&1 |
+        awk -v label="$label" '{ printf "%-7s %s\n", label, $0; fflush() }' &
+}
+
+up() {
+    setup
+    # kill 0 reaches the whole process group, runserver's reloader child included.
+    trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
+    run web backend python manage.py runserver
+    run worker backend celery -A lukehirsch worker -Q jac-ai,jac-cloud,jac-quick,jac-mail -c 3 -l info
+    run vite frontend npm run dev
+
+    if curl -sf -m 1 http://localhost:11434/api/version > /dev/null; then
+        model="up"
+    else
+        model="off: runs wait for it and say so. Start it with \`ollama serve\`"
+    fi
+    cat <<EOF
+
+  The app      http://localhost:5173
+  Admin        http://localhost:8000/admin/
+  Model server $model
+  The worker doesn't reload: after changing a task or the pipeline, Ctrl-C and ./dev again.
+  Signup codes are printed by \`web\`, below.
+
+EOF
+    wait
+}
+
+stack() {
+    local compose=(docker compose -f compose.yaml -f compose.laptop.yaml)
+    if [ "${1:-}" = down ]; then
+        # -t: compose.yaml gives workers 5 minutes to finish. Nothing here is worth waiting for.
+        "${compose[@]}" down -v -t 5
+        return
+    fi
+    "${compose[@]}" build
+    "${compose[@]}" up -d --wait postgres valkey
+    "${compose[@]}" run --rm --no-deps web ./migrate
+    "${compose[@]}" up -d
+    cat <<EOF
+
+  The app      http://app.localhost:8000
+  The landing  http://localhost:8000
+  Signup codes ${compose[*]} logs app
+  Stop it      ./dev stack down
+
+EOF
+}
+
+case "${1:-}" in
+    "") up ;;
+    stack) stack "${2:-}" ;;
+    *)
+        sed -n 2,6p "$0"
+        exit 2
+        ;;
+esac

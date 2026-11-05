@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
 import { ApiError } from "@/lib/api";
+import { prewarmForEditing } from "@/lib/prewarm";
 import {
   postingsToBatch,
   STATUS_LABELS,
@@ -107,10 +108,14 @@ function ApplicationsPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <Textarea
+              aria-label="Job posting"
               rows={8}
               placeholder="Paste the job posting…"
               value={postingText}
-              onChange={(e) => setPostingText(e.target.value)}
+              onChange={(e) => {
+                setPostingText(e.target.value);
+                prewarmForEditing(); // a posting on its way means a run
+              }}
             />
             <div className="flex items-center gap-2">
               <Checkbox

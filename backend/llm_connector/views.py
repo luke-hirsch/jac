@@ -8,11 +8,12 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from llm_connector.catalog import CATALOG, knobs_for, models_for
 from llm_connector.client import LLMClient
-from llm_connector.conf import HIRSCHAI_PROVIDER
+from llm_connector.conf import HIRSCHAI_PROVIDER, default_executor
 from llm_connector.models import AiJob, LLMConfig, LLMRequestLog, Provider
 from llm_connector.probe import hirschai_state
 from llm_connector.serializers import (
@@ -20,6 +21,7 @@ from llm_connector.serializers import (
     LLMConfigSerializer,
     LLMRequestLogSerializer,
 )
+from llm_connector.tasks import request_prewarm
 from lukehirsch.permissions import IsOwner
 
 
@@ -66,6 +68,21 @@ class AiJobView(APIView):
     def get(self, request, pk):
         job = get_object_or_404(AiJob, pk=pk, user=request.user)
         return Response(AiJobSerializer(job).data)
+
+
+class PrewarmView(APIView):
+    """POST: this user is about to need the model, so wake it ahead of their request. A user on their
+    own key never touches the tower. 204 whatever happens: nothing is waiting for this."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "prewarm"
+
+    @extend_schema(request=None, responses={204: None})
+    def post(self, request):
+        if default_executor(request.user).is_hirschai:
+            request_prewarm()
+        return Response(status=204)
 
 
 class ExecutorListView(APIView):

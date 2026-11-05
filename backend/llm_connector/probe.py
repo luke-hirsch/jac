@@ -43,18 +43,25 @@ def hirschai_state() -> bool | None:
         return None
 
 
+def hirschai_base_url() -> str:
+    """The model server's address, with or without the /v1 it was configured with."""
+    from .conf import resolve_config
+
+    base = resolve_config("ollama")["url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")].rstrip("/")
+    return base
+
+
 def hirschai_reachable() -> bool:
     """Ask the model server right now. Sends this process's key, like every other call."""
     from .conf import resolve_config
 
     config = resolve_config("ollama")
-    base = config["url"].rstrip("/")
-    if base.endswith("/v1"):
-        base = base[: -len("/v1")].rstrip("/")
     headers = {}
     if config.get("api_key"):
         headers["Authorization"] = f"Bearer {config['api_key']}"
-    req = request.Request(base + "/api/tags", headers=headers)
+    req = request.Request(hirschai_base_url() + "/api/tags", headers=headers)
     try:
         with request.urlopen(req, timeout=PROBE_TIMEOUT_S) as resp:
             return resp.status == 200

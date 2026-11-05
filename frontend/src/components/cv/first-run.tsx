@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError } from "@/lib/api";
+import { prewarmForEditing } from "@/lib/prewarm";
 import { useLoadSampleCareer } from "@/lib/queries/jac";
 
 /** Shown instead of the posting form while there is nothing for a run to write from. */
@@ -14,6 +15,7 @@ export function EmptyCareerCard() {
   async function onLoad() {
     try {
       await load.mutateAsync();
+      prewarmForEditing(); // a first run is next
       toast.success(
         "Sample career loaded. Paste a job posting to see what jac makes of it.",
       );

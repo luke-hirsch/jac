@@ -2,7 +2,10 @@ import logging
 import math
 import re
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from llm_connector import complete, embed
+from llm_connector.base import LLM_GONE
 from llm_connector.executor import Executor
 
 logger = logging.getLogger(__name__)
@@ -197,6 +200,8 @@ class Conversational:
         """Return an ordered [{id, why}] of chosen entries. [] on any failure."""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("Conversational selector: LLM call failed")
             return []
@@ -293,6 +298,8 @@ class Instruct:
         """Return [{id, score, reason}] with score = integer relevance label (0.._LABEL_MAX)."""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("Instruct scorer: LLM call failed")
             return []
@@ -374,6 +381,8 @@ class AddressExtract:
         """Return {field: value} for the fields the posting states. {} on any failure."""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("AddressExtract: LLM call failed")
             return {}
@@ -513,6 +522,8 @@ class CoverLetterWriter:
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("CoverLetterWriter: LLM call failed")
             return ""
@@ -614,6 +625,8 @@ class FaithfulnessCheck:
         None = audit failed / unreadable ('not checked', NOT clean); 0 = clean; >0 = that many."""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             logger.exception("FaithfulnessCheck: LLM call failed")
             return {"count": None, "claims": []}
@@ -741,6 +754,8 @@ class ParagraphRewrite:
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("ParagraphRewrite: LLM call failed")
             return ""
@@ -807,6 +822,8 @@ class ShortenLetter:
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("ShortenLetter: LLM call failed")
             return ""
@@ -866,6 +883,8 @@ class CompanyResearcher:
             )
         except NotImplementedError:  # backstop if a flag is wrong
             return self._empty()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             logger.exception("CompanyResearcher: web search failed")
             return self._empty()

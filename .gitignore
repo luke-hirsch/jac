@@ -36,9 +36,5 @@ backend/staticfiles/
 /files/
 
 # The board's exports name lab addresses: they stay on this machine
-config/*lab*
-.python-version
-
-
-.claude
 config/
+.claude

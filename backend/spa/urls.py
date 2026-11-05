@@ -15,6 +15,7 @@ from spa.views import (
     PortfolioLinkRevokeView,
     PortfolioMetaView,
     PortfolioNativeView,
+    PortfolioPrewarmView,
     PortfolioRankView,
     PortfolioResolveView,
     SignatureFileView,
@@ -85,6 +86,11 @@ urlpatterns = [
         "portfolio/native/meta/",
         PortfolioMetaView.as_view(),
         name="portfolio-meta",
+    ),
+    path(
+        "portfolio/native/prewarm/",
+        PortfolioPrewarmView.as_view(),
+        name="portfolio-prewarm",
     ),
     path(
         "portfolio/native/intro/",

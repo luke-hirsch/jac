@@ -68,6 +68,9 @@ def _translated_errors(endpoint: str):
             if retry_after is None:
                 raise LLMUnavailable(message) from exc
             raise LLMWarmingUp(message, _retry_after_seconds(retry_after)) from exc
+        if exc.code in (502, 504):
+            # A proxy in front of a server that's off: "not there yet", like a refused connection.
+            raise LLMTransportError(message) from exc
         raise RuntimeError(message) from exc
     except error.URLError as exc:
         raise LLMTransportError(

@@ -1,6 +1,7 @@
 import logging
 
 from llm_connector import complete
+from llm_connector.base import LLM_GONE
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ class PersonalityDistiller:
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("PersonalityDistiller: LLM call failed")
             return ""
@@ -72,6 +75,8 @@ class StyleDistiller:
             return ""
         try:
             raw = complete(prompt=self._prompt(), executor=self.executor)
+        except LLM_GONE:
+            raise
         except Exception:
             logger.exception("StyleDistiller: LLM call failed")
             return ""

@@ -80,12 +80,12 @@ export function verifyErrorMessage(error: unknown): string {
   return fields.key ?? fields.__non_field__ ?? "Code rejected";
 }
 
-/** 429 = one mail per address per 10 s, and the code they already have keeps working. 409 = the
- *  resends ran out, or the flow is gone. */
+/** 429 = five mails per address a day (ACCOUNT_RATE_LIMITS), and the code they already have keeps
+ *  working. 409 = the resends ran out, or the flow is gone. */
 export function resendErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 429)
-      return "A code just went out. Give it a few seconds, then try again.";
+      return "That's all the codes for this address today. The last one still works.";
     if (error.status === 409)
       return "We can't send another code here. Start over to try again.";
   }

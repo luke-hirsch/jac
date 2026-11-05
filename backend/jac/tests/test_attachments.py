@@ -173,7 +173,7 @@ class CvAttachmentApiTests(APITestCase):
 
 
 @tag("files")
-@override_settings(MEDIA_ROOT=_TMP_MEDIA)
+@override_settings(MEDIA_ROOT=_TMP_MEDIA, PRIVATE_MEDIA_ROOT=_TMP_MEDIA)
 class ApplicationAttachmentSelectionTests(APITestCase):
     """The application's `attachments` field = an ordered, ownership-validated id list."""
 

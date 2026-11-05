@@ -147,7 +147,9 @@
       {% endif %}
 
       <div class="links">
+        {% if explore_url %}
         <a class="card primary" href="{{ explore_url }}">Explore my work →</a>
+        {% endif %}
         <a class="card" href="{{ signup_url }}">Build your own CV with JAC</a>
       </div>
 

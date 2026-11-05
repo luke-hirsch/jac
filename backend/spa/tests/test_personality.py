@@ -13,6 +13,7 @@ import logging
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
@@ -20,8 +21,9 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from llm_connector.base import LLMTransportError, LLMUnavailable
 from llm_connector.tasks import run_ai_job
-from spa.distill import PersonalityDistiller
+from spa.distill import PersonalityDistiller, StyleDistiller
 from spa.models import PersonalityProfile, PersonalityQuestion
 from spa.personality_questions import (
     MAX_ANSWER_KEY_LEN,
@@ -216,6 +218,23 @@ class PersonalityDistillerTests(TestCase):
                 PersonalityDistiller({"values": "openness"}, executor=object()).distill(),
                 "",
             )
+
+    def test_an_outage_reaches_the_job(self):
+        """Swallowed, a rebuild with the model server gone ends `done`, and the page toasts
+        "Dossier rebuilt" with nothing rebuilt."""
+        rungs = (
+            PersonalityDistiller({"values": "openness"}, executor=object()),
+            StyleDistiller("A writing sample.", executor=object()),
+        )
+        gone = (LLMTransportError("down"), LLMUnavailable("down"), SoftTimeLimitExceeded())
+        for rung in rungs:
+            for exc in gone:
+                with (
+                    self.subTest(rung=type(rung).__name__, exc=type(exc).__name__),
+                    patch("spa.distill.complete", side_effect=exc),
+                    self.assertRaises(type(exc)),
+                ):
+                    rung.distill()
 
     def test_labels_resolve_the_prompt(self):
         with patch("spa.distill.complete", return_value="D") as m:

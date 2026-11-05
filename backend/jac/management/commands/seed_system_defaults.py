@@ -25,6 +25,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.contrib.sites.models import Site
 from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 
@@ -95,6 +96,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # allauth puts this in every mail. Here, not in a runbook: ./migrate runs it on each deploy.
+        Site.objects.update_or_create(
+            pk=settings.SITE_ID, defaults={"domain": settings.BASE_DOMAIN, "name": "jac"}
+        )
         system, created_user = User.objects.get_or_create(
             username=settings.SYSTEM_USER_USERNAME,
             defaults={"is_active": False},

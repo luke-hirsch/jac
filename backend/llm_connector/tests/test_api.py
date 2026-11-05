@@ -7,6 +7,7 @@ Target API = `[backend]-executor-connector`.
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
@@ -109,6 +110,36 @@ class LLMConfigApiTests(APITestCase):
 
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
+class PrewarmApiTests(APITestCase):
+    URL = "/api/llm/prewarm/"
+    REQUEST = "llm_connector.views.request_prewarm"
+
+    def setUp(self):
+        cache.clear()  # scoped-throttle history lives in the default cache
+        self.user = User.objects.create_user(username="alice", password="pw")
+
+    def test_someone_on_hirschai_asks_for_it(self):
+        self.client.force_login(self.user)
+        with patch(self.REQUEST) as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 204)
+        prewarm.assert_called_once()
+
+    def test_someone_on_their_own_key_never_touches_the_tower(self):
+        fake_row(self.user, "anthropic", default=True)
+        self.client.force_login(self.user)
+        with patch(self.REQUEST) as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 204)
+        prewarm.assert_not_called()
+
+    def test_anonymous_is_refused(self):
+        with patch(self.REQUEST) as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 403)
+        prewarm.assert_not_called()
+
+
 class ExecutorListApiTests(APITestCase):
     @classmethod
     def setUpTestData(cls):

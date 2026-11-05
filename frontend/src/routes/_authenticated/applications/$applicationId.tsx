@@ -7,9 +7,12 @@ import { PostingCard } from "@/components/applications/posting-card";
 import { useFreshHighlight } from "@/components/applications/use-fresh-highlight";
 import { useRunLifecycle } from "@/components/applications/use-run-lifecycle";
 import { editableBody } from "@/lib/letter-doc";
+import { prewarmForEditing } from "@/lib/prewarm";
 import { useApplication } from "@/lib/queries/applications";
 import { isRunInFlight } from "@/lib/queries/generations";
 import { LifecycleCard } from "@/components/applications/lifecycle-card";
+import { QueryError } from "@/components/query-error";
+import { ApiError } from "@/lib/api";
 
 export const Route = createFileRoute(
   "/_authenticated/applications/$applicationId",
@@ -21,6 +24,12 @@ function ApplicationDetailPage() {
   const { applicationId } = Route.useParams();
   const id = Number(applicationId);
   const app = useApplication(id);
+
+  // A draft is about to be edited or run. One that went out is usually just being looked at.
+  const isDraft = app.data?.status === "draft";
+  useEffect(() => {
+    if (isDraft) prewarmForEditing();
+  }, [isDraft]);
 
   // The user's explicit pick wins; otherwise the latest run (refresh-safe rehydrate).
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -43,8 +52,18 @@ function ApplicationDetailPage() {
 
   if (app.isLoading)
     return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (!app.data)
-    return <p className="text-sm text-destructive">Application not found.</p>;
+  if (!app.data) {
+    if (app.error instanceof ApiError && app.error.status === 404)
+      return <p className="text-sm text-destructive">Application not found.</p>;
+    return (
+      <QueryError
+        error={app.error}
+        what="this application"
+        onRetry={() => app.refetch()}
+        retrying={app.isFetching}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

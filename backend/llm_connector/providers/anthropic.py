@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 from django.core.exceptions import ImproperlyConfigured
 
-from ..base import LLMAdapter
+from ..base import LLMAdapter, translated_sdk_errors
 from ..registry import register
 
 
@@ -31,7 +31,10 @@ class AnthropicAdapter(LLMAdapter):
             raise ImproperlyConfigured(
                 "LLM anthropic provider requires an 'api_key' in its config."
             )
-        self._client = _anthropic.Anthropic(api_key=api_key)
+        self._sdk = _anthropic
+        self._client = _anthropic.Anthropic(
+            api_key=api_key, timeout=config.get("timeout", _anthropic.DEFAULT_TIMEOUT)
+        )
         self._model = config.get("model", "claude-sonnet-4-6")
         self._max_tokens = config.get("max_tokens", 4096)
 
@@ -82,7 +85,8 @@ class AnthropicAdapter(LLMAdapter):
         params.update(kwargs)
         if system:
             params["system"] = system
-        response = self._client.messages.create(**params)
+        with translated_sdk_errors(self._sdk, "anthropic"):
+            response = self._client.messages.create(**params)
         return self._text_from(response)
 
     def stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
@@ -97,7 +101,10 @@ class AnthropicAdapter(LLMAdapter):
         params.update(kwargs)
         if system:
             params["system"] = system
-        with self._client.messages.stream(**params) as s:
+        with (
+            translated_sdk_errors(self._sdk, "anthropic"),
+            self._client.messages.stream(**params) as s,
+        ):
             yield from s.text_stream
 
     def token_counts(self, response) -> tuple[int | None, int | None]:
@@ -123,7 +130,8 @@ class AnthropicAdapter(LLMAdapter):
         params.update(kwargs)
         if system:
             params["system"] = system
-        response = self._client.messages.create(**params)
+        with translated_sdk_errors(self._sdk, "anthropic"):
+            response = self._client.messages.create(**params)
 
         texts: list[str] = []
         sources: list[str] = []

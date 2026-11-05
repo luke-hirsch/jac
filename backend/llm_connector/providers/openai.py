@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 from django.core.exceptions import ImproperlyConfigured
 
-from ..base import LLMAdapter
+from ..base import LLMAdapter, translated_sdk_errors
 from ..registry import register
 
 
@@ -27,7 +27,12 @@ class OpenAIAdapter(LLMAdapter):
                 "LLM openai provider requires an 'api_key' in its config."
             )
         base_url = config.get("url")
-        self._client = _openai.OpenAI(api_key=api_key, base_url=base_url)
+        self._sdk = _openai
+        self._client = _openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=config.get("timeout", _openai.DEFAULT_TIMEOUT),
+        )
         self._model = config.get("model", "gpt-5.6-luna")
         self._max_tokens = config.get("max_tokens")
         self._reasoning_effort = config.get("reasoning_effort")
@@ -47,16 +52,18 @@ class OpenAIAdapter(LLMAdapter):
     def complete(self, messages: list[dict], **kwargs) -> str:
         params: dict = dict(model=self._model, messages=messages, **kwargs)
         self._apply_model_params(params)
-        response = self._client.chat.completions.create(**params)
+        with translated_sdk_errors(self._sdk, "openai"):
+            response = self._client.chat.completions.create(**params)
         return response.choices[0].message.content
 
     def stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
         params: dict = dict(model=self._model, messages=messages, stream=True, **kwargs)
         self._apply_model_params(params)
-        for chunk in self._client.chat.completions.create(**params):
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        with translated_sdk_errors(self._sdk, "openai"):
+            for chunk in self._client.chat.completions.create(**params):
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
 
     def token_counts(self, response) -> tuple[int | None, int | None]:
         usage = getattr(response, "usage", None)
@@ -88,7 +95,8 @@ class OpenAIAdapter(LLMAdapter):
             params.setdefault(
                 "reasoning", {"effort": effort}
             )  # gpt-5.x reasoning models only
-        response = self._client.responses.create(**params)
+        with translated_sdk_errors(self._sdk, "openai"):
+            response = self._client.responses.create(**params)
 
         sources: list[str] = []
         for item in getattr(response, "output", None) or []:

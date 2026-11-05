@@ -10,9 +10,11 @@ import json
 import tempfile
 from datetime import date
 
+from django.conf import settings
+from django.contrib.sites.models import Site
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from jac.career_import import SAMPLE_CAREER
@@ -168,6 +170,20 @@ class EducationDegreeTests(TestCase):
             degree_level=Education.DegreeLevel.none,
         )
         self.assertFalse(e.is_degree)
+
+
+class SeedSystemDefaultsTests(TestCase):
+    def test_the_site_follows_the_base_domain(self):
+        """allauth puts the Site in every mail: a fresh database says "example.com" until something
+        fixes it. That something belongs in the deploy step, not in a runbook."""
+        with (
+            tempfile.TemporaryDirectory() as media,
+            override_settings(MEDIA_ROOT=media, BASE_DOMAIN="example.org"),
+        ):
+            call_command("seed_system_defaults", stdout=io.StringIO())
+        site = Site.objects.get(pk=settings.SITE_ID)
+        self.assertEqual(site.domain, "example.org")
+        self.assertEqual(site.name, "jac")
 
 
 class CvImportCommandTests(TestCase):

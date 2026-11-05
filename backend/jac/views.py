@@ -485,6 +485,12 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
     # other action is untouched since ScopedRateThrottle isn't in DEFAULT_THROTTLE_CLASSES.
     throttle_scope = None
 
+    def get_throttles(self):
+        if self.action == "create":
+            self.throttle_scope = "application-create"
+            return [_LiveScopedRateThrottle()]
+        return super().get_throttles()
+
     def get_queryset(self):
         return (
             JobApplication.objects.filter(user=self.request.user)

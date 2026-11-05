@@ -93,13 +93,13 @@ def verify_production_secrets(
     if debug:
         return
     offenders = []
-    if secret_key == DEV_SECRET_KEY:
+    if not secret_key or secret_key == DEV_SECRET_KEY:
         offenders.append("SECRET_KEY")
-    if encryption_key == DEV_ENCRYPTION_KEY:
+    if not encryption_key or encryption_key == DEV_ENCRYPTION_KEY:
         offenders.append("LLM_ENCRYPTION_KEY")
     if offenders:
         raise ImproperlyConfigured(
-            "Refusing to start with DEBUG off while these secrets are still the "
+            "Refusing to start with DEBUG off while these secrets are blank or still the "
             f"checked-in dev defaults: {', '.join(offenders)}. Set them from the "
             "environment (SECRET_KEY, LLM_ENCRYPTION_KEY). On a laptop, DEBUG=1 in "
             "backend/.env.local turns debug mode on."
