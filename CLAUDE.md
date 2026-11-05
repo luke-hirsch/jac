@@ -62,22 +62,23 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, and its status table says
-where things are: the code is merged, Part 2's click-through is partly logged, the legal pages are rewritten on a
-branch, and Part 4, the board's re-export, is the next hard stop.** It holds the audit results, the fixes, the lab
-runbook, the legal TODOs, the launch checklist and what's parked. It replaced every earlier launch guide.
+**Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, in the order of the work:** step 1
+finishes and merges `fullstack/legal-text`, step 2 is the open click-through, step 3 sets up the mini, step 4 is the live
+checklist. The board's `-6` export is right and the lab's open questions are answered, so nothing on the laptop waits
+for the lab. Earlier versions, with the audit and the fixes, are in `.claude/plans/done/`.
 
-- **Branches:** `main` holds the Postgres move, the guide's fixes and prewarm. CI passed that code on Postgres
-  and 3.12 on its branch, but `main`'s own run went red on a test-only race. `backend/test-tmp-race` fixes that, so
-  merge it first. `fullstack/legal-text`, cut from it, holds the rewritten legal pages plus red tests for what they
-  promise: Lukas types the key consent and the deleted-account record (Part 6).
+- **Branches:** `main` holds the Postgres move, the guide's fixes and prewarm, but its CI is red on a test-only race.
+  `fullstack/legal-text` is cut from `backend/test-tmp-race`, which fixes that, so one merge brings both. It holds the
+  rewritten legal pages plus red tests for what they promise: Lukas types the key consent, the deleted-account record
+  and two privacy sentences (step 1).
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Their text commits jac to things
   that aren't all built yet ([[legal-consent-and-restore]]).
 - **Nothing is deployed, and merged isn't verified.** The click-through has only logged a first visit, German
-  letters and letter fit. Part 2's other checks stay open, and belong before going live.
-- **The tower's wake** is planned on the lab, not built: a proxy that reacts to any request, so jac needs no
-  change. Until then it's by hand, so a recruiter's run fails after 15 minutes with the tower off (Part 0).
-  Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set (Part 1b).
+  letters and letter fit. The other checks stay open, and belong before going live.
+- **The lab:** labd, the tower's wake proxy, is written but not installed. Until it is, the tower is woken by hand, so
+  a recruiter's run with it off fails after 15 minutes. jac needs no code change for labd, only `.env` values (step
+  3h). Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set. There's no nightly backup yet, only the
+  deploy dumps on the mini's disk, and the public route and wildcard certificate wait on the lab.
 - **The board test still stands:** work from the exports in `config/` + this repo, not the server repo or
   the homelab skill, until Lukas lifts it ([[jac-on-the-lab]]). Lab addresses stay out of tracked files,
   guides and handovers: the repo is public ([[public-repo]]).
