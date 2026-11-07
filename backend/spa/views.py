@@ -34,10 +34,10 @@ from spa.models import (
 from spa.portfolio import (
     build_payload,
     bump_visit,
+    link_owner_for_handle,
     owner_domains,
+    owner_for_handle,
     rank_for_query,
-    resolve_link_owner,
-    resolve_owner,
 )
 from spa.serializers import (
     PersonalityProfileSerializer,
@@ -242,7 +242,8 @@ class PortfolioLinkRevokeView(APIView):
 class PublicPortfolioAPIView(APIView):
     """Base for the anonymous portfolio endpoints: explicit AllowAny (the IndexView
     pattern — public by opt-in, never by omission), scoped throttling, and an
-    X-Robots-Tag so the API URLs themselves never get indexed."""
+    X-Robots-Tag so the API URLs themselves never get indexed. The owner comes from the
+    `<handle>` in the path, never from the Host header."""
 
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -257,10 +258,10 @@ class PublicPortfolioAPIView(APIView):
 class PortfolioResolveView(PublicPortfolioAPIView):
     """GET: personalised slug → payload. Revoked ≡ missing — the single filtered
     lookup yields identical 404s. Counts the visit unless the owner previews their
-    own link. The one public path open on an unpublished handle: see `resolve_link_owner`."""
+    own link. The one public path open on an unpublished handle: see `link_owner_for_handle`."""
 
-    def get(self, request, slug):
-        owner = resolve_link_owner(request)
+    def get(self, request, handle, slug):
+        owner = link_owner_for_handle(handle)
         if owner is None:
             raise Http404
         link = get_object_or_404(
@@ -272,12 +273,12 @@ class PortfolioResolveView(PublicPortfolioAPIView):
 
 
 class PortfolioNativeView(PublicPortfolioAPIView):
-    """GET: the native (questionnaire-driven) view of the configured owner's
-    portfolio. `?domains=a,b` scopes; `?lucky=1` = favourites + a random tasting
+    """GET: the native (questionnaire-driven) view of the handle's portfolio.
+    `?domains=a,b` scopes; `?lucky=1` = favourites + a random tasting
     menu. Stateless — bots create zero rows."""
 
-    def get(self, request):
-        owner = resolve_owner(request)
+    def get(self, request, handle):
+        owner = owner_for_handle(handle)
         if owner is None:
             raise Http404
         domains = [
@@ -305,8 +306,8 @@ class PortfolioRankView(PublicPortfolioAPIView):
 
     throttle_scope = "portfolio-rank"
 
-    def post(self, request):
-        owner = resolve_owner(request)
+    def post(self, request, handle):
+        owner = owner_for_handle(handle)
         if owner is None:
             raise Http404
         ser = PortfolioRankSerializer(data=request.data)
@@ -330,8 +331,8 @@ class PortfolioMetaView(PublicPortfolioAPIView):
     """GET: the questionnaire's building blocks — the owner's REAL domain shortlist (only
     domains with content, so no branch dead-ends) plus the style-axis vocab."""
 
-    def get(self, request):
-        owner = resolve_owner(request)
+    def get(self, request, handle):
+        owner = owner_for_handle(handle)
         if owner is None:
             raise Http404
         return Response(
@@ -357,8 +358,8 @@ class PortfolioIntroView(PublicPortfolioAPIView):
 
     throttle_scope = "portfolio-intro"
 
-    def post(self, request):
-        owner = resolve_owner(request)
+    def post(self, request, handle):
+        owner = owner_for_handle(handle)
         if owner is None:
             raise Http404
         ser = PortfolioIntroSerializer(data=request.data)
@@ -384,8 +385,8 @@ class PortfolioPrewarmView(PublicPortfolioAPIView):
 
     throttle_scope = "prewarm"
 
-    def post(self, request):
-        if resolve_owner(request) is None:
+    def post(self, request, handle):
+        if owner_for_handle(handle) is None:
             raise Http404
         request_prewarm()
         return Response(status=status.HTTP_204_NO_CONTENT)

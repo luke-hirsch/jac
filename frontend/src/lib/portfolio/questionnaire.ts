@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** The native-visitor questionnaire — a flat form now (was a hardcoded branch tree).
  *  Domains come from the owner's real taxonomy at runtime (GET /native/meta/), so this
  *  file holds only the pure form↔search mapping — the tests/ regime's sweet spot. */
@@ -9,6 +11,15 @@ export type ExploreSearch = {
   focus?: string;
   tone?: string;
 };
+
+/** The answer as the URL carries it (no `q`, see splitQuery). An owner's home validates its search
+ *  with it, and a native stamp stores the same shape. */
+export const exploreSearchSchema = z.object({
+  d: z.array(z.string()).optional(),
+  lucky: z.boolean().optional(),
+  focus: z.string().optional(),
+  tone: z.string().optional(),
+});
 
 export const DEFAULT_FOCUS = "balanced";
 export const DEFAULT_TONE = "neutral";
@@ -28,7 +39,7 @@ export const EMPTY_FORM: QuestForm = {
 };
 
 /** The answered questionnaire → the result search. ALWAYS carries focus+tone, so the
- *  result URL is never param-empty — that's how `/` (the handle-host home) distinguishes
+ *  result URL is never param-empty — that's how an owner's home distinguishes
  *  "answered" (show the result) from "ask me" (show the questionnaire). */
 export function formToSearch(form: QuestForm): ExploreSearch {
   const search: ExploreSearch = { focus: form.focus, tone: form.tone };

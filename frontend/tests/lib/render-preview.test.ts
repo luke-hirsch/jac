@@ -174,15 +174,15 @@ describe("totalPages", () => {
 
 describe("previewSrc", () => {
   it("asks the built-in viewer to fit the width, with no chrome", () => {
-    const src = previewSrc("blob:http://app.localhost/abc-123");
+    const src = previewSrc("blob:http://jac.localhost/abc-123");
     expect(src).toContain("#view=FitH");
     expect(src).toContain("toolbar=0");
     expect(src).toContain("navpanes=0");
-    expect(src.startsWith("blob:http://app.localhost/abc-123#")).toBe(true);
+    expect(src.startsWith("blob:http://jac.localhost/abc-123#")).toBe(true);
   });
 
   it("is idempotent — re-rendering never stacks fragments", () => {
-    const once = previewSrc("blob:http://app.localhost/abc-123");
+    const once = previewSrc("blob:http://jac.localhost/abc-123");
     expect(previewSrc(once)).toBe(once);
     expect(once.match(/#/g)).toHaveLength(1);
   });

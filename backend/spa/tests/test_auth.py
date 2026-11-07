@@ -114,8 +114,8 @@ class AuthFlowTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
 
     def test_a_signup_puts_no_name_in_the_portfolio_address(self):
-        """allauth makes the username from the email's local part. The handle is a public
-        subdomain, so it takes nothing from it."""
+        """allauth makes the username from the email's local part. The handle is part of a
+        public address, so it takes nothing from it."""
         self._signup("maximilian.mustermann@example.com")
         user = User.objects.get(email="maximilian.mustermann@example.com")
         self.assertIn("maximilian", user.username)  # why the handle can't come from it

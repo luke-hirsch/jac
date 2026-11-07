@@ -53,7 +53,7 @@ describe("openGenerationSocket", () => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    vi.stubGlobal("location", { protocol: "http:", host: "app.test" });
+    vi.stubGlobal("location", { protocol: "http:", host: "jac.test" });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -70,7 +70,7 @@ describe("openGenerationSocket", () => {
     const events: unknown[] = [];
     open((d) => events.push(d));
     const ws = FakeWebSocket.instances[0];
-    expect(ws.url).toBe("ws://app.test/ws/jac/generations/7/");
+    expect(ws.url).toBe("ws://jac.test/ws/jac/generations/7/");
     ws.onmessage?.({ data: JSON.stringify({ event: "progress", stage: "x" }) });
     ws.onmessage?.({ data: "not json" }); // ignored, no throw
     expect(events).toEqual([{ event: "progress", stage: "x" }]);

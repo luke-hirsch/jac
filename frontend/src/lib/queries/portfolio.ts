@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
 
@@ -46,27 +51,56 @@ export type PortfolioPayload = {
 
 export type RankedId = { id: string; score: number };
 
-export function usePortfolioLink(slug: string) {
-  return useQuery({
-    queryKey: ["portfolio", "link", slug],
-    queryFn: () => api<PortfolioPayload>(`/api/spa/portfolio/links/${slug}/`),
+/* ---------- the public side: every call names the owner ---------- */
+
+/** All portfolios share one host, so the owner is a path segment in every public call, and in
+ *  every query key: two owners must never share a cache entry. The keys sit under "public", so no
+ *  handle can prefix-match the owner-side ["portfolio", "blocks" | "links"] invalidations. */
+const pub = (handle: string) => `/api/spa/public/${encodeURIComponent(handle)}`;
+
+export const publicPaths = {
+  link: (handle: string, slug: string) =>
+    `${pub(handle)}/links/${encodeURIComponent(slug)}/`,
+  native: (handle: string, qs = "") =>
+    `${pub(handle)}/native/${qs ? `?${qs}` : ""}`,
+  meta: (handle: string) => `${pub(handle)}/native/meta/`,
+  rank: (handle: string) => `${pub(handle)}/native/rank/`,
+  prewarm: (handle: string) => `${pub(handle)}/native/prewarm/`,
+  intro: (handle: string) => `${pub(handle)}/native/intro/`,
+  introJob: (id: string) => `/api/spa/public/intro/${encodeURIComponent(id)}/`,
+};
+
+export const portfolioLinkQuery = (handle: string, slug: string) =>
+  queryOptions({
+    queryKey: ["portfolio", "public", handle, "link", slug],
+    queryFn: () => api<PortfolioPayload>(publicPaths.link(handle, slug)),
     retry: false, // a 404 is an answer (revoked/unknown), not a flake
   });
+
+export function usePortfolioLink(handle: string, slug: string) {
+  return useQuery(portfolioLinkQuery(handle, slug));
 }
 
-export function useNativePortfolio(search: ExploreSearch) {
+export function nativeQueryString(search: ExploreSearch): string {
   const params = new URLSearchParams();
   if (search.d?.length) params.set("domains", search.d.join(","));
   if (search.lucky) params.set("lucky", "1");
   if (search.focus) params.set("focus", search.focus);
   if (search.tone) params.set("tone", search.tone);
-  const qs = params.toString();
-  return useQuery({
-    queryKey: ["portfolio", "native", qs],
-    queryFn: () =>
-      api<PortfolioPayload>(`/api/spa/portfolio/native/${qs ? `?${qs}` : ""}`),
+  return params.toString();
+}
+
+export const nativePortfolioQuery = (handle: string, search: ExploreSearch) => {
+  const qs = nativeQueryString(search);
+  return queryOptions({
+    queryKey: ["portfolio", "public", handle, "native", qs],
+    queryFn: () => api<PortfolioPayload>(publicPaths.native(handle, qs)),
     retry: false,
   });
+};
+
+export function useNativePortfolio(handle: string, search: ExploreSearch) {
+  return useQuery(nativePortfolioQuery(handle, search));
 }
 
 export type NativeMeta = {
@@ -75,13 +109,16 @@ export type NativeMeta = {
   focuses: { value: string; label: string }[];
 };
 
-export function useNativeMeta() {
-  return useQuery({
-    queryKey: ["portfolio", "meta"],
-    queryFn: () => api<NativeMeta>("/api/spa/portfolio/native/meta/"),
+export const nativeMetaQuery = (handle: string) =>
+  queryOptions({
+    queryKey: ["portfolio", "public", handle, "meta"],
+    queryFn: () => api<NativeMeta>(publicPaths.meta(handle)),
     staleTime: Infinity,
     retry: false,
   });
+
+export function useNativeMeta(handle: string) {
+  return useQuery(nativeMetaQuery(handle));
 }
 
 const INTRO_POLL_MS = 3_000;
@@ -93,8 +130,11 @@ type IntroStatus = {
   intro: string;
 };
 
-async function fetchIntro(search: ExploreSearch): Promise<{ intro: string }> {
-  const { id } = await api<{ id: string }>("/api/spa/portfolio/native/intro/", {
+async function fetchIntro(
+  handle: string,
+  search: ExploreSearch,
+): Promise<{ intro: string }> {
+  const { id } = await api<{ id: string }>(publicPaths.intro(handle), {
     method: "POST",
     body: JSON.stringify({
       domains: search.d ?? [],
@@ -105,9 +145,7 @@ async function fetchIntro(search: ExploreSearch): Promise<{ intro: string }> {
   });
   const deadline = Date.now() + INTRO_GIVE_UP_MS;
   while (Date.now() < deadline) {
-    const job = await api<IntroStatus>(
-      `/api/spa/portfolio/native/intro/${id}/`,
-    );
+    const job = await api<IntroStatus>(publicPaths.introJob(id));
     if (job.status === "done" || job.status === "failed")
       return { intro: job.intro };
     await new Promise((r) => setTimeout(r, INTRO_POLL_MS));
@@ -118,21 +156,26 @@ async function fetchIntro(search: ExploreSearch): Promise<{ intro: string }> {
 /** The AI intro — queued server-side, so the page is there first and the intro joins it when it
  *  arrives, even if the AI has to wake. Skipped for lucky ("a reshuffle mustn't burn the budget");
  *  '' / failure degrades silently to no intro. */
-export function useNativeIntro(search: ExploreSearch) {
-  return useQuery({
+export const nativeIntroQuery = (handle: string, search: ExploreSearch) =>
+  queryOptions({
     queryKey: [
       "portfolio",
+      "public",
+      handle,
       "intro",
       search.d ?? [],
       search.q ?? "",
       search.focus,
       search.tone,
     ],
-    queryFn: () => fetchIntro(search),
+    queryFn: () => fetchIntro(handle, search),
     enabled: !search.lucky,
     staleTime: Infinity,
     retry: false,
   });
+
+export function useNativeIntro(handle: string, search: ExploreSearch) {
+  return useQuery(nativeIntroQuery(handle, search));
 }
 /** Mirrors spa PortfolioLinkSerializer (owner-side). `content` is `{}` on a fresh
  *  application link (before the sent-freeze), so its keys are optional. */
@@ -169,15 +212,15 @@ export function revokePortfolioLink(id: number) {
 /** The embed finale — POST but semantically a read; cached per (q, d) and never
  *  retried: the 6/h throttle makes retries actively harmful. `ai` says why `ranked` may be
  *  empty: the page then keeps its standard selection. */
-export function usePortfolioRank(search: ExploreSearch) {
+export const portfolioRankQuery = (handle: string, search: ExploreSearch) => {
   const q = search.q?.trim() ?? "";
-  return useQuery({
-    queryKey: ["portfolio", "rank", q, search.d ?? []],
+  return queryOptions({
+    queryKey: ["portfolio", "public", handle, "rank", q, search.d ?? []],
     queryFn: () =>
       api<{
         ranked: RankedId[];
         ai: "ok" | "warming_up" | "unavailable";
-      }>("/api/spa/portfolio/native/rank/", {
+      }>(publicPaths.rank(handle), {
         method: "POST",
         body: JSON.stringify({ query: q, domains: search.d ?? [] }),
       }),
@@ -185,6 +228,10 @@ export function usePortfolioRank(search: ExploreSearch) {
     staleTime: Infinity,
     retry: false,
   });
+};
+
+export function usePortfolioRank(handle: string, search: ExploreSearch) {
+  return useQuery(portfolioRankQuery(handle, search));
 }
 
 /* ---------- owner-side management (guide 5) ---------- */

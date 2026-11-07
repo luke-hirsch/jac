@@ -67,39 +67,40 @@ urlpatterns = [
         PortfolioLinkRevokeView.as_view(),
         name="portfolio-link-revoke",
     ),
+    # Public: anonymous, the owner named by the handle in the path (never the Host header).
     path(
-        "portfolio/links/<slug:slug>/",
+        "public/intro/<uuid:pk>/",
+        PortfolioIntroStatusView.as_view(),
+        name="portfolio-intro-status",
+    ),
+    path(
+        "public/<slug:handle>/links/<slug:slug>/",
         PortfolioResolveView.as_view(),
         name="portfolio-resolve",
     ),
     path(
-        "portfolio/native/",
+        "public/<slug:handle>/native/",
         PortfolioNativeView.as_view(),
         name="portfolio-native",
     ),
     path(
-        "portfolio/native/rank/",
+        "public/<slug:handle>/native/rank/",
         PortfolioRankView.as_view(),
         name="portfolio-rank",
     ),
     path(
-        "portfolio/native/meta/",
+        "public/<slug:handle>/native/meta/",
         PortfolioMetaView.as_view(),
         name="portfolio-meta",
     ),
     path(
-        "portfolio/native/prewarm/",
+        "public/<slug:handle>/native/prewarm/",
         PortfolioPrewarmView.as_view(),
         name="portfolio-prewarm",
     ),
     path(
-        "portfolio/native/intro/",
+        "public/<slug:handle>/native/intro/",
         PortfolioIntroView.as_view(),
         name="portfolio-intro",
-    ),
-    path(
-        "portfolio/native/intro/<uuid:pk>/",
-        PortfolioIntroStatusView.as_view(),
-        name="portfolio-intro-status",
     ),
 ]

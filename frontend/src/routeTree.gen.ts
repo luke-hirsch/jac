@@ -11,9 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
-import { Route as SlugRouteImport } from './routes/$slug'
+import { Route as HandleRouteImport } from './routes/$handle'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as PortfolioSlugRouteImport } from './routes/portfolio.$slug'
+import { Route as HandleIndexRouteImport } from './routes/$handle/index'
 import { Route as AuthVerifyEmailRouteImport } from './routes/auth/verify-email'
 import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as AuthRequestResetRouteImport } from './routes/auth/request-reset'
@@ -23,6 +23,7 @@ import { Route as AuthenticatedPortfolioRouteImport } from './routes/_authentica
 import { Route as AuthenticatedCvRouteImport } from './routes/_authenticated/cv'
 import { Route as AuthenticatedApplicationsRouteImport } from './routes/_authenticated/applications'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
+import { Route as HandleSlugRouteImport } from './routes/$handle/$slug'
 import { Route as AuthenticatedPortfolioIndexRouteImport } from './routes/_authenticated/portfolio/index'
 import { Route as AuthenticatedCvIndexRouteImport } from './routes/_authenticated/cv/index'
 import { Route as AuthenticatedApplicationsIndexRouteImport } from './routes/_authenticated/applications/index'
@@ -53,9 +54,9 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SlugRoute = SlugRouteImport.update({
-  id: '/$slug',
-  path: '/$slug',
+const HandleRoute = HandleRouteImport.update({
+  id: '/$handle',
+  path: '/$handle',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -63,10 +64,10 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PortfolioSlugRoute = PortfolioSlugRouteImport.update({
-  id: '/portfolio/$slug',
-  path: '/portfolio/$slug',
-  getParentRoute: () => rootRouteImport,
+const HandleIndexRoute = HandleIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => HandleRoute,
 } as any)
 const AuthVerifyEmailRoute = AuthVerifyEmailRouteImport.update({
   id: '/verify-email',
@@ -113,6 +114,11 @@ const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   id: '/account',
   path: '/account',
   getParentRoute: () => AuthenticatedRoute,
+} as any)
+const HandleSlugRoute = HandleSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => HandleRoute,
 } as any)
 const AuthenticatedPortfolioIndexRoute =
   AuthenticatedPortfolioIndexRouteImport.update({
@@ -231,8 +237,9 @@ const AuthenticatedAccountDangerRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/$slug': typeof SlugRoute
+  '/$handle': typeof HandleRouteWithChildren
   '/auth': typeof AuthRouteWithChildren
+  '/$handle/$slug': typeof HandleSlugRoute
   '/account': typeof AuthenticatedAccountRouteWithChildren
   '/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/cv': typeof AuthenticatedCvRouteWithChildren
@@ -242,7 +249,7 @@ export interface FileRoutesByFullPath {
   '/auth/request-reset': typeof AuthRequestResetRoute
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/portfolio/$slug': typeof PortfolioSlugRoute
+  '/$handle/': typeof HandleIndexRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -266,15 +273,15 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/$slug': typeof SlugRoute
   '/auth': typeof AuthRouteWithChildren
+  '/$handle/$slug': typeof HandleSlugRoute
   '/account': typeof AuthenticatedAccountRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/mfa-challenge': typeof AuthMfaChallengeRoute
   '/auth/request-reset': typeof AuthRequestResetRoute
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/portfolio/$slug': typeof PortfolioSlugRoute
+  '/$handle': typeof HandleIndexRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -299,9 +306,10 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/$slug': typeof SlugRoute
+  '/$handle': typeof HandleRouteWithChildren
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/auth': typeof AuthRouteWithChildren
+  '/$handle/$slug': typeof HandleSlugRoute
   '/_authenticated/account': typeof AuthenticatedAccountRouteWithChildren
   '/_authenticated/applications': typeof AuthenticatedApplicationsRouteWithChildren
   '/_authenticated/cv': typeof AuthenticatedCvRouteWithChildren
@@ -311,7 +319,7 @@ export interface FileRoutesById {
   '/auth/request-reset': typeof AuthRequestResetRoute
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/portfolio/$slug': typeof PortfolioSlugRoute
+  '/$handle/': typeof HandleIndexRoute
   '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
   '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -337,8 +345,9 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/$slug'
+    | '/$handle'
     | '/auth'
+    | '/$handle/$slug'
     | '/account'
     | '/applications'
     | '/cv'
@@ -348,7 +357,7 @@ export interface FileRouteTypes {
     | '/auth/request-reset'
     | '/auth/signup'
     | '/auth/verify-email'
-    | '/portfolio/$slug'
+    | '/$handle/'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -372,15 +381,15 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/$slug'
     | '/auth'
+    | '/$handle/$slug'
     | '/account'
     | '/auth/login'
     | '/auth/mfa-challenge'
     | '/auth/request-reset'
     | '/auth/signup'
     | '/auth/verify-email'
-    | '/portfolio/$slug'
+    | '/$handle'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -404,9 +413,10 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/$slug'
+    | '/$handle'
     | '/_authenticated'
     | '/auth'
+    | '/$handle/$slug'
     | '/_authenticated/account'
     | '/_authenticated/applications'
     | '/_authenticated/cv'
@@ -416,7 +426,7 @@ export interface FileRouteTypes {
     | '/auth/request-reset'
     | '/auth/signup'
     | '/auth/verify-email'
-    | '/portfolio/$slug'
+    | '/$handle/'
     | '/_authenticated/account/danger'
     | '/_authenticated/account/email'
     | '/_authenticated/account/llm'
@@ -441,10 +451,9 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  SlugRoute: typeof SlugRoute
+  HandleRoute: typeof HandleRouteWithChildren
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
-  PortfolioSlugRoute: typeof PortfolioSlugRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -463,11 +472,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/$slug': {
-      id: '/$slug'
-      path: '/$slug'
-      fullPath: '/$slug'
-      preLoaderRoute: typeof SlugRouteImport
+    '/$handle': {
+      id: '/$handle'
+      path: '/$handle'
+      fullPath: '/$handle'
+      preLoaderRoute: typeof HandleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -477,12 +486,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/portfolio/$slug': {
-      id: '/portfolio/$slug'
-      path: '/portfolio/$slug'
-      fullPath: '/portfolio/$slug'
-      preLoaderRoute: typeof PortfolioSlugRouteImport
-      parentRoute: typeof rootRouteImport
+    '/$handle/': {
+      id: '/$handle/'
+      path: '/'
+      fullPath: '/$handle/'
+      preLoaderRoute: typeof HandleIndexRouteImport
+      parentRoute: typeof HandleRoute
     }
     '/auth/verify-email': {
       id: '/auth/verify-email'
@@ -546,6 +555,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/account'
       preLoaderRoute: typeof AuthenticatedAccountRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/$handle/$slug': {
+      id: '/$handle/$slug'
+      path: '/$slug'
+      fullPath: '/$handle/$slug'
+      preLoaderRoute: typeof HandleSlugRouteImport
+      parentRoute: typeof HandleRoute
     }
     '/_authenticated/portfolio/': {
       id: '/_authenticated/portfolio/'
@@ -690,6 +706,19 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface HandleRouteChildren {
+  HandleSlugRoute: typeof HandleSlugRoute
+  HandleIndexRoute: typeof HandleIndexRoute
+}
+
+const HandleRouteChildren: HandleRouteChildren = {
+  HandleSlugRoute: HandleSlugRoute,
+  HandleIndexRoute: HandleIndexRoute,
+}
+
+const HandleRouteWithChildren =
+  HandleRoute._addFileChildren(HandleRouteChildren)
+
 interface AuthenticatedAccountRouteChildren {
   AuthenticatedAccountDangerRoute: typeof AuthenticatedAccountDangerRoute
   AuthenticatedAccountEmailRoute: typeof AuthenticatedAccountEmailRoute
@@ -812,10 +841,9 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  SlugRoute: SlugRoute,
+  HandleRoute: HandleRouteWithChildren,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
-  PortfolioSlugRoute: PortfolioSlugRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

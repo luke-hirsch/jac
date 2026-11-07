@@ -135,7 +135,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         handle = slugify(value)[:40].strip("-")
         if len(handle) < 2:
             raise serializers.ValidationError("Handle must be at least 2 characters.")
-        if handle in settings.RESERVED_SUBDOMAINS:
+        if handle in settings.RESERVED_HANDLES:
             raise serializers.ValidationError("That handle is reserved.")
         clash = UserProfile.objects.filter(handle__iexact=handle)
         if self.instance:
@@ -342,8 +342,8 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
 class PortfolioLinkSerializer(serializers.ModelSerializer):
     """Owner-side link CRUD. Manage-created links are always `manual` (kind/application
     are read-only — application links come from jac's portfolio-link action); `url` is
-    the absolute public URL the QR encodes, built from the owner's handle via
-    PORTFOLIO_ORIGIN_TEMPLATE so the domain lives in exactly one env var."""
+    the absolute public URL the QR encodes, `<PORTFOLIO_URL>/<handle>/<slug>/`, so the
+    domain lives in exactly one env var."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     url = serializers.SerializerMethodField()

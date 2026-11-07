@@ -29,10 +29,10 @@ http {
         server @APP_UPSTREAM@;
     }
 
-    # Handle portfolios stay out of search engines; the app's SPA has nothing to index either way.
+    # Portfolios stay out of search engines; the app's SPA has nothing to index either way.
     map $host $spa_robots {
         default "noindex";
-        app.@BASE_DOMAIN@ "";
+        jac.@BASE_DOMAIN@ "";
     }
 
     map $http_upgrade $connection_upgrade {
@@ -97,15 +97,16 @@ http {
         location /media/ {
             include /app/media.inc;
         }
+        # Any other path is a portfolio's: luke-hirsch.de/lukas/acme/ is portfolio.…/lukas/acme/.
         location / {
-            return 302 https://app.@BASE_DOMAIN@$request_uri;
+            return 302 https://portfolio.@BASE_DOMAIN@$request_uri;
         }
     }
 
-    # ── app: the authed SPA + its same-origin API ────────────────────────────────────
+    # ── jac: the authed SPA + its same-origin API ────────────────────────────────────
     server {
         listen 8000;
-        server_name app.@BASE_DOMAIN@;
+        server_name jac.@BASE_DOMAIN@;
         root /app/webroot;
 
         location /api/ {
@@ -157,14 +158,14 @@ http {
         include /tmp/spa.inc;
     }
 
-    # ── handles: <user>.@BASE_DOMAIN@ — the public portfolios (noindex) ──────────────
+    # ── portfolio: every user's portfolio at /<handle>/ (noindex) ───────────────────
     server {
         listen 8000;
-        server_name *.@BASE_DOMAIN@;
+        server_name portfolio.@BASE_DOMAIN@;
         root /app/webroot;
         add_header X-Robots-Tag "noindex" always;
 
-        # Same-origin API: Django's resolve_owner() reads the handle from Host.
+        # Same-origin API: the handle travels in the path (/api/spa/public/<handle>/…).
         location /api/ {
             proxy_pass http://app;
             include /app/proxy_params;

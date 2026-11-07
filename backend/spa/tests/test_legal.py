@@ -1,7 +1,7 @@
 """What the legal pages promise, and the parts of it code can prove (guide 07).
 
-- /legal/<page>/ renders for anyone, on every host. The operator — not a handle's owner —
-  answers for every subdomain, so the imprint reads the operator's identity from their
+- /legal/<page>/ renders for anyone, on every host. The operator — not a portfolio's owner —
+  answers for every portfolio, so the imprint reads the operator's identity from their
   profile (PORTFOLIO_OWNER_USERNAME). Nothing personal is hardcoded in the public repo.
 - The Django-rendered pages link each other and are linked from the landing. The SPA footer is a
   component (no jsdom here), so it's checked in the guide's Verification.
@@ -37,7 +37,6 @@ PAGES = ("imprint", "privacy", "terms")
 @override_settings(
     PORTFOLIO_OWNER_USERNAME="lukas",
     BASE_DOMAIN="testserver",
-    ALLOWED_HOSTS=[".testserver"],
     LEGAL_CONTACT_EMAIL="",
 )
 class LegalPagesTests(TestCase):
@@ -91,16 +90,26 @@ class LegalPagesTests(TestCase):
         """The housekeeping job and the promise read one setting, so they can't drift apart."""
         self.assertContains(self.client.get("/legal/privacy/"), "nach 30 Tagen")
 
-    def test_a_handle_host_shows_the_operators_imprint(self):
-        """jane.<base> is Jane's portfolio, but Lukas runs the service: his imprint, not hers."""
+    def test_a_portfolio_owner_is_not_the_operator(self):
+        """portfolio.<base>/jane/ is Jane's portfolio, but Lukas runs the service: the imprint it
+        links names him, not her."""
         jane = User.objects.create_user(
             username="jane", password="pw", first_name="Janet"
         )
-        UserProfile.objects.filter(user=jane).update(handle="jane")
-        r = self.client.get("/legal/imprint/", HTTP_HOST="jane.testserver")
+        UserProfile.objects.filter(user=jane).update(
+            handle="jane", portfolio_public=True
+        )
+        r = self.client.get("/legal/imprint/")
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Lukas Hirsch")
         self.assertNotContains(r, "Janet")
+
+    def test_the_pages_name_the_addresses_jac_serves(self):
+        """The app on jac.<base>, every portfolio under one path on portfolio.<base>."""
+        self.assertContains(self.client.get("/legal/privacy/"), "jac.testserver")
+        for page in PAGES:
+            r = self.client.get(f"/legal/{page}/")
+            self.assertContains(r, "portfolio.testserver/&lt;name&gt;", msg_prefix=page)
 
     def test_every_legal_page_links_all_three(self):
         for page in PAGES:

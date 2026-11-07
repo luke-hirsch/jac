@@ -14,8 +14,10 @@ const state = (over: Partial<PublishState> = {}): PublishState => ({
 });
 
 describe("portfolioAddress", () => {
-  it("is the handle under the base domain", () => {
-    expect(portfolioAddress("jane", "example.com")).toBe("jane.example.com");
+  it("is the handle's path on the portfolio host", () => {
+    expect(portfolioAddress("jane", "example.com")).toBe(
+      "portfolio.example.com/jane/",
+    );
   });
 });
 
@@ -37,7 +39,7 @@ describe("publishNotice", () => {
   it("states the unpublished state plainly, and that shared links still work", () => {
     const text = publishNotice(state(), "example.com");
     expect(text).toContain("Not published");
-    expect(text).toContain("jane.example.com");
+    expect(text).toContain("portfolio.example.com/jane/");
     expect(text).toContain("A link you share");
   });
 
@@ -48,7 +50,7 @@ describe("publishNotice", () => {
     );
     expect(text).toContain("Published");
     expect(text).toContain("anyone");
-    expect(text).toContain("jane.example.com");
+    expect(text).toContain("portfolio.example.com/jane/");
   });
 
   it("doesn't call the site owner's portfolio unpublished", () => {
@@ -57,6 +59,7 @@ describe("publishNotice", () => {
       "example.com",
     );
     expect(text).toContain("always public");
+    expect(text).toContain("at example.com and portfolio.example.com/jane/");
     expect(text).not.toContain("Not published");
   });
 });

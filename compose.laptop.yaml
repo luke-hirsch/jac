@@ -6,9 +6,9 @@ x-laptop: &laptop
   environment:
     DEBUG: "1"
     BASE_DOMAIN: localhost
-    FRONTEND_URL: http://app.localhost:8000
-    PORTFOLIO_ORIGIN_TEMPLATE: http://{handle}.localhost:8000
-    CSRF_TRUSTED_ORIGINS: http://app.localhost:8000,http://localhost:8000
+    FRONTEND_URL: http://jac.localhost:8000
+    PORTFOLIO_URL: http://portfolio.localhost:8000
+    CSRF_TRUSTED_ORIGINS: http://jac.localhost:8000,http://portfolio.localhost:8000,http://localhost:8000
     DATABASE_URL: postgres://postgres:postgres@postgres:5432/jac
     REDIS_URL: redis://valkey:6379/0
     HIRSCHAI_URL: http://host.docker.internal:11434

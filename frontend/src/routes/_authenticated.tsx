@@ -14,14 +14,11 @@ import {
   useInvalidateSession,
 } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { appOrigin, siteHost } from "@/lib/host";
+import { jacOrigin, leaveTo, siteHost } from "@/lib/host";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ location }) => {
-    if (siteHost().kind !== "app") {
-      window.location.replace(appOrigin() + location.pathname);
-      throw redirect({ to: "/" });
-    }
+    if (siteHost() !== "jac") return leaveTo(jacOrigin() + location.href);
     try {
       const s = await fetchSession();
       if (s.meta?.is_authenticated) return;

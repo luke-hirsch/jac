@@ -1,57 +1,55 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apexOrigin, baseDomain, parseHost } from "@/lib/host";
+import {
+  apexOrigin,
+  baseDomain,
+  jacOrigin,
+  leaveTo,
+  parseHost,
+  portfolioOrigin,
+} from "@/lib/host";
 
-// Host-aware routing (portfolio-multiuser guide 3). Pure parsing against a fixed base
-// domain — the tests/ regime's sweet spot (node env, no jsdom). Red until src/lib/host.ts.
+// Three fixed hosts: the apex, jac. and portfolio. Owners are paths on the portfolio host now,
+// never subdomains. Pure parsing against a fixed base domain (node env, no jsdom).
 
 const BASE = "luke-hirsch.de";
 
 describe("parseHost", () => {
   it("the apex and www resolve to apex", () => {
-    expect(parseHost("luke-hirsch.de", BASE)).toEqual({ kind: "apex" });
-    expect(parseHost("www.luke-hirsch.de", BASE)).toEqual({ kind: "apex" });
+    expect(parseHost("luke-hirsch.de", BASE)).toBe("apex");
+    expect(parseHost("www.luke-hirsch.de", BASE)).toBe("apex");
   });
 
-  it("the app subdomain is the authed host", () => {
-    expect(parseHost("app.luke-hirsch.de", BASE)).toEqual({ kind: "app" });
+  it("jac. is the authed app", () => {
+    expect(parseHost("jac.luke-hirsch.de", BASE)).toBe("jac");
   });
 
-  it("a plain subdomain is that user's handle", () => {
-    expect(parseHost("jane.luke-hirsch.de", BASE)).toEqual({
-      kind: "handle",
-      handle: "jane",
-    });
+  it("portfolio. is every owner's portfolio", () => {
+    expect(parseHost("portfolio.luke-hirsch.de", BASE)).toBe("portfolio");
   });
 
-  it("is case-insensitive", () => {
-    expect(parseHost("JANE.luke-hirsch.de", BASE)).toEqual({
-      kind: "handle",
-      handle: "jane",
-    });
+  it("is case-insensitive and strips a trailing dot (FQDN form)", () => {
+    expect(parseHost("JAC.luke-hirsch.de", BASE)).toBe("jac");
+    expect(parseHost("portfolio.luke-hirsch.de.", BASE)).toBe("portfolio");
   });
 
-  it("strips a trailing dot (FQDN form)", () => {
-    expect(parseHost("jane.luke-hirsch.de.", BASE)).toEqual({
-      kind: "handle",
-      handle: "jane",
-    });
+  it("the old app. host is nothing special any more", () => {
+    expect(parseHost("app.luke-hirsch.de", BASE)).toBe("apex");
   });
 
-  it("nested subdomains fall back to apex (never a handle)", () => {
-    expect(parseHost("a.b.luke-hirsch.de", BASE)).toEqual({ kind: "apex" });
+  it("a would-be handle subdomain is no portfolio: it falls back to apex", () => {
+    expect(parseHost("jane.luke-hirsch.de", BASE)).toBe("apex");
+    expect(parseHost("a.portfolio.luke-hirsch.de", BASE)).toBe("apex");
   });
 
   it("a foreign host falls back to apex", () => {
-    expect(parseHost("evil.com", BASE)).toEqual({ kind: "apex" });
+    expect(parseHost("evil.com", BASE)).toBe("apex");
+    expect(parseHost("jac.evil.com", BASE)).toBe("apex");
   });
 
   it("works against the localhost dev base", () => {
-    expect(parseHost("jane.localhost", "localhost")).toEqual({
-      kind: "handle",
-      handle: "jane",
-    });
-    expect(parseHost("app.localhost", "localhost")).toEqual({ kind: "app" });
-    expect(parseHost("localhost", "localhost")).toEqual({ kind: "apex" });
+    expect(parseHost("localhost", "localhost")).toBe("apex");
+    expect(parseHost("jac.localhost", "localhost")).toBe("jac");
+    expect(parseHost("portfolio.localhost", "localhost")).toBe("portfolio");
   });
 });
 
@@ -66,7 +64,8 @@ describe("baseDomain", () => {
   it("reads the domain nginx filled in, so one image serves any domain", () => {
     vi.stubGlobal("document", page("example.org"));
     expect(baseDomain()).toBe("example.org");
-    expect(parseHost("app.example.org")).toEqual({ kind: "app" });
+    expect(parseHost("jac.example.org")).toBe("jac");
+    expect(parseHost("portfolio.example.org")).toBe("portfolio");
   });
 
   it("falls back to localhost in vite dev, where the placeholder is still there", () => {
@@ -79,14 +78,48 @@ describe("baseDomain", () => {
   });
 });
 
-describe("apexOrigin", () => {
+describe("origins", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("is the bare domain, keeping scheme and port", () => {
-    vi.stubGlobal("window", { location: { protocol: "https:", port: "" } });
-    expect(apexOrigin(BASE)).toBe("https://luke-hirsch.de");
+  const at = (protocol: string, port: string) =>
+    vi.stubGlobal("window", { location: { protocol, port } });
 
-    vi.stubGlobal("window", { location: { protocol: "http:", port: "5173" } });
+  it("the apex is the bare domain, keeping scheme and port", () => {
+    at("https:", "");
+    expect(apexOrigin(BASE)).toBe("https://luke-hirsch.de");
+    at("http:", "5173");
     expect(apexOrigin("localhost")).toBe("http://localhost:5173");
+  });
+
+  it("the app is on jac., keeping scheme and port", () => {
+    at("https:", "");
+    expect(jacOrigin(BASE)).toBe("https://jac.luke-hirsch.de");
+    at("http:", "5173");
+    expect(jacOrigin("localhost")).toBe("http://jac.localhost:5173");
+  });
+
+  it("portfolios are on portfolio., keeping scheme and port", () => {
+    at("https:", "");
+    expect(portfolioOrigin(BASE)).toBe("https://portfolio.luke-hirsch.de");
+    at("http:", "5173");
+    expect(portfolioOrigin("localhost")).toBe(
+      "http://portfolio.localhost:5173",
+    );
+  });
+});
+
+describe("leaveTo", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("replaces the location and never settles, so no second guard runs", async () => {
+    const replace = vi.fn();
+    vi.stubGlobal("window", { location: { replace } });
+    let settled = false;
+    leaveTo("https://jac.luke-hirsch.de/cv").finally(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replace).toHaveBeenCalledExactlyOnceWith(
+      "https://jac.luke-hirsch.de/cv",
+    );
+    expect(settled).toBe(false);
   });
 });

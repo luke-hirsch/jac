@@ -1,13 +1,16 @@
 /** What the owner's publish switch says. Pure, so the promise it makes is testable. */
 
+import { PORTFOLIO_SUBDOMAIN } from "@/lib/host";
+
 export type PublishState = {
   handle: string;
   portfolio_public: boolean;
   portfolio_always_public: boolean;
 };
 
+/** The address as people read it, without a scheme: portfolio.<base>/<handle>/. */
 export function portfolioAddress(handle: string, base: string): string {
-  return `${handle}.${base}`;
+  return `${PORTFOLIO_SUBDOMAIN}.${base}/${handle}/`;
 }
 
 export function isLive(p: PublishState): boolean {

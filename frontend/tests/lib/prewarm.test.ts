@@ -42,12 +42,23 @@ describe("prewarm", () => {
     expect(init.method).toBe("POST");
   });
 
-  it("posts to the portfolio's endpoint for a visitor", async () => {
+  it("posts to the owner's public endpoint for a visitor", async () => {
     const { prewarmForVisitor } = await load();
-    prewarmForVisitor();
+    prewarmForVisitor("jane");
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/spa/portfolio/native/prewarm/",
+      "/api/spa/public/jane/native/prewarm/",
     );
+  });
+
+  it("keeps a quiet window per owner: one visitor's knock doesn't silence another portfolio", async () => {
+    const { prewarmForVisitor } = await load();
+    prewarmForVisitor("jane");
+    prewarmForVisitor("jane");
+    prewarmForVisitor("lukas");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/spa/public/jane/native/prewarm/",
+      "/api/spa/public/lukas/native/prewarm/",
+    ]);
   });
 
   it("doesn't post on every keystroke", async () => {
@@ -67,7 +78,7 @@ describe("prewarm", () => {
   it("keeps a failure to itself", async () => {
     fetchMock.mockRejectedValue(new Error("offline"));
     const { prewarmForVisitor } = await load();
-    expect(() => prewarmForVisitor()).not.toThrow();
+    expect(() => prewarmForVisitor("jane")).not.toThrow();
     await vi.runAllTimersAsync(); // an unhandled rejection would fail the run here
   });
 });

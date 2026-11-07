@@ -1,8 +1,9 @@
 """spa.portfolio — portfolio-link domain logic.
 
 Slug minting and the application-link lifecycle (get-or-create + freeze-at-sent).
-Guide 2 adds owner resolution, payload assembly, and the embed ranking here. Views
-stay thin; everything in this module is unit-testable without HTTP.
+Guide 2 adds owner resolution (by the handle in the path, never the Host header), payload
+assembly, and the embed ranking here. Views stay thin; everything in this module is
+unit-testable without HTTP.
 """
 
 import logging
@@ -50,7 +51,7 @@ def application_slug(application) -> str:
     manage UI.
 
     The suffix is what keeps an application private: a bare `<company>` lets anyone (a
-    current employer, say) try `<handle>.<domain>/acme` and learn from a 200 that this
+    current employer, say) try `portfolio.<domain>/<handle>/acme` and learn from a 200 that this
     person applied there, for which role, with which CV. It also keeps two applications
     to one company apart; `link_for_application` re-rolls the rare collision.
     """
@@ -120,9 +121,9 @@ def freeze_link(application) -> None:
     link.save(update_fields=["content", "updated_at"])
 
 
-def _configured_owner() -> User | None:
-    """The apex owner — the single configured user behind `BASE_DOMAIN` itself (the SEO
-    landing, and the fallback for request-less callers). Case-insensitive; never the system
+def site_owner() -> User | None:
+    """The site owner: the single configured user (`PORTFOLIO_OWNER_USERNAME`) the apex landing
+    presents and who answers for the legal pages. Case-insensitive; never the system
     sentinel; None when unset/unknown/inactive."""
     username = (settings.PORTFOLIO_OWNER_USERNAME or "").strip()
     if not username or username.lower() == settings.SYSTEM_USER_USERNAME.lower():
@@ -131,8 +132,8 @@ def _configured_owner() -> User | None:
 
 
 def is_site_owner(user) -> bool:
-    """Is this the configured apex owner? Their portfolio is the site, so it can't be unpublished."""
-    configured = _configured_owner()
+    """Is this the site owner? Their portfolio is the site, so it can't be unpublished."""
+    configured = site_owner()
     return configured is not None and configured.pk == user.pk
 
 
@@ -141,39 +142,22 @@ def is_published(owner) -> bool:
     return owner.profile.portfolio_public or is_site_owner(owner)
 
 
-def _host_owner(host: str) -> User | None:
-    """The user a raw Host header names, published or not. `<handle>.<BASE_DOMAIN>` -> that
-    user; the bare `BASE_DOMAIN` (or `www.`) -> the configured apex owner; a reserved or
-    unknown subdomain / foreign host -> None. Pure + unit-testable."""
-    host = (host or "").split(":")[0].lower().rstrip(".")
-    base = settings.BASE_DOMAIN.lower()
-    if host in (base, f"www.{base}"):
-        return _configured_owner()
-    suffix = f".{base}"
-    if not host.endswith(suffix):
-        return None
-    handle = host[: -len(suffix)]
-    if not handle or "." in handle or handle in settings.RESERVED_SUBDOMAINS:
+def link_owner_for_handle(handle: str) -> User | None:
+    """The user a portfolio path names (`portfolio.<BASE_DOMAIN>/<handle>/…`), published or
+    not: sharing a link is its own explicit act, and `build_payload` holds such a page to the
+    link's own selection. Case-insensitive, active users only; a reserved handle names nobody,
+    even if some row holds it."""
+    handle = (handle or "").strip().lower()
+    if not handle or handle in settings.RESERVED_HANDLES:
         return None
     return User.objects.filter(profile__handle__iexact=handle, is_active=True).first()
 
 
-def owner_for_host(host: str) -> User | None:
-    """The owner of the public portfolio at this host. An unpublished handle is no owner at
-    all, so callers 404 it exactly like a host with no such user."""
-    owner = _host_owner(host)
+def owner_for_handle(handle: str) -> User | None:
+    """The owner of the public portfolio under this handle. An unpublished handle is no owner at
+    all, so callers 404 it exactly like a handle with no such user."""
+    owner = link_owner_for_handle(handle)
     return owner if owner is not None and is_published(owner) else None
-
-
-def resolve_owner(request) -> User | None:
-    """The public portfolio's owner for this request, from its Host header."""
-    return owner_for_host(request.get_host())
-
-
-def resolve_link_owner(request) -> User | None:
-    """The owner whose personalised links this host serves, published or not: sharing a link
-    is its own explicit act. `build_payload` holds such a page to the link's own selection."""
-    return _host_owner(request.get_host())
 
 
 HANDLE_PREFIX = "u-"
@@ -183,21 +167,25 @@ def random_handle() -> str:
     """A new account's handle: `u-` + the slug suffix, e.g. `u-k7m2x9qa`. Nothing in it comes
     from the username, which allauth takes from the email's local part, so a fresh portfolio
     address names no one. The owner picks their own in the profile (`validate_handle`), and like
-    a picked one it's unique case-insensitively and never a reserved subdomain."""
+    a picked one it's unique case-insensitively and never a reserved handle."""
     for _ in range(5):
         handle = f"{HANDLE_PREFIX}{slug_suffix()}"
-        if handle in settings.RESERVED_SUBDOMAINS:
+        if handle in settings.RESERVED_HANDLES:
             continue
         if not UserProfile.objects.filter(handle__iexact=handle).exists():
             return handle
     raise IntegrityError("could not mint a unique handle after 5 attempts")
 
 
+def portfolio_home_url(user) -> str:
+    """The owner's portfolio home, their questionnaire: `<PORTFOLIO_URL>/<handle>/`."""
+    return f"{settings.PORTFOLIO_URL.rstrip('/')}/{user.profile.handle}/"
+
+
 def public_portfolio_url(link) -> str:
-    """The absolute public URL a QR encodes: the owner's origin + the link slug. Built from
-    `PORTFOLIO_ORIGIN_TEMPLATE` so the domain lives in exactly one env var."""
-    origin = settings.PORTFOLIO_ORIGIN_TEMPLATE.format(handle=link.user.profile.handle)
-    return f"{origin.rstrip('/')}/{link.slug}"
+    """The absolute public URL a QR encodes: `<PORTFOLIO_URL>/<handle>/<slug>/`. Built from
+    `PORTFOLIO_URL` so the domain lives in exactly one env var."""
+    return f"{portfolio_home_url(link.user)}{link.slug}/"
 
 
 def owner_domains(owner) -> list[str]:
@@ -679,17 +667,13 @@ def build_intro(
 
 
 def landing_context(request) -> dict:
-    """Context for the Django-rendered landing at the apex/handle host."""
-    owner = resolve_owner(request)
+    """Context for the Django-rendered landing at the apex: the site owner's card, for SEO."""
+    owner = site_owner()
     return {
         "owner": _owner_block(owner) if owner else None,
         "domains": owner_domains(owner) if owner else [],
-        # The questionnaire lives on the owner's handle host. The app host only redirects to
-        # /applications, and from there a stranger lands on a login form.
-        "explore_url": (
-            settings.PORTFOLIO_ORIGIN_TEMPLATE.format(handle=owner.profile.handle)
-            if owner
-            else ""
-        ),
+        # The questionnaire lives on the portfolio host, under the owner's handle. The app host
+        # only redirects to /applications, and from there a stranger lands on a login form.
+        "explore_url": portfolio_home_url(owner) if owner else "",
         "signup_url": f"{settings.FRONTEND_URL}/auth/signup",
     }

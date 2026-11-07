@@ -40,7 +40,18 @@ SECRET_KEY = os.getenv("SECRET_KEY", DEV_SECRET_KEY)
 # Off unless something turns it on: a forgotten variable can't put a public site in debug mode.
 DEBUG = env_bool("DEBUG", False)
 
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", [f".{BASE_DOMAIN}"])
+# The four names jac answers on: the apex and www (the site owner's landing), jac. (the app) and
+# portfolio. (everyone's portfolio, one path per handle). No wildcard: the zone holds names jac
+# doesn't serve.
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    [
+        BASE_DOMAIN,
+        f"www.{BASE_DOMAIN}",
+        f"jac.{BASE_DOMAIN}",
+        f"portfolio.{BASE_DOMAIN}",
+    ],
+)
 
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
@@ -56,12 +67,14 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = not DEBUG
 # Health checks speak plain http over the container network: /health/ and /health/queues.
 SECURE_REDIRECT_EXEMPT = [r"^health/"]
-# Start at an hour; raise to 31536000 once a week of prod has run clean. includeSubDomains is
-# safe because the wildcard cert covers every host. No preload: that's a one-way door.
+# Start at an hour; raise to 31536000 once a week of prod has run clean. No includeSubDomains: the
+# zone holds names jac doesn't serve, so jac can't vouch that every one of them speaks TLS. No
+# preload: that's a one-way door.
 SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 0 if DEBUG else 3600)
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 SILENCED_SYSTEM_CHECKS = [
+    "security.W005",  # HSTS includeSubDomains off on purpose (see above)
     "security.W021",  # HSTS preload off on purpose (see SECURE_HSTS_PRELOAD)
 ]
 
@@ -367,7 +380,13 @@ SYSTEM_USER_USERNAME = "system"
 # ─────────────────────────────────────────────────────────────────────────────
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
-    "http://localhost:5173" if DEBUG else f"https://app.{BASE_DOMAIN}",
+    "http://jac.localhost:5173" if DEBUG else f"https://jac.{BASE_DOMAIN}",
+)
+# Where every portfolio lives, one path per handle: `<PORTFOLIO_URL>/<handle>/` is the owner's
+# questionnaire, `<PORTFOLIO_URL>/<handle>/<slug>/` a personalised link (what a QR encodes).
+PORTFOLIO_URL = os.getenv(
+    "PORTFOLIO_URL",
+    "http://portfolio.localhost:5173" if DEBUG else f"https://portfolio.{BASE_DOMAIN}",
 )
 
 # CORS — allow the React dev server to send credentialed requests
@@ -378,7 +397,7 @@ CORS_ALLOW_CREDENTIALS = True
 # CSRF — trust the frontend origin so the CSRF middleware accepts its requests
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
-    [FRONTEND_URL, f"https://{BASE_DOMAIN}", f"https://*.{BASE_DOMAIN}"],
+    [FRONTEND_URL, PORTFOLIO_URL, f"https://{BASE_DOMAIN}"],
 )
 
 REST_FRAMEWORK = {
@@ -508,17 +527,30 @@ PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "lukas")
 # Imprint / privacy contact. Blank = the operator's (PORTFOLIO_OWNER_USERNAME) login email.
 LEGAL_CONTACT_EMAIL = os.getenv("LEGAL_CONTACT_EMAIL", "")
 
-RESERVED_SUBDOMAINS = set(
-    env_list(
-        "RESERVED_SUBDOMAINS",
-        # "system": the inactive system user's handle used to hold it; nobody should claim it.
-        ["app", "api", "www", "admin", "static", "media", "mail", "ns", "ns1", "ns2", "system"],
-    )
-)
-PORTFOLIO_ORIGIN_TEMPLATE = os.getenv(
-    "PORTFOLIO_ORIGIN_TEMPLATE",
-    "http://{handle}.localhost:5173" if DEBUG else f"https://{{handle}}.{BASE_DOMAIN}",
-)
+# Handles nobody can hold, because the first path segment on portfolio.<BASE_DOMAIN> would mean
+# something else: the host's own top-level paths (dev's Vite forwards /_allauth/ on every host; a
+# claim can't spell it, slugify strips the underscore, but an admin edit can), the SPA's top-level
+# routes (the same build serves it), and "system", which the inactive system user's handle used to
+# be. A constant, not an env var: it follows the routes, not the DNS zone. Checked on claim
+# (validate_handle), on minting (random_handle) and on every public lookup, so a row that holds one
+# anyway still shows nothing.
+RESERVED_HANDLES = {
+    "_allauth",
+    "account",
+    "admin",
+    "api",
+    "applications",
+    "assets",
+    "auth",
+    "cv",
+    "health",
+    "legal",
+    "media",
+    "portfolio",
+    "static",
+    "system",
+    "ws",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging

@@ -8,7 +8,7 @@ that shows each visitor something different, depending on how they arrived.
 
 ## Try it yourself
 
-- **[app.luke-hirsch.de](https://app.luke-hirsch.de):** sign up, no API key needed. No career of your
+- **[jac.luke-hirsch.de](https://jac.luke-hirsch.de):** sign up, no API key needed. No career of your
   own to enter? Load the sample one and generate from that.
 - **[luke-hirsch.de](https://luke-hirsch.de):** the portfolio, rendered per visitor.
 
@@ -38,8 +38,8 @@ career database doesn't support.
   [`llm_connector/tasks.py`](backend/llm_connector/tasks.py). A model server that is off or waking is
   normal, not an error. Jobs can run twice safely, status rows say what's happening, and short jobs
   never wait behind long ones.
-- **The portfolio:** [`spa/portfolio.py`](backend/spa/portfolio.py). A subdomain per user, private
-  until they publish it; a questionnaire for strangers; and links that freeze what was sent.
+- **The portfolio:** [`spa/portfolio.py`](backend/spa/portfolio.py). A path per user on one host
+  (`portfolio.<domain>/<handle>/`), private until they publish it; a questionnaire for strangers; and links that freeze what was sent.
 - **Rendering:** [`frontend/src/lib/render/`](frontend/src/lib/render). A JSON layout spec drives
   react-pdf, and the page fit demotes, drops and grows entries to the page budget.
 
@@ -68,7 +68,8 @@ Then, every time:
 
 That's the web server, the worker and vite in one terminal; Ctrl-C stops all three. It starts Postgres
 and Valkey if they're down, creates the database, and catches up on whatever a pull changed: the lock,
-migrations, layouts. Open [localhost:5173](http://localhost:5173). Signup codes are printed in the log.
+migrations, layouts. Open [jac.localhost:5173](http://jac.localhost:5173). Portfolios are at
+`portfolio.localhost:5173/<handle>/`; the landing is Django's, at `localhost:8000`. Signup codes are printed in the log.
 For the admin, once: `cd backend && python manage.py createsuperuser`.
 
 Two things it leaves to you:
@@ -78,7 +79,7 @@ Two things it leaves to you:
   the pipeline, Ctrl-C and `./dev` again.
 
 `./dev stack` runs the production image on this machine instead, with its own Postgres and Valkey, at
-[app.localhost:8000](http://app.localhost:8000). `./dev stack down` stops it and deletes its data.
+[jac.localhost:8000](http://jac.localhost:8000). `./dev stack down` stops it and deletes its data.
 
 | File | Read by | What it's for |
 | --- | --- | --- |

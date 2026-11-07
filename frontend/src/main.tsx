@@ -6,7 +6,9 @@ import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { queryClient } from "@/lib/query";
 import { routeTree } from "./routeTree.gen";
 
-const router = createRouter({ routeTree });
+// "preserve": portfolio addresses end in a slash (portfolio.<base>/<handle>/<slug>/), and a
+// navigation to one keeps it. Both forms match the same route either way.
+const router = createRouter({ routeTree, trailingSlash: "preserve" });
 
 declare module "@tanstack/react-router" {
   interface Register {

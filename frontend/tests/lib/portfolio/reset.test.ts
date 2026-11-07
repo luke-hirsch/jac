@@ -46,11 +46,12 @@ describe("nativeStamp", () => {
   it("builds a stamp that round-trips through write/read + the schema", () => {
     const storage = memStorage();
     writeStamp(
+      "jane",
       nativeStamp({ d: ["software development"], lucky: false, q: "drop me" }),
       storage,
     );
     // q is gone; the rest survives a JSON round-trip through the zod schema.
-    expect(readStamp(storage)).toEqual({
+    expect(readStamp("jane", storage)).toEqual({
       kind: "native",
       search: { d: ["software development"], lucky: false },
     });

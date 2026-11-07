@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/field-error";
 import { baseDomain } from "@/lib/host";
+import { portfolioAddress } from "@/lib/portfolio/publish";
 const schema = z
   .object({
     email: z.string().email(),
@@ -132,9 +133,10 @@ function Signup() {
             )}
           </form.Field>
           <p className="text-xs text-muted-foreground">
-            Signing up reserves <code>you.{baseDomain()}</code> for a portfolio.
-            It stays private until you publish it. Hosted on Lukas's domain.
-            Open source — self-host any time.
+            Signing up reserves{" "}
+            <code>{portfolioAddress("you", baseDomain())}</code> for a
+            portfolio. It stays private until you publish it. Hosted on Lukas's
+            domain. Open source — self-host any time.
           </p>
           <p className="text-xs text-muted-foreground">
             By creating an account you accept the{" "}
