@@ -42,6 +42,15 @@ Don't keep a deep file tree here: it drifts. Open the dir.
 - **python:** the pyenv virtualenv `jac`. The image, CI and the lock are 3.12.
 - **hosting:** self-hosted on the lab, nothing deployed. One image, generic `compose.yaml`; only
   `deploy/compose.lab.yaml` knows the lab. It must also run on a plain rented VPS ([[normal-infra-test]]).
+- **hosts:** four fixed names under `BASE_DOMAIN`, **no wildcard** (decided 2026-11-07):
+  - the apex is Django's server-rendered landing (SEO), whose "Explore my work" goes to
+    `portfolio.<domain>/<owner>/`; any other apex path 302s to the portfolio host, and `www.` 301s to the apex;
+  - `jac.` is the app (it was `app.`);
+  - `portfolio.<domain>/<handle>/` and `/<handle>/<slug>/` are every user's portfolio and links.
+
+  The owner comes from the URL path (`/api/spa/public/<handle>/…`), never the Host header. Don't bring back per-user
+  subdomains: Lukas dropped them because the wildcard's tail on the lab (DNS-01, Caddy's Cloudflare module) wasn't
+  worth it ([[portfolio-multiuser]]).
 
 # run it
 
@@ -64,28 +73,34 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, holding only what's left for
 Lukas, in the order of the work:**
-- step 1, merging `fullstack/legal-text`, is done, and CI on `main` is green;
-- step 2 is what only he can do: the browser checks, three decisions and the legal TODOs;
-- step 3 sets up the mini;
-- step 4 is the live checklist.
+- step 1: his dev check of both branches, the new layout and the old browser checks;
+- step 2: merging both;
+- step 3: setting up the mini;
+- step 4: the live checklist.
 
-The AI implemented and tested everything else on 2026-11-05, at his request. That version, with its full test log, and
-the earlier ones are in `.claude/plans/done/`. The board's `-6` export is right, and the lab's open questions are
-answered.
+It was rewritten for the four named hosts on 2026-11-07. The wildcard version and the earlier ones are in
+`.claude/plans/done/`. **Until launch the AI codes at his request ("we're at a volatile stage")**, on its own branches;
+the browser check and the merge stay his.
 
-- **Branches:** `main` holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they promise
-  (consent for a key, the deleted-account mail), plus the fixes the test pass found. CI is green since 2026-11-06.
-  `fullstack/launch-decisions` holds step 2b, built by the AI: random handles, the consent gate, the consent card, the
-  audit fix and the legal sign-off. Its suites pass; it waits for Lukas's look and merge.
-- **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Of what their text commits jac
-  to ([[legal-consent-and-restore]]), consent and the deleted-account record are built. The shortened log address waits
-  on the lab, and the visitor hash on the board.
-- **Nothing is deployed, and merged isn't verified.** The AI's suite, CI-step and live API checks passed. What needs a
-  browser is step 2a, and it belongs before going live.
-- **The lab:** labd, the tower's wake proxy, is written but not installed. Until it is, the tower is woken by hand, so
-  a recruiter's run with it off fails after 15 minutes. jac needs no code change for labd, only `.env` values (step
-  3h). Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set. There's no nightly backup yet, only the
-  deploy dumps on the mini's disk, and the public route and wildcard certificate wait on the lab.
+- **Branches:**
+  - `main` holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they promise (consent
+    for a key, the deleted-account mail). CI is green since 2026-11-06, and it's pushed.
+  - `fullstack/launch-decisions` holds 2b: random handles, the consent gate and card, the audit fix, the legal sign-off.
+  - `fullstack/portfolio-paths`, cut from it, holds the four-host layout.
+
+  Both are by the AI and wait for Lukas's dev check, then merge together.
+- **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
+  and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
+  deleted-account record are built. The shortened log address waits on the lab, and the visitor hash on the board. The
+  DNS stays at Strato, so section 11 no longer names Cloudflare.
+- **Nothing is deployed, and merged isn't verified.** What needs a browser is guide step 1, and it belongs before going
+  live.
+- **The lab:**
+  - labd, the tower's wake proxy, runs (server guide 18, tested 2026-11-06). jac needs only its `.env` values (step 3h).
+  - Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set.
+  - There's no nightly backup yet, only the deploy dumps on the mini's disk.
+  - The public route for the four names is server guide 19, rebuilt for them on 2026-11-07 (server commit `724b177`;
+    DNS stays at Strato, a certificate per name). The board's `-7` export is in `config/`.
 - **The board test still stands:** work from the exports in `config/` + this repo, not the server repo or
   the homelab skill, until Lukas lifts it ([[jac-on-the-lab]]). Lab addresses stay out of tracked files,
   guides and handovers: the repo is public ([[public-repo]]).
