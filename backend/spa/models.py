@@ -67,9 +67,9 @@ class UserProfile(models.Model):
         upload_to=_signature_path, storage=PrivateStorage(), blank=True
     )
     handle = models.SlugField(max_length=40, unique=True, blank=True)
-    # Whether <handle>.<BASE_DOMAIN> shows the whole portfolio. Off until the owner says so: a
-    # handle is minted at signup, and trying jac must not publish anyone's career DB. A link the
-    # owner shares works either way (spa.portfolio.is_published).
+    # Whether portfolio.<BASE_DOMAIN>/<handle>/ shows the whole portfolio. Off until the owner says
+    # so: a handle is minted at signup, and trying jac must not publish anyone's career DB. A link
+    # the owner shares works either way (spa.portfolio.is_published).
     portfolio_public = models.BooleanField(default=False)
 
     # Professional contact — also used to pre-fill job applications in JAC

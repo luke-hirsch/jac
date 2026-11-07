@@ -5,7 +5,7 @@
  *  2. localStorage (what the pre-paint script in index.html already applied),
  *  3. the system preference.
  *
- * The profile query only runs on the app host: on a `<handle>.` portfolio origin the
+ * The profile query only runs on the jac host: on the apex and the portfolio host the
  * visitor is anonymous, and firing a 403 on every public page view is noise. Anonymous
  * visitors get the system preference, which is what they want anyway.
  *
@@ -49,7 +49,7 @@ function writeStored(value: string) {
 }
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
-  const onAppHost = siteHost().kind === "app";
+  const onJacHost = siteHost() === "jac";
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia(DARK_QUERY).matches,
   );
@@ -67,7 +67,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   const profile = useQuery({
     queryKey: ["profile"],
     queryFn: () => api<ProfileRow>("/api/spa/profile/"),
-    enabled: onAppHost,
+    enabled: onJacHost,
     retry: false,
   });
 

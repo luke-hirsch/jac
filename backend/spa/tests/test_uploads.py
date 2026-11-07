@@ -221,7 +221,7 @@ class PrivateSignatureTests(APITestCase):
 @override_settings(**own_media_roots())
 class LayoutTemplateUploadTests(APITestCase):
     """/media/ is public and served from our own origin: an uploaded `x.html` would run as a
-    page on app. — next to the session. A template is a JSON object or nothing."""
+    page on jac. — next to the session. A template is a JSON object or nothing."""
 
     URL = "/api/jac/layouts/"
 

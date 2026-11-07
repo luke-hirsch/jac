@@ -1,30 +1,30 @@
 import { z } from "zod";
-import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
-
-/** Search params a native stamp restores (mirrors /explore's validateSearch). */
-const nativeSearchSchema = z.object({
-  d: z.array(z.string()).optional(),
-  lucky: z.boolean().optional(),
-  focus: z.string().optional(),
-  tone: z.string().optional(),
-});
+import {
+  exploreSearchSchema,
+  type ExploreSearch,
+} from "@/lib/portfolio/questionnaire";
 
 const stampSchema = z.union([
   z.object({ kind: z.literal("link"), slug: z.string().min(1) }),
-  z.object({ kind: z.literal("native"), search: nativeSearchSchema }),
+  z.object({ kind: z.literal("native"), search: exploreSearchSchema }),
 ]);
 
 export type Stamp = z.infer<typeof stampSchema>;
 
-export const STAMP_KEY = "portfolio.stamp.v1";
+/** Every portfolio shares one origin, so one localStorage: the key names the owner, or two
+ *  portfolios in one browser would overwrite each other's stamp. The privacy page names it so. */
+export function stampKey(handle: string): string {
+  return `portfolio.stamp.v1.${handle.toLowerCase()}`;
+}
 
 /** Storage is injectable so tests never stub globals. Corrupt JSON, foreign shapes,
  *  and storage exceptions (Safari private mode) all read as "no stamp". */
 export function readStamp(
+  handle: string,
   storage: Pick<Storage, "getItem"> = localStorage,
 ): Stamp | null {
   try {
-    const raw = storage.getItem(STAMP_KEY);
+    const raw = storage.getItem(stampKey(handle));
     if (!raw) return null;
     const parsed = stampSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : null;
@@ -34,21 +34,23 @@ export function readStamp(
 }
 
 export function writeStamp(
+  handle: string,
   stamp: Stamp,
   storage: Pick<Storage, "setItem"> = localStorage,
 ): void {
   try {
-    storage.setItem(STAMP_KEY, JSON.stringify(stamp));
+    storage.setItem(stampKey(handle), JSON.stringify(stamp));
   } catch {
     /* storage unavailable — personalisation just won't persist */
   }
 }
 
 export function clearStamp(
+  handle: string,
   storage: Pick<Storage, "removeItem"> = localStorage,
 ): void {
   try {
-    storage.removeItem(STAMP_KEY);
+    storage.removeItem(stampKey(handle));
   } catch {
     /* ditto */
   }

@@ -139,6 +139,7 @@ describe("nativeStamp (style preserved)", () => {
   it("round-trips focus/tone through write/read + the zod schema", () => {
     const storage = memStorage();
     writeStamp(
+      "jane",
       nativeStamp({
         d: ["software development"],
         focus: "soft_skill",
@@ -147,7 +148,7 @@ describe("nativeStamp (style preserved)", () => {
       }),
       storage,
     );
-    expect(readStamp(storage)).toEqual({
+    expect(readStamp("jane", storage)).toEqual({
       kind: "native",
       search: { d: ["software development"], focus: "soft_skill", tone: "formal" },
     });

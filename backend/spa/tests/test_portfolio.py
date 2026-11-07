@@ -1,10 +1,11 @@
-"""Portfolio tests — the flow-rework + host-resolution acceptance set.
+"""Portfolio tests — the flow-rework + handle-resolution acceptance set.
 
 Covers the flow-rework payload/intro logic (`owner_domains` / `section_order` /
-`default_link` / `PortfolioIntroWriter` / `build_intro`) and the multi-user host-resolution
-guide (`owner_for_host` / `random_handle` / per-user slugs / `application_slug` /
-`public_portfolio_url`). Owner is resolved from the request host, so the endpoint classes
-pin `BASE_DOMAIN="testserver"` (the default test host) → apex → configured owner.
+`default_link` / `PortfolioIntroWriter` / `build_intro`) and the multi-user portfolios
+(`owner_for_handle` / `random_handle` / per-user slugs / `application_slug` /
+`public_portfolio_url`). Every portfolio lives at `portfolio.<domain>/<handle>/`, so the public
+endpoints carry the handle in their path (`/api/spa/public/<handle>/…`), and the Host header
+plays no part.
 
 LLM calls are always mocked (`spa.portfolio.complete`) —
 no live tower in tests, mirroring the rank discipline.
@@ -14,10 +15,12 @@ import json
 from datetime import date
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
+from django.utils.text import slugify
 
 from jac.models import (
     Domain,
@@ -43,8 +46,10 @@ from spa.portfolio import (
     default_link,
     freeze_link,
     link_for_application,
+    link_owner_for_handle,
     owner_domains,
-    owner_for_host,
+    owner_for_handle,
+    portfolio_home_url,
     public_portfolio_url,
     random_handle,
     resolve_items,
@@ -53,9 +58,9 @@ from spa.portfolio import (
 
 
 def _owner(username="lukas", published=True):
-    """A portfolio owner at `<username>.<domain>`. UserProfile + PersonalityProfile are
+    """A portfolio owner at `portfolio.<domain>/<username>/`. UserProfile + PersonalityProfile are
     auto-created by signals. A real signup gets a random handle (`RandomHandleTests`); this one
-    takes its username as the handle, as if claimed in the profile, so test hosts stay readable.
+    takes its username as the handle, as if claimed in the profile, so test paths stay readable.
     Published unless a test says otherwise: most of this file is about what a public portfolio
     shows. A real signup starts unpublished (`UnpublishedPortfolioTests`)."""
     user = User.objects.create_user(username=username, password="pw")
@@ -89,81 +94,147 @@ def _application(owner, company="Acme", role="Backend Engineer"):
     return JobApplication.objects.create(user=owner, posting=posting)
 
 
-# ── host-based owner resolution (multi-user portfolios) ─────────────────────────
+# ── handle-based owner resolution (multi-user portfolios) ───────────────────────
 
 
-@override_settings(BASE_DOMAIN="localhost", PORTFOLIO_OWNER_USERNAME="lukas")
-class OwnerForHostTests(TestCase):
-    def test_handle_subdomain_resolves_that_user(self):
-        jane = _owner("jane")  # handle "jane"
-        self.assertEqual(owner_for_host("jane.localhost"), jane)
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
+class OwnerForHandleTests(TestCase):
+    """`portfolio.<domain>/<handle>/` names the owner; nothing reads the Host header."""
 
-    def test_apex_resolves_configured_owner(self):
-        lukas = _owner("lukas")
-        _owner("jane")  # a second user must never be picked at the apex
-        self.assertEqual(owner_for_host("localhost"), lukas)
-
-    def test_www_resolves_configured_owner(self):
-        lukas = _owner("lukas")
-        self.assertEqual(owner_for_host("www.localhost"), lukas)
-
-    def test_reserved_subdomain_is_none(self):
-        self.assertIsNone(owner_for_host("app.localhost"))
-
-    def test_unknown_handle_is_none(self):
-        self.assertIsNone(owner_for_host("nobody.localhost"))
-
-    def test_foreign_host_is_none(self):
-        _owner("jane")  # a valid handle must not resolve on a foreign apex
-        self.assertIsNone(owner_for_host("jane.evil.com"))
-
-    def test_port_is_stripped(self):
+    def test_a_handle_resolves_that_user(self):
         jane = _owner("jane")
-        self.assertEqual(owner_for_host("jane.localhost:8000"), jane)
+        _owner("lukas")  # the site owner is never picked for someone else's handle
+        self.assertEqual(owner_for_handle("jane"), jane)
 
-    def test_inactive_user_is_none(self):
+    def test_handles_are_case_insensitive(self):
+        jane = _owner("jane")
+        self.assertEqual(owner_for_handle("JaNe"), jane)
+        self.assertEqual(link_owner_for_handle("JANE"), jane)
+
+    def test_an_unknown_or_empty_handle_is_none(self):
+        _owner("jane")
+        for handle in ("nobody", "", None):
+            self.assertIsNone(owner_for_handle(handle), handle)
+            self.assertIsNone(link_owner_for_handle(handle), handle)
+
+    def test_a_reserved_handle_is_none_even_when_a_row_holds_it(self):
+        """The first path segment would mean something else there: no portfolio, published or
+        not, and no links."""
+        jane = _owner("jane")
+        for handle in sorted(settings.RESERVED_HANDLES):
+            UserProfile.objects.filter(user=jane).update(handle=handle)
+            for spelling in (handle, handle.upper()):
+                self.assertIsNone(owner_for_handle(spelling), spelling)
+                self.assertIsNone(link_owner_for_handle(spelling), spelling)
+
+    def test_an_inactive_user_is_none(self):
         jane = _owner("jane")
         User.objects.filter(pk=jane.pk).update(is_active=False)
-        self.assertIsNone(owner_for_host("jane.localhost"))
+        self.assertIsNone(owner_for_handle("jane"))
+        self.assertIsNone(link_owner_for_handle("jane"))
 
-    @override_settings(PORTFOLIO_OWNER_USERNAME="Lukas")
-    def test_apex_owner_is_case_insensitive(self):
-        # Configured "Lukas" (capital L) resolves the "lukas" row — the exact-match
-        # 404 bug, now on the apex host.
-        lukas = _owner("lukas")
-        self.assertEqual(owner_for_host("localhost"), lukas)
-
-    @override_settings(PORTFOLIO_OWNER_USERNAME="system")
-    def test_apex_sentinel_owner_is_none(self):
-        _owner("lukas")
-        self.assertIsNone(owner_for_host("localhost"))
-
-    @override_settings(PORTFOLIO_OWNER_USERNAME="")
-    def test_apex_unset_owner_is_none(self):
-        _owner("lukas")
-        self.assertIsNone(owner_for_host("localhost"))
-
-    def test_an_unpublished_handle_is_none(self):
-        _owner("jane", published=False)
-        self.assertIsNone(owner_for_host("jane.localhost"))
+    def test_an_unpublished_handle_is_no_owner_but_still_owns_its_links(self):
+        jane = _owner("jane", published=False)
+        self.assertIsNone(owner_for_handle("jane"))
+        self.assertEqual(link_owner_for_handle("jane"), jane)
 
     def test_the_site_owner_needs_no_publishing(self):
         lukas = _owner("lukas", published=False)
-        self.assertEqual(owner_for_host("localhost"), lukas)
-        self.assertEqual(owner_for_host("lukas.localhost"), lukas)
+        self.assertEqual(owner_for_handle("lukas"), lukas)
+
+    @override_settings(PORTFOLIO_OWNER_USERNAME="Lukas")
+    def test_the_site_owner_is_matched_case_insensitively(self):
+        # Configured "Lukas" (capital L) still names the "lukas" row: the exact-match 404 bug.
+        lukas = _owner("lukas", published=False)
+        self.assertEqual(owner_for_handle("lukas"), lukas)
 
 
-@override_settings(
-    PORTFOLIO_OWNER_USERNAME="lukas",
-    BASE_DOMAIN="testserver",
-    ALLOWED_HOSTS=[".testserver"],
-)
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
+class PublicHandleTests(TestCase):
+    """Every public endpoint, for each kind of handle in its path. Published: it answers.
+    Unknown, reserved or unpublished: one and the same 404. A link is the exception: it works on
+    an unpublished handle (what it shows there: `UnpublishedPortfolioTests`)."""
+
+    SLUG = "for-acme"
+    ANSWERS = {
+        "links": 200,
+        "native": 200,
+        "meta": 200,
+        "rank": 200,
+        "prewarm": 204,
+        "intro": 202,
+    }
+
+    def setUp(self):
+        cache.clear()  # 6/hour on rank and intro, and every test here calls them
+        jane = _owner("jane")
+        hidden = _owner("hidden", published=False)
+        # Holds a reserved handle anyway (an admin edit, a row from before the list grew).
+        squatter = _owner("squatter")
+        UserProfile.objects.filter(user=squatter).update(handle="admin")
+        for user in (jane, hidden, squatter):
+            PortfolioLink.objects.create(
+                user=user, kind=PortfolioLink.Kind.manual, slug=self.SLUG
+            )
+
+    def _calls(self, handle):
+        api = f"/api/spa/public/{handle}/"
+        post = {"data": {"query": "x"}, "content_type": "application/json"}
+        with (
+            mock.patch("spa.views.rank_for_query", return_value=[]),
+            mock.patch("spa.views.request_prewarm"),
+            mock.patch("llm_connector.tasks.run_ai_job"),
+        ):
+            return {
+                "links": self.client.get(f"{api}links/{self.SLUG}/"),
+                "native": self.client.get(f"{api}native/"),
+                "meta": self.client.get(f"{api}native/meta/"),
+                "rank": self.client.post(f"{api}native/rank/", **post),
+                "prewarm": self.client.post(f"{api}native/prewarm/"),
+                "intro": self.client.post(f"{api}native/intro/", **post),
+            }
+
+    def test_a_published_handle_answers_on_every_endpoint(self):
+        for name, r in self._calls("jane").items():
+            self.assertEqual(r.status_code, self.ANSWERS[name], name)
+            self.assertEqual(r["X-Robots-Tag"], "noindex", name)
+
+    def test_the_handle_is_case_insensitive_on_every_endpoint(self):
+        for name, r in self._calls("JaNe").items():
+            self.assertEqual(r.status_code, self.ANSWERS[name], name)
+
+    def test_unknown_and_reserved_handles_get_the_same_404_everywhere(self):
+        unknown = self._calls("nobody")
+        for name, r in self._calls("admin").items():
+            self.assertEqual(r.status_code, 404, name)
+            self.assertEqual(r.content, unknown[name].content, name)
+
+    def test_an_unpublished_handle_gets_that_404_everywhere_but_its_links(self):
+        unknown = self._calls("nobody")
+        for name, r in self._calls("hidden").items():
+            if name == "links":
+                self.assertEqual(r.status_code, 200)
+                continue
+            self.assertEqual(r.status_code, 404, name)
+            self.assertEqual(r.content, unknown[name].content, name)
+
+    def test_a_link_answers_only_under_its_owners_handle(self):
+        PortfolioLink.objects.create(
+            user=User.objects.get(username="jane"),
+            kind=PortfolioLink.Kind.manual,
+            slug="only-jane",
+        )
+        url = "/api/spa/public/{}/links/only-jane/"
+        self.assertEqual(self.client.get(url.format("jane")).status_code, 200)
+        self.assertEqual(self.client.get(url.format("hidden")).status_code, 404)
+
+
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class UnpublishedPortfolioTests(TestCase):
     """A handle is minted at signup, and nothing under it is public until the owner says so.
     The exception is a link they share, which shows its own selection and no more."""
 
-    HOST = {"HTTP_HOST": "jane.testserver"}
-    NO_SUCH_USER = {"HTTP_HOST": "nobody.testserver"}
+    API = "/api/spa/public/jane/"
 
     def setUp(self):
         cache.clear()
@@ -180,16 +251,6 @@ class UnpublishedPortfolioTests(TestCase):
         self.jane.profile.portfolio_public = True
         self.jane.profile.save(update_fields=["portfolio_public"])
 
-    def _native_calls(self, host):
-        api = "/api/spa/portfolio/native/"
-        post = {"data": {"query": "x"}, "content_type": "application/json", **host}
-        return {
-            "native": self.client.get(api, **host),
-            "meta": self.client.get(f"{api}meta/", **host),
-            "rank": self.client.post(f"{api}rank/", **post),
-            "intro": self.client.post(f"{api}intro/", **post),
-        }
-
     def _manual_link(self, **content):
         return PortfolioLink.objects.create(
             user=self.jane,
@@ -199,26 +260,14 @@ class UnpublishedPortfolioTests(TestCase):
         )
 
     def _resolve(self, link):
-        return self.client.get(f"/api/spa/portfolio/links/{link.slug}/", **self.HOST)
-
-    def test_every_native_endpoint_answers_as_for_no_such_user(self):
-        unpublished = self._native_calls(self.HOST)
-        missing = self._native_calls(self.NO_SUCH_USER)
-        for name, response in unpublished.items():
-            self.assertEqual(response.status_code, 404, name)
-            self.assertEqual(response.content, missing[name].content, name)
-
-    def test_the_landing_answers_as_for_no_such_user(self):
-        r = self.client.get("/", **self.HOST)
-        self.assertNotContains(r, "Jane Secret")
-        self.assertNotContains(r, "music")
-        self.assertEqual(r.content, self.client.get("/", **self.NO_SUCH_USER).content)
+        return self.client.get(f"{self.API}links/{link.slug}/")
 
     def test_publishing_opens_the_native_endpoints(self):
+        native = f"{self.API}native/"
+        self.assertEqual(self.client.get(native).status_code, 404)
         self._publish()
-        api = "/api/spa/portfolio/native/"
-        self.assertEqual(self.client.get(api, **self.HOST).status_code, 200)
-        self.assertEqual(self.client.get(f"{api}meta/", **self.HOST).status_code, 200)
+        self.assertEqual(self.client.get(native).status_code, 200)
+        self.assertEqual(self.client.get(f"{native}meta/").status_code, 200)
 
     def test_a_manual_link_shows_its_selection_and_no_more(self):
         r = self._resolve(self._manual_link(domains=["music"]))
@@ -314,7 +363,7 @@ class RandomHandleTests(TestCase):
             self.assertRegex(user.profile.handle, HANDLE_RE)
         self.assertNotEqual(a.profile.handle, b.profile.handle)
 
-    @override_settings(RESERVED_SUBDOMAINS={"app", "u-reserved"})
+    @override_settings(RESERVED_HANDLES={"u-reserved"})
     def test_a_reserved_or_taken_candidate_is_rolled_again(self):
         # Taken is case-insensitive, like validate_handle.
         UserProfile.objects.filter(user=_owner("jane")).update(handle="U-TAKEN234")
@@ -358,17 +407,19 @@ class HandleClaimTests(TestCase):
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.handle, "jane-doe")
 
-    @override_settings(RESERVED_SUBDOMAINS={"app"})
-    def test_reserved_handle_is_rejected(self):
-        r = self._patch("app")
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("handle", r.json())
-
-    def test_system_cannot_be_claimed(self):
-        # Handles are random now, so nothing holds "system" by accident any more.
-        r = self._patch("system")
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("handle", r.json())
+    def test_no_reserved_handle_can_be_claimed(self):
+        """The portfolio host's own paths, the SPA's routes, and "system": handles are random now,
+        so nothing holds that one by accident any more. Normalized first, then refused. slugify
+        strips a leading underscore, so "_allauth" can't even be spelled: that claim lands on the
+        free "allauth". Only an admin edit puts it on a row (`OwnerForHandleTests`)."""
+        for handle in sorted(settings.RESERVED_HANDLES):
+            with self.subTest(handle=handle):
+                r = self._patch(handle.upper())
+                if slugify(handle) == handle:
+                    self.assertEqual(r.status_code, 400)
+                    self.assertIn("handle", r.json())
+                self.user.profile.refresh_from_db()
+                self.assertNotIn(self.user.profile.handle, settings.RESERVED_HANDLES)
 
     def test_handle_taken_by_another_user_is_rejected(self):
         _owner("jane")  # handle "jane"
@@ -398,7 +449,7 @@ class PerUserSlugTests(TestCase):
     def test_two_users_can_share_a_slug(self):
         a, b = _owner("a"), _owner("b")
         self._link(a, "acme")
-        self._link(b, "acme")  # the host carries the user → no cross-user clash
+        self._link(b, "acme")  # the path carries the handle → no cross-user clash
         self.assertEqual(PortfolioLink.objects.filter(slug="acme").count(), 2)
 
     def test_same_user_cannot_hold_two_active(self):
@@ -447,15 +498,13 @@ class ApplicationSlugTests(TestCase):
             len(slug), PortfolioLink._meta.get_field("slug").max_length
         )
 
-    @override_settings(BASE_DOMAIN="testserver", ALLOWED_HOSTS=[".testserver"])
     def test_trying_the_company_name_finds_nothing(self):
         cache.clear()
         owner = _owner("jane")
         link = link_for_application(_application(owner, company="Acme"))
-        url = "/api/spa/portfolio/links/{}/"
-        host = {"HTTP_HOST": "jane.testserver"}
-        self.assertEqual(self.client.get(url.format("acme"), **host).status_code, 404)
-        self.assertEqual(self.client.get(url.format(link.slug), **host).status_code, 200)
+        url = "/api/spa/public/jane/links/{}/"
+        self.assertEqual(self.client.get(url.format("acme")).status_code, 404)
+        self.assertEqual(self.client.get(url.format(link.slug)).status_code, 200)
 
     def test_a_manual_link_stays_as_named(self):
         self.client.force_login(_owner())
@@ -546,14 +595,37 @@ class ApplicationSectionsOffTests(TestCase):
         self.assertIn(self.skill_id, more)
 
 
-@override_settings(PORTFOLIO_ORIGIN_TEMPLATE="http://{handle}.example.test")
+@override_settings(PORTFOLIO_URL="http://portfolio.example.test")
 class PublicPortfolioUrlTests(TestCase):
-    def test_url_uses_handle_and_slug(self):
-        jane = _owner("jane")  # handle "jane"
-        link = PortfolioLink.objects.create(
-            user=jane, kind=PortfolioLink.Kind.manual, slug="acme"
+    """One host for every portfolio: the handle and the slug are path segments."""
+
+    def setUp(self):
+        self.jane = _owner("jane")  # handle "jane"
+        self.link = PortfolioLink.objects.create(
+            user=self.jane, kind=PortfolioLink.Kind.manual, slug="acme"
         )
-        self.assertEqual(public_portfolio_url(link), "http://jane.example.test/acme")
+
+    def test_a_links_url_is_the_handle_then_the_slug(self):
+        self.assertEqual(
+            public_portfolio_url(self.link), "http://portfolio.example.test/jane/acme/"
+        )
+
+    def test_the_owners_home_is_their_handle(self):
+        self.assertEqual(
+            portfolio_home_url(self.jane), "http://portfolio.example.test/jane/"
+        )
+
+    @override_settings(PORTFOLIO_URL="https://portfolio.example.test/")
+    def test_a_trailing_slash_in_the_setting_changes_nothing(self):
+        self.assertEqual(
+            public_portfolio_url(self.link), "https://portfolio.example.test/jane/acme/"
+        )
+
+    def test_the_manage_api_hands_out_that_url(self):
+        """What the QR on an exported letter encodes."""
+        self.client.force_login(self.jane)
+        [row] = self.client.get("/api/spa/portfolio/manage/links/").json()
+        self.assertEqual(row["url"], "http://portfolio.example.test/jane/acme/")
 
 
 # ── dynamic domains + style axis ────────────────────────────────────────────────
@@ -707,8 +779,10 @@ class PortfolioIntroWriterTests(TestCase):
 # ── public endpoints (meta / intro) + landing ───────────────────────────────────
 
 
-@override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class PublicPortfolioEndpointTests(TestCase):
+    API = "/api/spa/public/lukas/native/"
+
     def setUp(self):
         cache.clear()  # reset scoped-throttle counters between tests
         self.owner = _owner("lukas")
@@ -717,23 +791,27 @@ class PublicPortfolioEndpointTests(TestCase):
         d = Domain.objects.create(user=self.owner, name="music")
         job = _job(self.owner)
         job.domains.add(d)
-        r = self.client.get("/api/spa/portfolio/native/meta/")
+        r = self.client.get(f"{self.API}meta/")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertIn("music", body["domains"])
         self.assertTrue(any(t["value"] == "neutral" for t in body["tones"]))
         self.assertTrue(any(f["value"] == "balanced" for f in body["focuses"]))
 
-    @override_settings(PORTFOLIO_OWNER_USERNAME="")
-    def test_meta_404_without_owner(self):
-        self.assertEqual(
-            self.client.get("/api/spa/portfolio/native/meta/").status_code, 404
+    def test_meta_is_the_handles_own(self):
+        """Two owners, two shortlists: the handle in the path picks whose."""
+        jane = _owner("jane")
+        _job(jane).domains.add(Domain.objects.create(user=jane, name="theatre"))
+        _job(self.owner).domains.add(
+            Domain.objects.create(user=self.owner, name="music")
         )
+        r = self.client.get("/api/spa/public/jane/native/meta/")
+        self.assertEqual(r.json()["domains"], ["theatre"])
 
     def _queue_intro(self):
         with mock.patch("llm_connector.tasks.run_ai_job"):
             return self.client.post(
-                "/api/spa/portfolio/native/intro/",
+                f"{self.API}intro/",
                 data={
                     "domains": ["music"],
                     "query": "gigs",
@@ -748,7 +826,7 @@ class PublicPortfolioEndpointTests(TestCase):
         """Pages first, AI second: the POST answers at once, whatever the model server is doing."""
         r = self._queue_intro()
         self.assertEqual(r.status_code, 202)
-        url = f"/api/spa/portfolio/native/intro/{r.json()['id']}/"
+        url = f"/api/spa/public/intro/{r.json()['id']}/"
         self.assertEqual(self.client.get(url).json(), {"status": "pending", "intro": ""})
         m_complete.assert_not_called()
         run_ai_job(r.json()["id"])
@@ -774,59 +852,79 @@ class PublicPortfolioEndpointTests(TestCase):
             self.assertLogs("spa.portfolio", level="WARNING"),
         ):
             run_ai_job(r.json()["id"])
-        body = self.client.get(
-            f"/api/spa/portfolio/native/intro/{r.json()['id']}/"
-        ).json()
+        body = self.client.get(f"/api/spa/public/intro/{r.json()['id']}/").json()
         self.assertEqual(body["intro"], "")
 
     def test_only_intro_jobs_are_readable_without_a_login(self):
         job = AiJob.objects.create(
             kind="letter_rewrite", user=self.owner, result={"text": "private"}
         )
-        r = self.client.get(f"/api/spa/portfolio/native/intro/{job.pk}/")
+        r = self.client.get(f"/api/spa/public/intro/{job.pk}/")
         self.assertEqual(r.status_code, 404)
+
+    def test_the_intro_is_written_for_the_handles_owner(self):
+        jane = _owner("jane")
+        with mock.patch("llm_connector.tasks.run_ai_job"):
+            r = self.client.post(
+                "/api/spa/public/jane/native/intro/",
+                data={},
+                content_type="application/json",
+            )
+        self.assertEqual(AiJob.objects.get(pk=r.json()["id"]).user, jane)
 
     def test_intro_rejects_overlong_query(self):
         r = self.client.post(
-            "/api/spa/portfolio/native/intro/",
+            f"{self.API}intro/",
             data={"query": "x" * 1000},
             content_type="application/json",
         )
         self.assertEqual(r.status_code, 400)
 
-    @override_settings(PORTFOLIO_OWNER_USERNAME="")
-    def test_intro_404_without_owner(self):
-        r = self.client.post(
-            "/api/spa/portfolio/native/intro/",
-            data={},
-            content_type="application/json",
-        )
-        self.assertEqual(r.status_code, 404)
 
-
-@override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class LandingTests(TestCase):
+    """The apex is Django-rendered (SEO): the site owner's card, and the way on to their
+    questionnaire on the portfolio host."""
+
     def test_landing_renders_owner_html(self):
         User.objects.create_user(
             username="lukas", password="pw", first_name="Lukas", last_name="H"
         )
+        User.objects.create_user(username="jane", password="pw", first_name="Janet")
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertIn("text/html", r["Content-Type"])
         self.assertContains(r, "Lukas")
+        self.assertNotContains(r, "Janet")  # a second user is never the site
 
-    @override_settings(PORTFOLIO_ORIGIN_TEMPLATE="https://{handle}.testserver")
+    @override_settings(PORTFOLIO_URL="https://portfolio.testserver")
     def test_explore_leads_to_the_owners_questionnaire(self):
-        """The questionnaire lives on the owner's handle host. The app host only redirects to
-        /applications, and from there a stranger lands on a login form."""
+        """The questionnaire lives on the portfolio host, under the owner's handle. The app host
+        only redirects to /applications, and from there a stranger lands on a login form."""
         owner = User.objects.create_user(username="lukas", password="pw")
         r = self.client.get("/")
-        self.assertContains(r, f'href="https://{owner.profile.handle}.testserver"')
+        self.assertContains(
+            r, f'href="https://portfolio.testserver/{owner.profile.handle}/"'
+        )
+
+    @override_settings(PORTFOLIO_OWNER_USERNAME="Lukas")
+    def test_the_configured_name_is_case_insensitive(self):
+        # Configured "Lukas" (capital L) still names the "lukas" row: the exact-match 404 bug.
+        User.objects.create_user(username="lukas", password="pw", first_name="Lukas")
+        self.assertContains(self.client.get("/"), "Explore my work")
 
     def test_without_an_owner_theres_nothing_to_explore(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertNotContains(r, "Explore my work")
+
+    def test_the_sentinel_an_unset_name_or_an_inactive_owner_is_no_owner(self):
+        lukas = User.objects.create_user(username="lukas", password="pw")
+        for username in ("", "system"):
+            with override_settings(PORTFOLIO_OWNER_USERNAME=username):
+                self.assertNotContains(self.client.get("/"), "Explore my work")
+        User.objects.filter(pk=lukas.pk).update(is_active=False)
+        self.assertNotContains(self.client.get("/"), "Explore my work")
 
     def test_health_endpoint(self):
         r = self.client.get("/health/")
@@ -841,11 +939,8 @@ class LandingTests(TestCase):
         self.assertEqual(r.json(), {"message": "I am alive!"})
 
 
-@override_settings(
-    PORTFOLIO_OWNER_USERNAME="lukas",
-    BASE_DOMAIN="testserver",
-    ALLOWED_HOSTS=[".testserver"],
-)
+# The site owner, so the landing shows them too.
+@override_settings(PORTFOLIO_OWNER_USERNAME="maximilian.mustermann")
 class PublicNameTests(TestCase):
     """The username is the email's local part, so no public page falls back to it: without a
     display name or a full name, the handle stands in, which the address shows anyway."""
@@ -859,7 +954,6 @@ class PublicNameTests(TestCase):
         )
         UserProfile.objects.filter(user=self.owner).update(portfolio_public=True)
         self.handle = self.owner.profile.handle
-        self.host = {"HTTP_HOST": f"{self.handle}.testserver"}
 
     def test_without_a_name_the_payload_shows_the_handle(self):
         owner = build_payload(self.owner)["owner"]
@@ -871,10 +965,10 @@ class PublicNameTests(TestCase):
         )
         for url in (
             "/",  # the landing: <title>, og:title, the heading, the avatar's alt
-            "/api/spa/portfolio/native/",
-            f"/api/spa/portfolio/links/{link.slug}/",
+            f"/api/spa/public/{self.handle}/native/",
+            f"/api/spa/public/{self.handle}/links/{link.slug}/",
         ):
-            r = self.client.get(url, **self.host)
+            r = self.client.get(url)
             self.assertEqual(r.status_code, 200, url)
             self.assertContains(r, self.handle, msg_prefix=url)
             for part in ("maximilian", "mustermann"):
@@ -893,12 +987,12 @@ class PublicNameTests(TestCase):
         self.assertEqual(build_payload(self.owner)["owner"]["display_name"], "Max M")
 
 
-@override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class PortfolioPrewarmTests(TestCase):
     """A visitor has started the questionnaire: wake the model server ahead of the rank and the
     intro. No login, and nothing for a portfolio that isn't there."""
 
-    URL = "/api/spa/portfolio/native/prewarm/"
+    URL = "/api/spa/public/{}/native/prewarm/"
 
     def setUp(self):
         cache.clear()  # scoped-throttle history lives in the default cache
@@ -906,30 +1000,33 @@ class PortfolioPrewarmTests(TestCase):
     def test_a_visitor_asks_for_it(self):
         _owner("lukas")
         with mock.patch("spa.views.request_prewarm") as prewarm:
-            r = self.client.post(self.URL)
+            r = self.client.post(self.URL.format("lukas"))
         self.assertEqual(r.status_code, 204)
         prewarm.assert_called_once()
 
     def test_no_portfolio_nothing_wakes(self):
+        _owner("hidden", published=False)
+        UserProfile.objects.filter(user=_owner("squatter")).update(handle="admin")
         with mock.patch("spa.views.request_prewarm") as prewarm:
-            r = self.client.post(self.URL)
-        self.assertEqual(r.status_code, 404)
+            for handle in ("nobody", "hidden", "admin"):
+                r = self.client.post(self.URL.format(handle))
+                self.assertEqual(r.status_code, 404, handle)
         prewarm.assert_not_called()
 
     def test_loading_the_questionnaire_wakes_nothing(self):
         """Crawlers load pages. Only the POST a person's first click sends may wake the tower."""
         _owner("lukas")
         with mock.patch("spa.views.request_prewarm") as prewarm:
-            self.client.get("/api/spa/portfolio/native/meta/")
+            self.client.get("/api/spa/public/lukas/native/meta/")
         prewarm.assert_not_called()
 
 
-@override_settings(PORTFOLIO_OWNER_USERNAME="lukas", BASE_DOMAIN="testserver")
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class PortfolioRankFallbackTests(TestCase):
     """A visitor is waiting, so a model server that is off or starting is a normal answer: the page
     keeps its standard selection and learns why, without an error and without a retry."""
 
-    URL = "/api/spa/portfolio/native/rank/"
+    URL = "/api/spa/public/lukas/native/rank/"
 
     def setUp(self):
         cache.clear()

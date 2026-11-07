@@ -1,12 +1,18 @@
-import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { clearStamp } from "@/lib/portfolio/stamp";
 
 /** Shown on every personalised view so the visitor is never trapped. "Start over"
- *  clears the stamp and returns to the questionnaire at "/"; the optional
+ *  clears this owner's stamp and returns to their questionnaire; the optional
  *  "Feeling lucky again" reshuffles a lucky view in place (parent passes onShuffle). */
-export function EscapeHatch({ onShuffle }: { onShuffle?: () => void }) {
-  const navigate = useNavigate();
+export function EscapeHatch({
+  handle,
+  onShuffle,
+}: {
+  handle: string;
+  onShuffle?: () => void;
+}) {
+  const goHome = useOwnerHome(handle);
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b bg-muted/50 px-4 py-1.5 text-sm">
       <span className="text-muted-foreground">
@@ -27,8 +33,8 @@ export function EscapeHatch({ onShuffle }: { onShuffle?: () => void }) {
         size="sm"
         className="h-auto p-0"
         onClick={() => {
-          clearStamp();
-          navigate({ to: "/" });
+          clearStamp(handle);
+          goHome();
         }}
       >
         Start over

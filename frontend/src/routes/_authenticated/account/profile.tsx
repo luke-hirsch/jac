@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { baseDomain } from "@/lib/host";
+import { portfolioAddress } from "@/lib/portfolio/publish";
 import {
   Select,
   SelectContent,
@@ -285,7 +286,10 @@ function ProfileForm({
             <p className="text-xs text-muted-foreground">
               Your portfolio's address, once you publish it under Portfolio:{" "}
               <code>
-                {field.state.value || "your-handle"}.{baseDomain()}
+                {portfolioAddress(
+                  field.state.value || "your-handle",
+                  baseDomain(),
+                )}
               </code>
             </p>
             <p className="text-xs text-muted-foreground">

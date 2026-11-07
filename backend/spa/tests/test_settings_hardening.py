@@ -449,6 +449,46 @@ class ProdBootTests(TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertEqual(r.stdout.strip(), "no-reply@example.com")
 
+    def test_the_hosts_follow_the_domain(self):
+        """Four named hosts and no wildcard: the zone holds names jac doesn't serve, so neither
+        ALLOWED_HOSTS, nor the trusted origins, nor HSTS speaks for every subdomain."""
+        unset = {
+            "ALLOWED_HOSTS",
+            "CSRF_TRUSTED_ORIGINS",
+            "FRONTEND_URL",
+            "PORTFOLIO_URL",
+        }
+        env = {k: v for k, v in _prod_env().items() if k not in unset}
+        probe = (
+            "import lukehirsch.prod as p; p.load_local_env = lambda path: None; "
+            "import json, django; django.setup(); from django.conf import settings as s; "
+            "print(json.dumps({'hosts': s.ALLOWED_HOSTS, 'csrf': s.CSRF_TRUSTED_ORIGINS, "
+            "'app': s.FRONTEND_URL, 'portfolio': s.PORTFOLIO_URL, "
+            "'subdomains': s.SECURE_HSTS_INCLUDE_SUBDOMAINS}))"
+        )
+        r = _python("-c", probe, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        values = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(
+            values,
+            {
+                "hosts": [
+                    "example.com",
+                    "www.example.com",
+                    "jac.example.com",
+                    "portfolio.example.com",
+                ],
+                "csrf": [
+                    "https://jac.example.com",
+                    "https://portfolio.example.com",
+                    "https://example.com",
+                ],
+                "app": "https://jac.example.com",
+                "portfolio": "https://portfolio.example.com",
+                "subdomains": False,
+            },
+        )
+
     def test_a_process_with_no_debug_variable_runs_in_production_mode(self):
         """Off unless something turns it on, so a forgotten variable can't put a public site in
         debug mode. `.env.local` is a laptop's opt-in, so the probe patches its loader out; the

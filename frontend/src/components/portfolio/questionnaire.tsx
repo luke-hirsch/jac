@@ -56,11 +56,14 @@ function StyleAxis({
 }
 
 export function Questionnaire({
+  handle,
   onDone,
 }: {
+  handle: string;
   onDone: (search: ExploreSearch) => void;
 }) {
-  const meta = useNativeMeta();
+  const meta = useNativeMeta(handle);
+  const prewarm = () => prewarmForVisitor(handle);
   const [form, setForm] = useState<QuestForm>(EMPTY_FORM);
 
   function toggleDomain(name: string) {
@@ -77,8 +80,8 @@ export function Questionnaire({
       {/* The first click or key in here, not the page load: only a person gets this far. */}
       <Card
         className="w-full max-w-lg"
-        onPointerDownCapture={prewarmForVisitor}
-        onKeyDownCapture={prewarmForVisitor}
+        onPointerDownCapture={prewarm}
+        onKeyDownCapture={prewarm}
       >
         <CardHeader>
           <CardTitle>What do you want to see?</CardTitle>

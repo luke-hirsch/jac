@@ -1,9 +1,11 @@
-/** host from the hostname + the base domain.
- *  localStorage is per-origin, so a handle host's stamp is naturally that owner's alone. */
-export type SiteHost =
-  | { kind: "apex" }
-  | { kind: "app" }
-  | { kind: "handle"; handle: string };
+/** Which host this SPA instance serves, from the hostname + the base domain. Three fixed hosts:
+ *  the apex (Django's landing in prod; the SPA only sees it in vite dev), `jac.` (the authed app)
+ *  and `portfolio.` (every owner's portfolio, at /<handle>/). An owner is a path segment, never a
+ *  subdomain. */
+export type SiteHost = "apex" | "jac" | "portfolio";
+
+export const JAC_SUBDOMAIN = "jac";
+export const PORTFOLIO_SUBDOMAIN = "portfolio";
 
 /** The domain this deployment runs on. It's read at run time, so one image serves any domain: nginx
  *  fills a meta tag in (deploy/image/spa.inc). In `vite dev` the placeholder is still there. */
@@ -19,34 +21,41 @@ export function parseHost(
   base: string = baseDomain(),
 ): SiteHost {
   const h = hostname.toLowerCase().replace(/\.$/, "");
-  if (h === base || h === `www.${base}`) return { kind: "apex" };
-  const suffix = `.${base}`;
-  if (!h.endsWith(suffix)) return { kind: "apex" }; // unknown host → safe apex default
-  const sub = h.slice(0, -suffix.length);
-  if (sub === "app") return { kind: "app" };
-  if (!sub || sub.includes(".")) return { kind: "apex" };
-  return { kind: "handle", handle: sub };
+  if (h === `${JAC_SUBDOMAIN}.${base}`) return "jac";
+  if (h === `${PORTFOLIO_SUBDOMAIN}.${base}`) return "portfolio";
+  return "apex"; // the apex, www., and any unknown host: the safe default
 }
 
 export function siteHost(): SiteHost {
   return parseHost(window.location.hostname);
 }
 
-export function currentHandle(): string | null {
-  const h = siteHost();
-  return h.kind === "handle" ? h.handle : null;
-}
-
-/** The app host's origin, preserving scheme + port (dev: http://app.localhost:5173). */
-export function appOrigin(base: string = baseDomain()): string {
+/** An origin on this deployment, preserving scheme + port (dev: http://jac.localhost:5173). */
+function originOf(host: string): string {
   const { protocol, port } = window.location;
   const p = port ? `:${port}` : "";
-  return `${protocol}//app.${base}${p}`;
+  return `${protocol}//${host}${p}`;
 }
 
-/** The public landing page. On the app host "/" only ever leads back into the auth pages. */
+/** The authed app. */
+export function jacOrigin(base: string = baseDomain()): string {
+  return originOf(`${JAC_SUBDOMAIN}.${base}`);
+}
+
+/** The public front door: Django's landing. */
 export function apexOrigin(base: string = baseDomain()): string {
-  const { protocol, port } = window.location;
-  const p = port ? `:${port}` : "";
-  return `${protocol}//${base}${p}`;
+  return originOf(base);
+}
+
+/** Every owner's portfolio, one path each. */
+export function portfolioOrigin(base: string = baseDomain()): string {
+  return originOf(`${PORTFOLIO_SUBDOMAIN}.${base}`);
+}
+
+/** Hand the browser to another host from a route's beforeLoad. The promise never settles, so the
+ *  router stays put until the page unloads: a thrown redirect would run a second route's guard,
+ *  and a second `location.replace` would win over this one. */
+export function leaveTo(url: string): Promise<never> {
+  window.location.replace(url);
+  return new Promise<never>(() => {});
 }

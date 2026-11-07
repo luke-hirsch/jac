@@ -1,7 +1,7 @@
-import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
+import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { reorderByRank } from "@/lib/portfolio/content";
 import { clearStamp } from "@/lib/portfolio/stamp";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
@@ -11,11 +11,17 @@ import {
   usePortfolioRank,
 } from "@/lib/queries/portfolio";
 
-export function ExploreResult({ search }: { search: ExploreSearch }) {
-  const navigate = useNavigate();
-  const portfolio = useNativePortfolio(search);
-  const rank = usePortfolioRank(search);
-  const intro = useNativeIntro(search); // disabled internally when search.lucky
+export function ExploreResult({
+  handle,
+  search,
+}: {
+  handle: string;
+  search: ExploreSearch;
+}) {
+  const goHome = useOwnerHome(handle);
+  const portfolio = useNativePortfolio(handle, search);
+  const rank = usePortfolioRank(handle, search);
+  const intro = useNativeIntro(handle, search); // disabled internally when search.lucky
 
   if (portfolio.isPending) {
     return (
@@ -34,8 +40,8 @@ export function ExploreResult({ search }: { search: ExploreSearch }) {
           <Button
             variant="outline"
             onClick={() => {
-              clearStamp();
-              navigate({ to: "/" });
+              clearStamp(handle);
+              goHome();
             }}
           >
             Back to start
@@ -54,6 +60,7 @@ export function ExploreResult({ search }: { search: ExploreSearch }) {
   return (
     <>
       <EscapeHatch
+        handle={handle}
         onShuffle={search.lucky ? () => portfolio.refetch() : undefined}
       />
       {search.q && rank.data?.ai === "warming_up" ? (

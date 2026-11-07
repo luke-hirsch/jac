@@ -56,7 +56,9 @@ up() {
     fi
     cat <<EOF
 
-  The app      http://localhost:5173
+  The app      http://jac.localhost:5173
+  Portfolios   http://portfolio.localhost:5173/<handle>/
+  The landing  http://localhost:8000
   Admin        http://localhost:8000/admin/
   Model server $model
   The worker doesn't reload: after changing a task or the pipeline, Ctrl-C and ./dev again.
@@ -79,7 +81,8 @@ stack() {
     "${compose[@]}" up -d
     cat <<EOF
 
-  The app      http://app.localhost:8000
+  The app      http://jac.localhost:8000
+  Portfolios   http://portfolio.localhost:8000/<handle>/
   The landing  http://localhost:8000
   Signup codes ${compose[*]} logs app
   Stop it      ./dev stack down

@@ -2,8 +2,8 @@
 {% block content %}
 <p>
   Diese Erklärung sagt, welche personenbezogenen Daten wir verarbeiten, wozu und wie lange. Sie gilt
-  für alle Adressen unter {{ base_domain }}: die Startseite, die Anwendung auf app.{{ base_domain }}
-  und die Portfolios auf &lt;name&gt;.{{ base_domain }}.
+  für alle Adressen unter {{ base_domain }}: die Startseite, die Anwendung auf jac.{{ base_domain }}
+  und die Portfolios auf portfolio.{{ base_domain }}/&lt;name&gt;.
 </p>
 
 <h2>1. Verantwortlicher</h2>
@@ -56,19 +56,19 @@
     <tbody>
       <tr>
         <td><code>sessionid</code></td>
-        <td>Cookie, nur auf app.{{ base_domain }}</td>
+        <td>Cookie, nur auf jac.{{ base_domain }}</td>
         <td>hält dich angemeldet</td>
         <td>höchstens 2 Wochen</td>
       </tr>
       <tr>
         <td><code>csrftoken</code></td>
-        <td>Cookie, nur auf app.{{ base_domain }}</td>
+        <td>Cookie, nur auf jac.{{ base_domain }}</td>
         <td>schützt Formulare vor Fälschung</td>
         <td>bis zu 1 Jahr</td>
       </tr>
       <tr>
-        <td><code>portfolio.stamp.v1</code></td>
-        <td>localStorage, je Portfolio-Adresse</td>
+        <td><code>portfolio.stamp.v1.&lt;name&gt;</code></td>
+        <td>localStorage, einer je Portfolio</td>
         <td>
           zeigt dir beim nächsten Besuch wieder dein Ergebnis: gewählte Themen und Stil oder der
           aufgerufene Link, nicht dein Freitext
@@ -83,7 +83,7 @@
       </tr>
       <tr>
         <td><code>jac-pending-email</code></td>
-        <td>sessionStorage, nur auf app.{{ base_domain }}</td>
+        <td>sessionStorage, nur auf jac.{{ base_domain }}</td>
         <td>
           zeigt beim Bestätigen der Registrierung, an welche E-Mail-Adresse der Code ging
         </td>
@@ -164,7 +164,7 @@
 <h2>7. Was öffentlich ist</h2>
 <p>
   Öffentlich wird nichts, bis du dein Portfolio ausdrücklich veröffentlichst, und du kannst das
-  jederzeit zurücknehmen. Deine Adresse &lt;name&gt;.{{ base_domain }} ist ab der Registrierung für
+  jederzeit zurücknehmen. Deine Adresse portfolio.{{ base_domain }}/&lt;name&gt; ist ab der Registrierung für
   dich reserviert, zeigt bis dahin aber nichts. Ihr Name wird zufällig vergeben, enthält nichts aus
   deiner E-Mail-Adresse, und du kannst ihn im Profil ändern.
 </p>
@@ -246,16 +246,10 @@
 </p>
 
 <h2>11. Empfänger und Drittländer</h2>
-{# TODO(Lukas): Cloudflare is the plan, not yet live. Confirm this when the DNS moves: it holds for DNS-only records, and proxied ones would make it false. #}
 <p>
-  Daten gehen nur an unsere Hosting- und E-Mail-Dienstleister in der EU, an Cloudflare und, wenn du das
-  wählst, an Anthropic oder OpenAI (Abschnitt 8). Darüber hinaus geben wir keine Daten weiter, außer
-  wir sind gesetzlich dazu verpflichtet.
-</p>
-<p>
-  Cloudflare (USA) verwaltet unsere DNS-Einträge, ausschließlich als DNS-Dienst. Cloudflare sieht die
-  Namensanfragen der Resolver, nicht den Datenverkehr mit dieser Website. Die Übermittlung in die USA
-  stützt sich auf das EU-US Data Privacy Framework (Art. 45 DSGVO).
+  Daten gehen nur an unsere Hosting- und E-Mail-Dienstleister in der EU und, wenn du das wählst, an
+  Anthropic oder OpenAI (Abschnitt 8). Darüber hinaus geben wir keine Daten weiter, außer wir sind
+  gesetzlich dazu verpflichtet.
 </p>
 
 <h2>12. Löschung</h2>

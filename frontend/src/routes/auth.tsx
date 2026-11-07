@@ -1,16 +1,13 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { fetchSession } from "@/lib/auth";
-import { apexOrigin, appOrigin, siteHost } from "@/lib/host";
+import { apexOrigin, jacOrigin, leaveTo, siteHost } from "@/lib/host";
 
 export const Route = createFileRoute("/auth")({
   // Bootstrap the csrftoken cookie before any child renders. allauth's
   // browser_view decorator calls get_token() on every /_allauth/browser/v1/*
   // hit, so any GET seeds the cookie the signup/login POSTs need.
-  beforeLoad: async () => {
-    if (siteHost().kind !== "app") {
-      window.location.replace(appOrigin() + location.pathname);
-      throw redirect({ to: "/" });
-    }
+  beforeLoad: async ({ location }) => {
+    if (siteHost() !== "jac") return leaveTo(jacOrigin() + location.href);
     await fetchSession();
   },
   component: () => (
