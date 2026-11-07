@@ -6,6 +6,10 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 
 const BACKEND = "http://localhost:8000";
 
+/** The apex is plain localhost (or www.localhost), as luke-hirsch.de is in prod. */
+const onApex = (host: string | undefined) =>
+  ["localhost", "www.localhost"].includes((host ?? "").split(":")[0]);
+
 export default defineConfig({
   plugins: [
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
@@ -31,6 +35,13 @@ export default defineConfig({
       "/media": { target: BACKEND, changeOrigin: false },
       "/static": { target: BACKEND, changeOrigin: false },
       "/ws": { target: BACKEND, ws: true, changeOrigin: false },
+      // The apex's "/" is Django's landing, as nginx serves it in prod. Anywhere else, bypass hands
+      // the request back to vite: "/" on jac. and portfolio. stays the SPA's.
+      "^/(\\?.*)?$": {
+        target: BACKEND,
+        changeOrigin: false,
+        bypass: (req) => (onApex(req.headers.host) ? undefined : req.url),
+      },
     },
   },
 });

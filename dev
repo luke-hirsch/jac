@@ -58,7 +58,7 @@ up() {
 
   The app      http://jac.localhost:5173
   Portfolios   http://portfolio.localhost:5173/<handle>/
-  The landing  http://localhost:8000
+  The landing  http://localhost:5173
   Admin        http://localhost:8000/admin/
   Model server $model
   The worker doesn't reload: after changing a task or the pipeline, Ctrl-C and ./dev again.
