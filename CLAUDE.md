@@ -73,8 +73,8 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, holding only what's left for
 Lukas, in the order of the work:**
-- step 1: his dev check of both branches, the new layout and the old browser checks;
-- step 2: merging both;
+- step 1: his dev check, the new layout and the old browser checks, now on `main`;
+- step 2: merging, done for both branches; `fullstack/dev-apex` is left;
 - step 3: setting up the mini;
 - step 4: the live checklist.
 
@@ -82,13 +82,10 @@ It was rewritten for the four named hosts on 2026-11-07. The wildcard version an
 `.claude/plans/done/`. **Until launch the AI codes at his request ("we're at a volatile stage")**, on its own branches;
 the browser check and the merge stay his.
 
-- **Branches:**
-  - `main` holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they promise (consent
-    for a key, the deleted-account mail). CI is green since 2026-11-06, and it's pushed.
-  - `fullstack/launch-decisions` holds 2b: random handles, the consent gate and card, the audit fix, the legal sign-off.
-  - `fullstack/portfolio-paths`, cut from it, holds the four-host layout.
-
-  Both are by the AI and wait for Lukas's dev check, then merge together.
+- **Branches:** `main` holds everything for launch: the Postgres move, prewarm, the race fix, the legal pages and what
+  they promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off) and the four-host
+  layout, both merged by Lukas on 2026-11-07. `fullstack/dev-apex` (`./dev` serves the landing on plain `localhost`,
+  as the apex does live) waits for his merge.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The shortened log address waits on the lab, and the visitor hash on the board. The
