@@ -113,6 +113,15 @@ class AuthFlowTests(TestCase):
         self.assertIn("verify_email", flow_ids)
         self.assertEqual(len(mail.outbox), 1)
 
+    def test_a_signup_puts_no_name_in_the_portfolio_address(self):
+        """allauth makes the username from the email's local part. The handle is a public
+        subdomain, so it takes nothing from it."""
+        self._signup("maximilian.mustermann@example.com")
+        user = User.objects.get(email="maximilian.mustermann@example.com")
+        self.assertIn("maximilian", user.username)  # why the handle can't come from it
+        self.assertRegex(user.profile.handle, r"^u-[a-z0-9]+$")
+        self.assertNotIn("maximilian", user.profile.handle)
+
     def test_signup_verify_logs_user_in(self):
         resp = self._signup_and_verify()
         self.assertEqual(resp.status_code, 200)

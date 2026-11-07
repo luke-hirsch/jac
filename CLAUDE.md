@@ -73,9 +73,10 @@ The AI implemented and tested everything else on 2026-11-05, at his request. Tha
 the earlier ones are in `.claude/plans/done/`. The board's `-6` export is right, and the lab's open questions are
 answered.
 
-- **Branches:** only `main`. It holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they
-  promise (consent for a key, the deleted-account mail), plus the fixes the test pass found. CI is green since
-  2026-11-06.
+- **Branches:** `main` holds the Postgres move, prewarm, the race fix, the rewritten legal pages and what they promise
+  (consent for a key, the deleted-account mail), plus the fixes the test pass found. CI is green since 2026-11-06.
+  `fullstack/launch-decisions` holds step 2b, built by the AI: random handles, the consent gate, the consent card, the
+  audit fix and the legal sign-off. Its suites pass; it waits for Lukas's look and merge.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Of what their text commits jac
   to ([[legal-consent-and-restore]]), consent and the deleted-account record are built. The shortened log address waits
   on the lab, and the visitor hash on the board.

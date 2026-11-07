@@ -176,17 +176,21 @@ def resolve_link_owner(request) -> User | None:
     return _host_owner(request.get_host())
 
 
-def mint_handle(username: str) -> str:
-    """A DNS-safe, reserved-aware, unique handle seeded from a username."""
-    base = slugify(username)[:40].strip("-") or "user"
-    if base in settings.RESERVED_SUBDOMAINS:
-        base = f"{base}-1"
-    candidate, n = base, 2
-    while UserProfile.objects.filter(handle__iexact=candidate).exists():
-        suffix = f"-{n}"
-        candidate = f"{base[: 40 - len(suffix)]}{suffix}"
-        n += 1
-    return candidate
+HANDLE_PREFIX = "u-"
+
+
+def random_handle() -> str:
+    """A new account's handle: `u-` + the slug suffix, e.g. `u-k7m2x9qa`. Nothing in it comes
+    from the username, which allauth takes from the email's local part, so a fresh portfolio
+    address names no one. The owner picks their own in the profile (`validate_handle`), and like
+    a picked one it's unique case-insensitively and never a reserved subdomain."""
+    for _ in range(5):
+        handle = f"{HANDLE_PREFIX}{slug_suffix()}"
+        if handle in settings.RESERVED_SUBDOMAINS:
+            continue
+        if not UserProfile.objects.filter(handle__iexact=handle).exists():
+            return handle
+    raise IntegrityError("could not mint a unique handle after 5 attempts")
 
 
 def public_portfolio_url(link) -> str:
@@ -418,11 +422,13 @@ def _blocks(
 
 def _owner_block(owner) -> dict:
     """Public identity card. Socials only when the profile opts in (`show_socials`,
-    spa/models.py:57); never email / phone / postal address."""
+    spa/models.py:57); never email / phone / postal address, and never the username: allauth
+    makes it from the email's local part. Without a name the handle stands in, which the
+    address shows anyway."""
     profile = owner.profile
     full = f"{owner.first_name} {owner.last_name}".strip()
     block = {
-        "display_name": profile.display_name or full or owner.username,
+        "display_name": profile.display_name or full or profile.handle,
         "bio": profile.bio,
         "avatar_url": profile.avatar.url if profile.avatar else None,
     }

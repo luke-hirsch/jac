@@ -100,9 +100,11 @@ class GenerationRunCreateTests(APITestCase):
             response = self.client.post(RUNS_URL, payload, format="json")
         return response, task
 
-    def _anthropic_row(self):
+    def _anthropic_row(self, *, consent=True):
         row = LLMConfig(user=self.user, provider="anthropic")
         row.api_key = "sk-a"
+        if consent:
+            row.transfer_consent_at = timezone.now()
         row.save()
         return row
 
@@ -138,6 +140,14 @@ class GenerationRunCreateTests(APITestCase):
     def test_commercial_without_key_is_rejected(self):
         response, _ = self._post(provider="anthropic")
         self.assertEqual(response.status_code, 400)
+
+    def test_a_key_without_consent_is_rejected_and_queues_nothing(self):
+        self._anthropic_row(consent=False)
+        response, task = self._post(provider="anthropic", mode="high")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("agree to the transfer", str(response.data["provider"]))
+        task.apply_async.assert_not_called()
+        self.assertFalse(GenerationRun.objects.exists())
 
     def test_commercial_run_gets_the_catalog_default_model(self):
         self._anthropic_row()
@@ -350,6 +360,7 @@ class ApplicationBatchTests(APITestCase):
     def test_it_uses_the_named_executor_and_its_lane(self):
         row = LLMConfig(user=self.user, provider="anthropic")
         row.api_key = "sk-a"
+        row.transfer_consent_at = timezone.now()
         row.save()
         r, task = self._post(["We need a cook."], provider="anthropic")
         self.assertEqual(r.status_code, 201, r.data)
@@ -974,6 +985,7 @@ class GenerationRunParamsTests(APITestCase):
         self.client.force_login(self.user)
         row = LLMConfig(user=self.user, provider="anthropic")
         row.api_key = "sk-a"
+        row.transfer_consent_at = timezone.now()
         row.save()
 
     def _post(self, **body):
