@@ -73,9 +73,9 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 **Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, holding only what's left for
 Lukas, in the order of the work:**
-- step 1: his dev check, the new layout and the old browser checks, now on `main`;
-- step 2: merging, done for both branches; `fullstack/dev-apex` is left;
-- step 3: setting up the mini;
+- step 1: his dev check of `main`, the new layout and the old browser checks: still open, and due before going live;
+- step 2: merging: done 2026-11-08, nothing waits on a branch;
+- step 3: setting up the mini: in progress (the database and its role exist, the `.env` is being filled);
 - step 4: the live checklist.
 
 It was rewritten for the four named hosts on 2026-11-07. The wildcard version and the earlier ones are in
@@ -83,9 +83,9 @@ It was rewritten for the four named hosts on 2026-11-07. The wildcard version an
 the browser check and the merge stay his.
 
 - **Branches:** `main` holds everything for launch: the Postgres move, prewarm, the race fix, the legal pages and what
-  they promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off) and the four-host
-  layout, both merged by Lukas on 2026-11-07. `fullstack/dev-apex` (`./dev` serves the landing on plain `localhost`,
-  as the apex does live) waits for his merge.
+  they promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host
+  layout, `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with
+  SSL. All merged by Lukas by 2026-11-08, pushed, CI green. No branch is open.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The shortened log address waits on the lab, and the visitor hash on the board. The
@@ -97,7 +97,8 @@ the browser check and the merge stay his.
   - Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set.
   - There's no nightly backup yet, only the deploy dumps on the mini's disk.
   - The public route for the four names is server guide 19, rebuilt for them on 2026-11-07 (server commit `724b177`;
-    DNS stays at Strato, a certificate per name). The board's `-7` export is in `config/`.
+    DNS stays at Strato, a certificate per name). The board's exports belong in `config/`: the repo root isn't
+    ignored, and they name lab addresses.
 - **The board test still stands:** work from the exports in `config/` + this repo, not the server repo or
   the homelab skill, until Lukas lifts it ([[jac-on-the-lab]]). Lab addresses stay out of tracked files,
   guides and handovers: the repo is public ([[public-repo]]).
