@@ -69,7 +69,7 @@ Then, every time:
 That's the web server, the worker and vite in one terminal; Ctrl-C stops all three. It starts Postgres
 and Valkey if they're down, creates the database, and catches up on whatever a pull changed: the lock,
 migrations, layouts. Open [jac.localhost:5173](http://jac.localhost:5173). Portfolios are at
-`portfolio.localhost:5173/<handle>/`; the landing is Django's, at `localhost:8000`. Signup codes are printed in the log.
+`portfolio.localhost:5173/<handle>/`, and `localhost:5173` is the landing, as the apex is live. Signup codes are printed in the log.
 For the admin, once: `cd backend && python manage.py createsuperuser`.
 
 Two things it leaves to you:
