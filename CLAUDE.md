@@ -40,7 +40,7 @@ Don't keep a deep file tree here: it drifts. Open the dir.
   line-format, never JSON ([[no-json-llm-io]]).
 - **queues:** `jac-ai`, `jac-cloud`, `jac-quick`, `jac-mail` ([[queue-lanes]]).
 - **python:** the pyenv virtualenv `jac`. The image, CI and the lock are 3.12.
-- **hosting:** self-hosted on the lab, nothing deployed. One image, generic `compose.yaml`; only
+- **hosting:** self-hosted on the lab, live on the mini since 2026-11-08. One image, generic `compose.yaml`; only
   `deploy/compose.lab.yaml` knows the lab. It must also run on a plain rented VPS ([[normal-infra-test]]).
 - **hosts:** four fixed names under `BASE_DOMAIN`, **no wildcard** (decided 2026-11-07):
   - the apex is Django's server-rendered landing (SEO), whose "Explore my work" goes to
@@ -71,34 +71,39 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Going live. There is one guide: `.claude/plans/to-do/01_[fullstack]-launch.md`, holding only what's left for
-Lukas, in the order of the work:**
-- step 1: his dev check of `main`, the new layout and the old browser checks: still open, and due before going live;
-- step 2: merging: done 2026-11-08, nothing waits on a branch;
-- step 3: setting up the mini: in progress (the database and its role exist, the `.env` is being filled);
-- step 4: the live checklist.
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in four guides in
+`.claude/plans/to-do/`. All of it is his, and none of it is urgent:
+- `01_[fullstack]-launch`: steps 1–3 and the board feedback. Step 1, the dev check, never ran. Step 3's Results are
+  partly blank;
+- `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` falls through to the SPA (200, HTML, no
+  `X-Release`). It's two nginx blocks, with the red test on disk, on the open branch of the same name;
+- `03_[fullstack]-live-checklist`: the 19 live checks and the watch list for the first live runs;
+- `04_[fullstack]-after-launch`: the backlog, in a recommended order. Each item gets an activation pass before Lukas
+  types it ([[backlog-guides-need-activation]]).
 
-It was rewritten for the four named hosts on 2026-11-07. The wildcard version and the earlier ones are in
-`.claude/plans/done/`. **Until launch the AI codes at his request ("we're at a volatile stage")**, on its own branches;
-the browser check and the merge stay his.
+The wildcard version of the launch guide and the earlier ones are in `.claude/plans/done/`. **The pre-launch mode
+("the AI codes at his request, we're at a volatile stage") ran until launch.** Default-strict (below) applies again
+until Lukas says otherwise.
 
-- **Branches:** `main` holds everything for launch: the Postgres move, prewarm, the race fix, the legal pages and what
-  they promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host
-  layout, `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with
-  SSL. All merged by Lukas by 2026-11-08, pushed, CI green. No branch is open.
+- **Branches:** `main`'s code is what's live: the Postgres move, prewarm, the race fix, the legal pages and what they
+  promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
+  `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with SSL. One
+  branch is open: `infra/health-every-host` (guide 02).
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
-  deleted-account record are built. The shortened log address waits on the lab, and the visitor hash on the board. The
-  DNS stays at Strato, so section 11 no longer names Cloudflare.
-- **Nothing is deployed, and merged isn't verified.** What needs a browser is guide step 1, and it belongs before going
-  live.
+  deleted-account record are built. The shortened log address and the stream log get checked live (guide 03,
+  check 16). The visitor hash waits on the board. The DNS stays at Strato, so section 11 no longer names Cloudflare.
+- **Live isn't verified yet:** Lukas has given it a first glance, but the checklist hasn't run. Guide 03 is the logged
+  run ([[implemented-is-not-verified]]).
 - **The lab:**
-  - labd, the tower's wake proxy, runs (server guide 18, tested 2026-11-06). jac needs only its `.env` values (step 3h).
-  - Prewarming is built and dormant until `HIRSCHAI_PREWARM_KEY` is set.
+  - labd, the tower's wake proxy, runs (server guide 18), and jac goes through it.
+  - Prewarming is built. It's live only if `HIRSCHAI_PREWARM_KEY` is in the mini's `.env` (guide 03, check 15).
   - There's no nightly backup yet, only the deploy dumps on the mini's disk.
-  - The public route for the four names is server guide 19, rebuilt for them on 2026-11-07 (server commit `724b177`;
-    DNS stays at Strato, a certificate per name). The board's exports belong in `config/`: the repo root isn't
-    ignored, and they name lab addresses.
+  - The public route for the four names is server guide 19 (DNS at Strato, a certificate per name). The deploy and
+    the board's down-check reach `/health/` over the default server (`jac-web:8000`), and guide 19's check targets
+    the apex.
+  - The board's exports belong in `config/` (latest: `-8`): the repo root isn't ignored, and they name lab addresses.
+  - A one-shot `ssh -t mini '…'` finds Docker, so guides can give mini commands as laptop one-liners.
 - **The board test still stands:** work from the exports in `config/` + this repo, not the server repo or
   the homelab skill, until Lukas lifts it ([[jac-on-the-lab]]). Lab addresses stay out of tracked files,
   guides and handovers: the repo is public ([[public-repo]]).
