@@ -449,6 +449,34 @@ class ProdBootTests(TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertEqual(r.stdout.strip(), "no-reply@example.com")
 
+    _MAIL_PROBE = (
+        "import lukehirsch.prod as p; p.load_local_env = lambda path: None; "
+        "import django; django.setup(); from django.conf import settings as s; "
+        "print(s.EMAIL_USE_SSL, s.EMAIL_USE_TLS, s.EMAIL_PORT)"
+    )
+
+    def _mail_env(self, **extra):
+        env = {k: v for k, v in _prod_env().items() if not k.startswith("EMAIL_")}
+        return {**env, **extra}
+
+    def test_mail_defaults_to_implicit_tls_on_465(self):
+        """Strato's SMTP, the way co2mmute already sends through it."""
+        r = _python("-c", self._MAIL_PROBE, env=self._mail_env())
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(r.stdout.strip(), "True False 465")
+
+    def test_one_switch_moves_mail_to_starttls_on_587(self):
+        r = _python("-c", self._MAIL_PROBE, env=self._mail_env(EMAIL_USE_SSL="0"))
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(r.stdout.strip(), "False True 587")
+
+    def test_ssl_and_starttls_together_refuse_to_boot(self):
+        """Django would only say so at the first mail, in the worker, with signups open."""
+        env = self._mail_env(EMAIL_USE_SSL="1", EMAIL_USE_TLS="1")
+        r = _python("-c", self._MAIL_PROBE, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("EMAIL_USE_SSL and EMAIL_USE_TLS", r.stderr)
+
     def test_the_hosts_follow_the_domain(self):
         """Four named hosts and no wildcard: the zone holds names jac doesn't serve, so neither
         ALLOWED_HOSTS, nor the trusted origins, nor HSTS speaks for every subdomain."""
