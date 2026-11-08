@@ -10,6 +10,7 @@ from pathlib import Path
 
 import dj_database_url
 from celery.schedules import crontab
+from django.core.exceptions import ImproperlyConfigured
 
 from lukehirsch.prod import (
     DEV_DATABASE_URL,
@@ -511,10 +512,15 @@ EMAIL_BACKEND = (
 )
 QUEUED_EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.strato.de")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+# Strato wants implicit TLS on 465. EMAIL_USE_SSL=0 switches to STARTTLS, and the port to 587.
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", True)
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", not EMAIL_USE_SSL)
+EMAIL_PORT = env_int("EMAIL_PORT", 465 if EMAIL_USE_SSL else 587)
+if EMAIL_USE_SSL and EMAIL_USE_TLS:
+    # Django only refuses the pair when the first mail goes out, in the worker.
+    raise ImproperlyConfigured("EMAIL_USE_SSL and EMAIL_USE_TLS are both on: set one of them.")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 # Django's default is none: one hung connection would hold worker-mail's single slot.
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", f"no-reply@{BASE_DOMAIN}")
