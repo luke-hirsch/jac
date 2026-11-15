@@ -723,6 +723,20 @@ def _example_entries():
     return entries
 
 
+def _server_blocks(template):
+    """{server_name: body} of each `server { … }` in the nginx template, found by brace count."""
+    blocks = {}
+    for m in re.finditer(r"^\s*server\s*\{", template, re.MULTILINE):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(template[i], 0)
+            i += 1
+        body = template[m.end() : i - 1]
+        name = re.search(r"^\s*server_name\s+([^;]+);", body, re.MULTILINE).group(1)
+        blocks[name] = body
+    return blocks
+
+
 class DeployFilesTests(SimpleTestCase):
     """Repo facts a deploy depends on and no running test would notice."""
 
@@ -736,6 +750,23 @@ class DeployFilesTests(SimpleTestCase):
         dockerfile = (REPO_ROOT / "Dockerfile").read_text()
         built = re.search(r"^COPY --from=spa /spa/dist \./(\S+)$", dockerfile, re.MULTILINE)
         self.assertEqual(roots, {f"/app/{built.group(1)}"})
+
+    def test_every_named_host_asks_django_for_health(self):
+        """jac. and portfolio. had no /health/, so the SPA's try_files answered it: 200 text/html,
+        no X-Release, green with Django down (server guide 19, 2026-11-08). Without proxy_params,
+        Django sees Host `app` and answers 400."""
+        template = (REPO_ROOT / "deploy" / "image" / "nginx.conf.template").read_text()
+        named = {n: body for n, body in _server_blocks(template).items() if n != "_"}
+        self.assertEqual(len(named), 3, "found the wrong server blocks: fix the test")
+        for name, body in named.items():
+            with self.subTest(server_name=name):
+                health = re.search(r"location = /health/ \{([^}]*)\}", body)
+                self.assertIsNotNone(health, "/health/ falls through to the SPA's index.html")
+                self.assertIn("proxy_pass http://app;", health.group(1))
+                self.assertIn("include /app/proxy_params;", health.group(1))
+                self.assertNotRegex(
+                    body, r"location[^{]*/health/queues", "the queue report is the lab network's"
+                )
 
     def test_a_checkout_merges_no_compose_override_on_its_own(self):
         """Compose picks up compose.override.yaml by name. The laptop's (DEBUG on, a laptop's

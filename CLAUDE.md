@@ -71,17 +71,17 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in four guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in three guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
-- `01_[fullstack]-launch`: steps 1–3 and the board feedback. Step 1, the dev check, never ran. Step 3's Results are
-  partly blank;
 - `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` falls through to the SPA (200, HTML, no
   `X-Release`). It's two nginx blocks, with the red test on disk, on the open branch of the same name;
-- `03_[fullstack]-live-checklist`: the 19 live checks and the watch list for the first live runs;
-- `04_[fullstack]-after-launch`: the backlog, in a recommended order. Each item gets an activation pass before Lukas
-  types it ([[backlog-guides-need-activation]]).
+- `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones folded in, the rollback drill rides
+  on guide 02's deploy) and the watch list;
+- `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
+  gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]).
 
-The wildcard version of the launch guide and the earlier ones are in `.claude/plans/done/`. **The pre-launch mode
+The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
+up), next to the wildcard version and the earlier ones. **The pre-launch mode
 ("the AI codes at his request, we're at a volatile stage") ran until launch.** Default-strict (below) applies again
 until Lukas says otherwise.
 
@@ -91,17 +91,20 @@ until Lukas says otherwise.
   branch is open: `infra/health-every-host` (guide 02).
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
-  deleted-account record are built. The shortened log address and the stream log get checked live (guide 03,
-  check 16). The visitor hash waits on the board. The DNS stays at Strato, so section 11 no longer names Cloudflare.
+  deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
+  (2026-11-14); what the VPS's own logs keep is still open (guide 04). The visitor hash waits on the board. The DNS stays at Strato, so section 11 no longer names Cloudflare.
 - **Live isn't verified yet:** Lukas has given it a first glance, but the checklist hasn't run. Guide 03 is the logged
   run ([[implemented-is-not-verified]]).
 - **The lab:**
   - labd, the tower's wake proxy, runs (server guide 18), and jac goes through it.
   - Prewarming is built. It's live only if `HIRSCHAI_PREWARM_KEY` is in the mini's `.env` (guide 03, check 15).
-  - There's no nightly backup yet, only the deploy dumps on the mini's disk.
-  - The public route for the four names is server guide 19 (DNS at Strato, a certificate per name). The deploy and
-    the board's down-check reach `/health/` over the default server (`jac-web:8000`), and guide 19's check targets
-    the apex.
+  - There's no nightly backup yet, only the deploy dumps on the mini's disk. Planned: server guide 20, 90 days.
+  - The public route for the four names (server guide 19: DNS at Strato, a certificate per name) is closed, green on
+    the real machines since 2026-11-14. The deploy and the board's down-check reach `/health/` over the default
+    server (`jac-web:8000`). **lab-watch** on the VPS (server guide 22) asks the apex's `/health/` every minute and
+    pages Lukas after 3 minutes without 200 + `X-Release`, so neither may move.
+  - The mini restarts itself for macOS updates, and jac comes back only after a login as mini (`stacks-up` honours the
+    override since 2026-11-14).
   - The board's exports belong in `config/` (latest: `-8`): the repo root isn't ignored, and they name lab addresses.
   - A one-shot `ssh -t mini '…'` finds Docker, so guides can give mini commands as laptop one-liners.
 - **The board test still stands:** work from the exports in `config/` + this repo, not the server repo or

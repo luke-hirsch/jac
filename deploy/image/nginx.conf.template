@@ -109,6 +109,11 @@ http {
         server_name jac.@BASE_DOMAIN@;
         root /app/webroot;
 
+        location = /health/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
+
         location /api/ {
             proxy_pass http://app;
             include /app/proxy_params;
@@ -164,6 +169,11 @@ http {
         server_name portfolio.@BASE_DOMAIN@;
         root /app/webroot;
         add_header X-Robots-Tag "noindex" always;
+
+        location = /health/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+        }
 
         # Same-origin API: the handle travels in the path (/api/spa/public/<handle>/…).
         location /api/ {
