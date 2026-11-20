@@ -1,15 +1,35 @@
+import logging
+
 from django.utils import timezone
 from rest_framework import serializers
 
+from llm_connector.catalog import refresh_models
 from llm_connector.conf import HIRSCHAI_PROVIDER
 from llm_connector.jobs import jobs_ahead
 from llm_connector.models import AiJob, LLMConfig, LLMRequestLog, Provider
 
+logger = logging.getLogger(__name__)
+
+
+def _list_models_for_new_key(row) -> None:
+    """A new key's model list right away, so the generate panel can offer its models. The key
+    is saved either way: a provider that doesn't answer leaves the list empty, and Check on the
+    account page fills it later."""
+    if not row.usable:
+        return
+    try:
+        refresh_models(row)
+    except Exception as exc:  # noqa: BLE001 — never blocks saving the key
+        logger.warning(
+            "listing the models of %s key %s failed: %s", row.provider, row.pk, exc
+        )
+
 
 class LLMConfigSerializer(serializers.ModelSerializer):
     """One credential per commercial provider. `api_key` is write-only; omitting it
-    on PATCH keeps the stored key. The tower is not configurable here — it is the
-    operator's system row."""
+    on PATCH keeps the stored key. Saving a key lists its models (`model_count`,
+    `models_checked_at`); the list itself reaches the SPA through the executors endpoint.
+    The tower is not configurable here — it is the operator's system row."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     api_key = serializers.CharField(
@@ -20,6 +40,7 @@ class LLMConfigSerializer(serializers.ModelSerializer):
     )
     has_api_key = serializers.BooleanField(read_only=True)
     transfer_consent = serializers.BooleanField(write_only=True, required=False)
+    model_count = serializers.SerializerMethodField()
 
     class Meta:
         model = LLMConfig
@@ -32,6 +53,8 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             "has_api_key",
             "transfer_consent",
             "transfer_consent_at",
+            "model_count",
+            "models_checked_at",
             "created_at",
             "updated_at",
         )
@@ -39,6 +62,7 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             "id",
             "has_api_key",
             "transfer_consent_at",
+            "models_checked_at",
             "created_at",
             "updated_at",
         )
@@ -68,6 +92,9 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def get_model_count(self, obj) -> int:
+        return len(obj.models or [])
+
     def create(self, validated_data):
         api_key = validated_data.pop("api_key", "")
         consent = validated_data.pop("transfer_consent", False)
@@ -77,6 +104,8 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         if consent:
             instance.transfer_consent_at = timezone.now()
         instance.save()
+        if api_key:
+            _list_models_for_new_key(instance)
         return instance
 
     def update(self, instance, validated_data):
@@ -86,9 +115,13 @@ class LLMConfigSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         if api_key:
             instance.api_key = api_key
+            # The list belonged to the old key: another account may reach other models.
+            instance.models, instance.models_checked_at = [], None
         if consent and not instance.transfer_consent_at:
             instance.transfer_consent_at = timezone.now()
         instance.save()
+        if api_key:
+            _list_models_for_new_key(instance)
 
         return instance
 

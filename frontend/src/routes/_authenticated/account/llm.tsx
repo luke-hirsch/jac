@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/api";
 import {
   checkResultLabel,
   configPayload,
+  modelListLabel,
   useCheckConfig,
   useCreateConfig,
   useDeleteConfig,
@@ -68,7 +69,8 @@ function LLMConfigPage() {
           A generation runs on exactly one executor. HirschAI is built in and
           free; add a commercial key below to unlock high mode and the
           researched personal paragraph. Keys are write-only — stored encrypted,
-          never shown again.
+          never shown again. Saving a key asks the provider which models it
+          reaches; those are the ones the generate panel offers.
         </p>
       </div>
 
@@ -313,6 +315,13 @@ function ProviderCard({
               </span>
             )}
           </div>
+        )}
+
+        {config?.has_api_key && (
+          <p className="text-xs text-muted-foreground">
+            {modelListLabel(config)} Check refreshes the list, then sends a test
+            message.
+          </p>
         )}
       </CardContent>
     </Card>

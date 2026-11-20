@@ -11,9 +11,9 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from llm_connector.catalog import CATALOG, knobs_for, models_for
+from llm_connector.catalog import COMMERCIAL_PROVIDERS, picker_models, refresh_models
 from llm_connector.client import LLMClient
-from llm_connector.conf import HIRSCHAI_PROVIDER, default_executor
+from llm_connector.conf import HIRSCHAI_PROVIDER, ExecutorError, default_executor
 from llm_connector.models import AiJob, LLMConfig, LLMRequestLog, Provider
 from llm_connector.probe import hirschai_state
 from llm_connector.serializers import (
@@ -35,20 +35,28 @@ class LLMConfigViewSet(viewsets.ModelViewSet):
     @extend_schema(
         request=None,
         responses=OpenApiResponse(
-            description="{ok: true, latency_ms} or {ok: false, error}"
+            description="{ok: true, latency_ms, models} or {ok: false, error, models}: "
+            "`models` is how many models the key reaches as stored after the check"
         ),
     )
     @action(detail=True, methods=["post"])
     def check(self, request, pk=None):
+        """Refresh the key's model list from the provider, then a pong on the default pick. A
+        listing that fails keeps the last list."""
         config = self.get_object()
         try:
+            refresh_models(config)
             client = LLMClient(config.provider, user=request.user)
             start = time.monotonic()
             client.complete("Respond with exactly one word: pong")
             latency_ms = int((time.monotonic() - start) * 1000)
-            return Response({"ok": True, "latency_ms": latency_ms})
+            return Response(
+                {"ok": True, "latency_ms": latency_ms, "models": len(config.models)}
+            )
         except Exception as exc:  # noqa: BLE001 — any failure is the check's finding
-            return Response({"ok": False, "error": str(exc)})
+            return Response(
+                {"ok": False, "error": str(exc), "models": len(config.models)}
+            )
 
 
 class LLMRequestLogViewSet(viewsets.ReadOnlyModelViewSet):
@@ -80,15 +88,22 @@ class PrewarmView(APIView):
 
     @extend_schema(request=None, responses={204: None})
     def post(self, request):
-        if default_executor(request.user).is_hirschai:
+        try:
+            on_hirschai = default_executor(request.user).is_hirschai
+        except ExecutorError:
+            # A default key without a model list: still not the tower.
+            on_hirschai = False
+        if on_hirschai:
             request_prewarm()
         return Response(status=204)
 
 
 class ExecutorListView(APIView):
     """Everything the generate panel needs in ONE request: HirschAI (`reachable` is what
-    the last real call found out, never a probe: this runs on page loads) + every catalog
-    provider (configured?, default?, models).
+    the last real call found out, never a probe: this runs on page loads) + every commercial
+    provider (configured?, default?, models with their knobs). The model lists are what the
+    last key save or Check stored on the user's row: polled every 30 s, this never asks a
+    provider.
     `modes` are jac vocabulary served as opaque labels — deliberate denormalisation
     so the SPA needs no second endpoint; `high` is commercial-only by design."""
 
@@ -108,22 +123,21 @@ class ExecutorListView(APIView):
                 "default": not commercial_default,
                 "models": [],
                 "modes": ["standard"],
-                "knobs": {},
             }
         ]
-        for provider in CATALOG:
+        for provider in COMMERCIAL_PROVIDERS:
             row = own.get(provider)
+            usable = bool(row and row.usable)
             rows.append(
                 {
                     "provider": provider,
                     "label": Provider(provider).label,
                     "self_hosted": False,
-                    "configured": bool(row and row.usable),
+                    "configured": usable,
                     "reachable": None,
-                    "default": bool(row and row.default and row.usable),
-                    "models": models_for(provider),
+                    "default": bool(usable and row.default),
+                    "models": picker_models(provider, row.models) if usable else [],
                     "modes": ["standard", "high"],
-                    "knobs": knobs_for(provider),
                 }
             )
         return Response(rows)

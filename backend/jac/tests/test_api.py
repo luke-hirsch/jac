@@ -51,6 +51,7 @@ from llm_connector.catalog import default_model
 from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
+from llm_connector.tests._helpers import ANTHROPIC_MODELS
 
 from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
 
@@ -100,8 +101,8 @@ class GenerationRunCreateTests(APITestCase):
             response = self.client.post(RUNS_URL, payload, format="json")
         return response, task
 
-    def _anthropic_row(self, *, consent=True):
-        row = LLMConfig(user=self.user, provider="anthropic")
+    def _anthropic_row(self, *, consent=True, models=ANTHROPIC_MODELS):
+        row = LLMConfig(user=self.user, provider="anthropic", models=models)
         row.api_key = "sk-a"
         if consent:
             row.transfer_consent_at = timezone.now()
@@ -149,17 +150,26 @@ class GenerationRunCreateTests(APITestCase):
         task.apply_async.assert_not_called()
         self.assertFalse(GenerationRun.objects.exists())
 
-    def test_commercial_run_gets_the_catalog_default_model(self):
+    def test_commercial_run_gets_the_keys_default_model(self):
         self._anthropic_row()
         response, _ = self._post(provider="anthropic", mode="high")
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["mode"], Mode.high)
-        self.assertEqual(response.data["model"], default_model("anthropic"))
+        self.assertEqual(
+            response.data["model"], default_model("anthropic", ANTHROPIC_MODELS)
+        )
 
     def test_unknown_model_is_rejected(self):
         self._anthropic_row()
         response, _ = self._post(provider="anthropic", model="gpt-4o")
         self.assertEqual(response.status_code, 400)
+
+    def test_a_key_without_a_model_list_is_a_400_that_names_the_fix(self):
+        self._anthropic_row(models=[])
+        response, task = self._post(provider="anthropic")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("press Check", str(response.data["provider"]))
+        task.apply_async.assert_not_called()
 
     def test_blank_provider_resolves_the_default_executor(self):
         response, _ = self._post()
@@ -358,7 +368,7 @@ class ApplicationBatchTests(APITestCase):
         self.assertTrue(all(run.task_id == "task-123" for run in runs))
 
     def test_it_uses_the_named_executor_and_its_lane(self):
-        row = LLMConfig(user=self.user, provider="anthropic")
+        row = LLMConfig(user=self.user, provider="anthropic", models=ANTHROPIC_MODELS)
         row.api_key = "sk-a"
         row.transfer_consent_at = timezone.now()
         row.save()
@@ -728,6 +738,27 @@ class ApplicationAutoRunTests(APITestCase):
         self.assertEqual(run.task_id, "task-123")
         task.apply_async.assert_called_once()
 
+    def test_a_default_key_without_a_model_list_fails_the_run_with_the_fix(self):
+        """Never a silent switch to HirschAI: the run is there, failed, and says what to do.
+        It never reached the queue, so it costs no budget."""
+        row = LLMConfig(user=self.user, provider="anthropic", default=True)
+        row.api_key = "sk-a"
+        row.transfer_consent_at = timezone.now()
+        row.save()
+        left = generation_budget_left(self.user)
+        with patch("jac.views.generate_run") as task:
+            r = self.client.post(
+                APPS_URL, {"posting_text": "We need a Python engineer."},
+                format="json",
+            )
+        self.assertEqual(r.status_code, 201, r.data)
+        run = GenerationRun.objects.get(job_application_id=r.data["id"])
+        self.assertEqual(run.status, GenerationRun.Status.failed)
+        self.assertEqual(run.provider, "anthropic")
+        self.assertIn("press Check", run.error)
+        task.apply_async.assert_not_called()
+        self.assertEqual(generation_budget_left(self.user), left)
+
     def test_create_queues_a_hirschai_run_without_asking_the_model_server(self):
         """A model server that is asleep is normal, so a new application always gets its run:
         it waits in line and says so. The old gate silently dropped it."""
@@ -971,10 +1002,8 @@ class PinnedEntriesApiTests(APITestCase):
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class GenerationRunParamsTests(APITestCase):
-    """[fullstack]-model-knobs: per-run effort/temperature (`params`), validated
-    against the catalog knob spec; HirschAI has no knobs. At unskip time also add
-    "params" to the exact-shape set in
-    GenerationRunReadTests.test_detail_shape_names_the_executor."""
+    """[fullstack]-model-knobs: per-run effort (`params`), validated against the run's
+    model's knob spec in the key's stored list; HirschAI has no knobs."""
 
     @classmethod
     def setUpTestData(cls):
@@ -983,7 +1012,7 @@ class GenerationRunParamsTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.user)
-        row = LLMConfig(user=self.user, provider="anthropic")
+        row = LLMConfig(user=self.user, provider="anthropic", models=ANTHROPIC_MODELS)
         row.api_key = "sk-a"
         row.transfer_consent_at = timezone.now()
         row.save()
@@ -1001,12 +1030,9 @@ class GenerationRunParamsTests(APITestCase):
         run = GenerationRun.objects.get(pk=r.data["id"])
         self.assertEqual(run.params, {"effort": "high"})
 
-    def test_temperature_alone_is_valid(self):
+    def test_temperature_is_no_knob_anymore(self):
+        # A 400 on every current Claude model: offered by none, refused here.
         r = self._post(provider="anthropic", params={"temperature": 0.3})
-        self.assertEqual(r.status_code, 201, r.data)
-
-    def test_out_of_range_temperature_is_rejected(self):
-        r = self._post(provider="anthropic", params={"temperature": 9})
         self.assertEqual(r.status_code, 400)
         self.assertIn("params", r.data)
 
@@ -1014,12 +1040,16 @@ class GenerationRunParamsTests(APITestCase):
         r = self._post(provider="anthropic", params={"top_k": 5})
         self.assertEqual(r.status_code, 400)
 
-    def test_effort_and_temperature_cannot_combine(self):
-        # The exclusion is spec data (catalog KNOBS), enforced here once.
-        r = self._post(
-            provider="anthropic", params={"effort": "high", "temperature": 0.3}
-        )
+    def test_the_levels_are_the_picked_models_own(self):
+        haiku = "claude-haiku-4-5-20251001"  # a token budget: low/medium/high only
+        r = self._post(provider="anthropic", model=haiku, params={"effort": "max"})
         self.assertEqual(r.status_code, 400)
+        r = self._post(provider="anthropic", model=haiku, params={"effort": "high"})
+        self.assertEqual(r.status_code, 201, r.data)
+        r = self._post(
+            provider="anthropic", model="claude-opus-4-8", params={"effort": "max"}
+        )
+        self.assertEqual(r.status_code, 201, r.data)
 
     def test_knobs_on_hirschai_are_rejected(self):
         r = self._post(provider="ollama", params={"effort": "high"})

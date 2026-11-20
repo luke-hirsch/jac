@@ -5,6 +5,7 @@ registers the in-memory ``fake`` / ``fakesearch`` providers used across the
 connector (and jac pipeline) tests.
 """
 
+import copy
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -63,6 +64,10 @@ class FakeAdapter(LLMAdapter):
         self.embed_calls.append(list(inputs))
         return [[1.0, 0.0, 0.0] for _ in inputs]
 
+    def list_models(self) -> list[dict]:
+        """The key "reaches" its row's own model, so Check on a fake row lists one."""
+        return [{"id": self.config.get("model", "fake-1"), "label": "Fake", "knobs": {}}]
+
 
 class SearchyFakeAdapter(FakeAdapter):
     """Fake with provider-native web search — stands in for anthropic/openai in
@@ -95,10 +100,36 @@ TEST_HIRSCHAI = {
 }
 
 
+# An Anthropic key's stored model list, as `AnthropicAdapter.list_models` writes it: newest
+# first, so the default pick (the newest Sonnet) is NOT the first entry. Haiku 4.5 thinks on a
+# token budget; the other two take adaptive thinking with effort.
+ANTHROPIC_MODELS = [
+    {
+        "id": "claude-opus-4-8",
+        "label": "Claude Opus 4.8",
+        "knobs": {"effort": {"choices": ["low", "medium", "high", "xhigh", "max"]}},
+        "thinking": "adaptive",
+    },
+    {
+        "id": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "knobs": {"effort": {"choices": ["low", "medium", "high", "xhigh", "max"]}},
+        "thinking": "adaptive",
+    },
+    {
+        "id": "claude-haiku-4-5-20251001",
+        "label": "Claude Haiku 4.5",
+        "knobs": {"effort": {"choices": ["low", "medium", "high"]}},
+        "thinking": "budget",
+    },
+]
+
+
 def keyed_row(user, provider="anthropic", *, api_key="sk-a", default=False,
-              consent=True):
+              consent=True, models=None):
     """A user's commercial row with a key, stamped with the transfer consent the API asks for
-    before it saves one. `consent=False` is the row the admin or an older schema leaves behind."""
+    before it saves one. `consent=False` is the row the admin or an older schema leaves behind.
+    `models` is the key's stored list; without one the key has none yet, and nothing runs on it."""
     from django.utils import timezone
 
     from llm_connector.models import LLMConfig
@@ -108,6 +139,9 @@ def keyed_row(user, provider="anthropic", *, api_key="sk-a", default=False,
         row.api_key = api_key
     if consent:
         row.transfer_consent_at = timezone.now()
+    if models is not None:
+        row.models = copy.deepcopy(models)
+        row.models_checked_at = timezone.now()
     row.save()
     return row
 
@@ -116,9 +150,9 @@ def fake_row(user, provider="fake", *, model="fake-1", default=False,
              api_key="sk-test", consent=True, **extra):
     """An LLMConfig row whose executor resolves to the in-memory FakeAdapter.
 
-    The new LLMConfig stores no model field — per-run models come from the
-    catalog — so fake rows carry theirs in `extra`, exactly like the HirschAI
-    row does. Extra kwargs must be JSON-serialisable (exception objects for the
+    LLMConfig stores no model field — a run picks from the key's stored model list,
+    and only commercial providers have one — so fake rows carry theirs in `extra`,
+    exactly like the HirschAI row does. Extra kwargs must be JSON-serialisable (exception objects for the
     retry tests go through test_client's `client_for` instead). Stamped with the
     transfer consent unless `consent=False`: without it nothing runs on the key.
     """

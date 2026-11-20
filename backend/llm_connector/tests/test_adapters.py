@@ -1,4 +1,5 @@
-"""Provider adapters — Ollama behaviour + web-search capability (base flag, Anthropic, OpenAI)."""
+"""Provider adapters — Ollama behaviour, web-search capability (base flag, Anthropic, OpenAI),
+the live model lists and how each model's knobs reach the wire."""
 
 import io
 import json
@@ -363,6 +364,22 @@ class CommercialAvailabilityTests(TestCase):
         with self.assertRaises(LLMTransportError):
             adapter.web_search(self.MESSAGES)
 
+    def test_listing_models(self):
+        for adapter, sdk in ((self._anthropic(), anthropic), (self._openai(), openai)):
+            with self.subTest(sdk.__name__):
+                adapter._client.models.list.side_effect = sdk.APIConnectionError(
+                    request=self.REQUEST
+                )
+                with self.assertRaises(LLMTransportError):
+                    adapter.list_models()
+
+    def test_max_retries_reaches_the_sdk(self):
+        # A listing on a request thread gets one try (catalog.refresh_models).
+        for cls in (AnthropicAdapter, OpenAIAdapter):
+            with self.subTest(cls.__name__):
+                adapter = cls({"api_key": "test", "timeout": 10, "max_retries": 0})
+                self.assertEqual(adapter._client.max_retries, 0)
+
     def test_a_refusal_stays_its_own_error(self):
         adapter = self._anthropic()
         adapter._client.messages.create.side_effect = self._refused(anthropic)
@@ -387,9 +404,14 @@ class CommercialAvailabilityTests(TestCase):
 
 
 class AdapterKnobMappingTests(TestCase):
-    """Generic per-run knobs ({effort, temperature}) → provider-native kwargs via
-    `map_params`. Base = {} so a provider without knobs (ollama — whose payload
-    builder forwards EVERY kwarg onto the wire) can never leak them."""
+    """Generic per-run knobs ({effort}) → provider-native kwargs via `map_params`. Base = {}
+    so a provider without knobs (ollama — whose payload builder forwards EVERY kwarg onto
+    the wire) can never leak them. Anthropic maps by the model's stored thinking mode."""
+
+    def _anthropic(self, thinking, **cfg):
+        return AnthropicAdapter(
+            {"api_key": "test", "model": "m", "max_tokens": 4096, "thinking": thinking, **cfg}
+        )
 
     def test_base_adapter_ignores_params(self):
         class Dummy(LLMAdapter):
@@ -407,24 +429,58 @@ class AdapterKnobMappingTests(TestCase):
         adapter = OllamaAdapter({"url": "http://localhost:11434", "model": "m"})
         self.assertEqual(adapter.map_params({"effort": "high"}), {})
 
-    def test_anthropic_effort_becomes_a_thinking_block_below_max_tokens(self):
-        adapter = AnthropicAdapter(
-            {"api_key": "test", "model": "claude-sonnet-5", "max_tokens": 4096}
-        )
-        out = adapter.map_params({"effort": "high"})
-        self.assertEqual(out["thinking"]["type"], "enabled")
-        self.assertLess(out["thinking"]["budget_tokens"], out["max_tokens"])
+    def test_adaptive_effort_sends_adaptive_thinking_and_output_config(self):
+        """The live bug: Opus 4.8 answered budget_tokens with a 400. Effort goes inside
+        output_config, and thinking is asked for, since Opus 4.7/4.8 don't think unasked."""
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            with self.subTest(effort):
+                out = self._anthropic("adaptive").map_params({"effort": effort})
+                self.assertEqual(out["thinking"], {"type": "adaptive"})
+                self.assertEqual(out["output_config"], {"effort": effort})
+                self.assertNotIn("effort", out)  # never top level
+                self.assertGreater(out["max_tokens"], 4096)
 
-    def test_anthropic_temperature_alone_passes_through(self):
-        adapter = AnthropicAdapter({"api_key": "test", "model": "claude-sonnet-5"})
-        self.assertEqual(adapter.map_params({"temperature": 0.3}), {"temperature": 0.3})
+    def test_budget_effort_keeps_budget_tokens_below_max_tokens(self):
+        # Haiku 4.5: thinking "enabled" only, on a budget the API wants >= 1024 and < max_tokens.
+        for effort in ("low", "medium", "high"):
+            with self.subTest(effort):
+                out = self._anthropic("budget").map_params({"effort": effort})
+                self.assertEqual(out["thinking"]["type"], "enabled")
+                self.assertGreaterEqual(out["thinking"]["budget_tokens"], 1024)
+                self.assertLess(out["thinking"]["budget_tokens"], out["max_tokens"])
+                self.assertNotIn("output_config", out)
+
+    def test_no_effort_sends_neither(self):
+        # Today's plain call, which works on every model.
+        self.assertEqual(self._anthropic("adaptive").map_params({}), {})
+        self.assertEqual(self._anthropic("budget").map_params({"effort": ""}), {})
+
+    def test_a_model_without_thinking_drops_effort(self):
+        self.assertEqual(self._anthropic(None).map_params({"effort": "high"}), {})
+
+    def test_temperature_never_reaches_the_wire(self):
+        # A 400 on every current model, and on all of them from API version 2026-10-21.
+        for thinking in ("adaptive", "budget", None):
+            with self.subTest(thinking):
+                out = self._anthropic(thinking).map_params({"temperature": 0.3})
+                self.assertNotIn("temperature", out)
+
+    def test_max_tokens_stays_under_the_sdks_non_streaming_estimate(self):
+        """The SDK refuses a call without streaming whose max_tokens it expects to take over
+        ten minutes (3600 s per 128k tokens)."""
+        for thinking, efforts in (
+            ("adaptive", ("low", "medium", "high", "xhigh", "max")),
+            ("budget", ("low", "medium", "high")),
+        ):
+            for effort in efforts:
+                with self.subTest(thinking=thinking, effort=effort):
+                    out = self._anthropic(thinking).map_params({"effort": effort})
+                    self.assertLessEqual(out["max_tokens"] * 3600 / 128_000, 600)
 
     def test_anthropic_mapped_kwargs_override_instead_of_colliding(self):
         # complete() must build params then update(kwargs) — dict(..., **kwargs)
         # raises a duplicate-keyword TypeError on max_tokens.
-        adapter = AnthropicAdapter(
-            {"api_key": "test", "model": "claude-sonnet-5", "max_tokens": 4096}
-        )
+        adapter = self._anthropic("adaptive")
         adapter._client = MagicMock()
         adapter._client.messages.create.return_value = _Block(
             content=[_Block(type="text", text="ok")]
@@ -433,8 +489,10 @@ class AdapterKnobMappingTests(TestCase):
             [{"role": "user", "content": "hi"}], **adapter.map_params({"effort": "low"})
         )
         kwargs = adapter._client.messages.create.call_args.kwargs
-        self.assertIn("thinking", kwargs)
+        self.assertEqual(kwargs["thinking"], {"type": "adaptive"})
+        self.assertEqual(kwargs["output_config"], {"effort": "low"})
         self.assertGreater(kwargs["max_tokens"], 4096)
+        self.assertNotIn("temperature", kwargs)
 
     def test_openai_assumes_reasoning_semantics(self):
         # The catalog is reasoning-only (gpt-5.6-*), so the adapter deletes the old
@@ -454,10 +512,201 @@ class AdapterKnobMappingTests(TestCase):
         )
 
     def test_openai_ignores_temperature(self):
-        # OpenAI is reasoning-only: temperature is not a knob, so even if one slipped
-        # past validation it never reaches the wire (map_params drops it).
+        # Temperature is not a knob, so even if one slipped past validation it never
+        # reaches the wire (map_params drops it).
         adapter = OpenAIAdapter({"api_key": "test", "model": "gpt-5.6-terra"})
         self.assertEqual(adapter.map_params({"temperature": 0.7}), {})
+
+
+class AdapterModelRequiredTests(TestCase):
+    """No fallback model id in code: a call without one is a config error, and nothing
+    reaches the provider. Listing models needs no model."""
+
+    MESSAGES = [{"role": "user", "content": "hi"}]
+
+    def test_a_call_without_a_model_is_a_config_error(self):
+        for cls, create in (
+            (AnthropicAdapter, "messages.create"),
+            (OpenAIAdapter, "chat.completions.create"),
+        ):
+            with self.subTest(cls.__name__):
+                adapter = cls({"api_key": "test"})
+                adapter._client = MagicMock()
+                with self.assertRaises(ImproperlyConfigured):
+                    adapter.complete(self.MESSAGES)
+                with self.assertRaises(ImproperlyConfigured):
+                    list(adapter.stream(self.MESSAGES))
+                with self.assertRaises(ImproperlyConfigured):
+                    adapter.web_search(self.MESSAGES)
+                target = adapter._client
+                for part in create.split("."):
+                    target = getattr(target, part)
+                target.assert_not_called()
+
+
+def _model_info(model_id, capabilities, **over):
+    """An Anthropic ModelInfo the way the SDK builds one from a response (typed, lenient)."""
+    return anthropic.types.ModelInfo.construct(
+        id=model_id,
+        type="model",
+        display_name=over.pop("display_name", model_id.upper()),
+        created_at="2026-01-01T00:00:00Z",
+        capabilities=capabilities,
+        **over,
+    )
+
+
+def _caps(*, adaptive, enabled, effort=()):
+    levels = {lvl: {"supported": lvl in effort} for lvl in ("low", "medium", "high", "max")}
+    if "xhigh" in effort:
+        levels["xhigh"] = {"supported": True}
+    return {
+        "effort": {"supported": bool(effort), **levels},
+        "thinking": {
+            "supported": adaptive or enabled,
+            "types": {"adaptive": {"supported": adaptive}, "enabled": {"supported": enabled}},
+        },
+    }
+
+
+class AnthropicListModelsTests(TestCase):
+    """The key's live model list, with each model's knobs from the Models API's capability
+    data: adaptive thinking + the effort levels it reports, else the old token budget."""
+
+    ALL = ("low", "medium", "high", "xhigh", "max")
+
+    def _rows(self, *infos):
+        adapter = AnthropicAdapter({"api_key": "test"})  # no model: listing needs none
+        adapter._client = MagicMock()
+        adapter._client.models.list.return_value = iter(infos)
+        return adapter.list_models(), adapter
+
+    def test_an_adaptive_model_offers_the_levels_it_reports(self):
+        rows, _ = self._rows(
+            _model_info(
+                "claude-opus-4-8",
+                _caps(adaptive=True, enabled=False, effort=self.ALL),
+                display_name="Claude Opus 4.8",
+            )
+        )
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "id": "claude-opus-4-8",
+                    "label": "Claude Opus 4.8",
+                    "knobs": {"effort": {"choices": list(self.ALL)}},
+                    "thinking": "adaptive",
+                }
+            ],
+        )
+
+    def test_a_level_the_model_leaves_out_is_not_offered(self):
+        # Sonnet 4.6 has no xhigh: the SDK leaves that field None.
+        rows, _ = self._rows(
+            _model_info(
+                "claude-sonnet-4-6",
+                _caps(adaptive=True, enabled=True, effort=("low", "medium", "high", "max")),
+            )
+        )
+        self.assertEqual(rows[0]["thinking"], "adaptive")
+        self.assertEqual(
+            rows[0]["knobs"]["effort"]["choices"], ["low", "medium", "high", "max"]
+        )
+
+    def test_a_budget_model_gets_the_three_budgets(self):
+        # Haiku 4.5: thinking "enabled" only, no effort support.
+        rows, _ = self._rows(
+            _model_info("claude-haiku-4-5-20251001", _caps(adaptive=False, enabled=True))
+        )
+        self.assertEqual(rows[0]["thinking"], "budget")
+        self.assertEqual(rows[0]["knobs"], {"effort": {"choices": ["low", "medium", "high"]}})
+
+    def test_no_capability_data_means_no_knobs(self):
+        rows, _ = self._rows(
+            _model_info("claude-old", None),
+            _model_info("claude-plain", _caps(adaptive=False, enabled=False)),
+        )
+        for row in rows:
+            with self.subTest(row["id"]):
+                self.assertEqual(row["knobs"], {})
+                self.assertIsNone(row["thinking"])
+
+    def test_a_shape_the_sdk_could_not_type_still_reads(self):
+        info = _model_info("claude-x", None)
+        info.capabilities = _caps(adaptive=True, enabled=False, effort=("low", "high"))
+        rows, _ = self._rows(info)
+        self.assertEqual(rows[0]["knobs"], {"effort": {"choices": ["low", "high"]}})
+
+    def test_keeps_the_providers_order_and_pages_through(self):
+        rows, adapter = self._rows(
+            _model_info("claude-new", None), _model_info("claude-old", None)
+        )
+        self.assertEqual([r["id"] for r in rows], ["claude-new", "claude-old"])
+        self.assertEqual(adapter._client.models.list.call_args.kwargs, {"limit": 100})
+
+    def test_the_label_falls_back_to_the_id(self):
+        rows, _ = self._rows(_model_info("claude-x", None, display_name=""))
+        self.assertEqual(rows[0]["label"], "claude-x")
+
+
+class OpenAIListModelsTests(TestCase):
+    """The list names every model the key reaches; the adapter speaks Chat Completions, so
+    only chat text models stay, newest first, with effort on the reasoning families only."""
+
+    LISTED = {
+        "gpt-5.6-terra": 50,
+        "gpt-4o": 20,
+        "o3": 40,
+        "chatgpt-4o-latest": 30,
+        "gpt-5-chat-latest": 45,
+        "text-embedding-3-large": 60,
+        "whisper-1": 61,
+        "tts-1": 62,
+        "gpt-4o-audio-preview": 63,
+        "gpt-4o-realtime-preview": 64,
+        "gpt-4o-mini-transcribe": 65,
+        "gpt-image-1": 66,
+        "dall-e-3": 67,
+        "omni-moderation-latest": 68,
+        "gpt-4o-search-preview": 69,
+        "gpt-3.5-turbo-instruct": 70,
+        "gpt-5-codex": 71,
+        "o3-pro": 72,
+        "o3-deep-research": 73,
+        "computer-use-preview": 74,
+        "babbage-002": 75,
+    }
+
+    def _rows(self):
+        adapter = OpenAIAdapter({"api_key": "test"})  # no model: listing needs none
+        adapter._client = MagicMock()
+        adapter._client.models.list.return_value = iter(
+            openai.types.Model.construct(id=i, created=c, object="model", owned_by="openai")
+            for i, c in self.LISTED.items()
+        )
+        return adapter.list_models()
+
+    def test_only_chat_text_models_stay_newest_first(self):
+        self.assertEqual(
+            [r["id"] for r in self._rows()],
+            ["gpt-5.6-terra", "gpt-5-chat-latest", "o3", "chatgpt-4o-latest", "gpt-4o"],
+        )
+
+    def test_effort_only_where_the_model_reasons(self):
+        knobs = {r["id"]: r["knobs"] for r in self._rows()}
+        effort = {"effort": {"choices": ["low", "medium", "high"]}}
+        self.assertEqual(knobs["gpt-5.6-terra"], effort)
+        self.assertEqual(knobs["o3"], effort)
+        for model_id in ("gpt-4o", "chatgpt-4o-latest", "gpt-5-chat-latest"):
+            with self.subTest(model_id):
+                self.assertEqual(knobs[model_id], {})
+
+    def test_the_label_is_the_id_and_nothing_private_rides_along(self):
+        for row in self._rows():
+            with self.subTest(row["id"]):
+                self.assertEqual(row["label"], row["id"])
+                self.assertEqual(set(row), {"id", "label", "knobs"})
 
 
 class OllamaMultiTurnStreamTests(TestCase):

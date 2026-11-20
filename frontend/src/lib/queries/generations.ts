@@ -255,15 +255,9 @@ export function runReducer(state: RunState, e: RunAction): RunState {
       return state;
   }
 }
-export function knobParams(input: {
-  effort?: string;
-  temperature?: string;
-}): GenerationParams {
-  const p: GenerationParams = {};
-  if (input.effort) p.effort = input.effort;
-  const t = (input.temperature ?? "").trim();
-  if (t !== "" && !Number.isNaN(Number(t))) p.temperature = Number(t);
-  return p;
+// The panel's knob values as a run's params: every knob is a choice now, and blanks never travel.
+export function knobParams(input: Record<string, string>): GenerationParams {
+  return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== ""));
 }
 /* ---------- Badges---------- */
 

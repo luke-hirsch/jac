@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   configPayload,
   checkResultLabel,
+  modelListLabel,
   type LLMConfigRow,
 } from "@/lib/queries/llm";
 
@@ -63,6 +64,8 @@ describe("LLMConfigRow (five-field shape)", () => {
       default: true,
       has_api_key: true,
       transfer_consent_at: null,
+      model_count: 0,
+      models_checked_at: null,
       created_at: "",
       updated_at: "",
     };
@@ -70,17 +73,52 @@ describe("LLMConfigRow (five-field shape)", () => {
     expect("alias" in row).toBe(false);
     expect("model" in row).toBe(false);
     expect("extra" in row).toBe(false);
+    // the list itself comes with the executors, a count here
+    expect("models" in row).toBe(false);
   });
 });
 
 describe("checkResultLabel (per-row connectivity check)", () => {
-  it("renders success as OK + latency", () => {
-    expect(checkResultLabel({ ok: true, latency_ms: 812 })).toBe("OK · 812 ms");
+  it("renders success as OK + latency + what the listing found", () => {
+    expect(checkResultLabel({ ok: true, latency_ms: 812, models: 14 })).toBe(
+      "OK · 812 ms · 14 models",
+    );
+    expect(checkResultLabel({ ok: true, latency_ms: 90, models: 1 })).toBe(
+      "OK · 90 ms · 1 model",
+    );
   });
 
   it("renders failure as the raw error text", () => {
-    expect(checkResultLabel({ ok: false, error: "connection refused" })).toBe(
-      "connection refused",
-    );
+    expect(
+      checkResultLabel({ ok: false, error: "connection refused", models: 3 }),
+    ).toBe("connection refused");
+  });
+});
+
+describe("modelListLabel (what the key reaches)", () => {
+  const when = (iso: string) => `<${iso}>`;
+
+  it("says when it isn't listed yet", () => {
+    expect(
+      modelListLabel({ model_count: 0, models_checked_at: null }, when),
+    ).toBe("No model list yet.");
+  });
+
+  it("names the count and when the provider listed it", () => {
+    expect(
+      modelListLabel(
+        { model_count: 12, models_checked_at: "2026-11-20T12:00:00Z" },
+        when,
+      ),
+    ).toBe("Reaches 12 models · checked <2026-11-20T12:00:00Z>.");
+    expect(
+      modelListLabel({ model_count: 1, models_checked_at: "x" }, when),
+    ).toBe("Reaches 1 model · checked <x>.");
+  });
+
+  it("a listing that found nothing still counts as checked", () => {
+    expect(
+      modelListLabel({ model_count: 0, models_checked_at: "x" }, when),
+    ).toBe("Reaches 0 models · checked <x>.");
   });
 });

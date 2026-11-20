@@ -52,7 +52,8 @@ class LLMConfigAdmin(admin.ModelAdmin):
     list_display = ("user", "provider", "default", "api_key_set", "updated_at")
     list_filter = ("provider", "default")
     search_fields = ("user__username", "user__email")
-    readonly_fields = ("created_at", "updated_at")
+    # The model list is the provider's answer to the user's Check, not an operator setting.
+    readonly_fields = ("created_at", "updated_at", "models_checked_at", "models")
     autocomplete_fields = ("user",)
 
     @admin.display(boolean=True, description="API key")
