@@ -59,7 +59,7 @@ from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
 
-from ._helpers import TEST_HIRSCHAI, _muted, make_application, make_user, queued_jobs
+from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
 
 RUNS_URL = "/api/jac/generations/"
 APPS_URL = "/api/jac/applications/"
@@ -1720,10 +1720,12 @@ class SkillTokenAuthTests(_SkillCase):
             with self.subTest(url=url):
                 self.assertIn(self.client.get(url).status_code, (401, 403))
 
-    def test_a_token_cannot_mint_tokens(self):
+    def test_a_token_cannot_mint_tokens_or_download(self):
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "more"}, format="json")
         self.assertIn(r.status_code, (401, 403))
-        self.assertIn(self.client.post(f"{SKILL_URL}bundle/").status_code, (401, 403))
+        for url in (f"{SKILL_URL}bundle/", f"{SKILL_URL}career/file/"):
+            with self.subTest(url=url):
+                self.assertIn(self.client.get(url).status_code, (401, 403))
 
     def test_only_the_hash_is_stored(self):
         self.assertNotEqual(self.token.key_hash, self.key)
@@ -1770,42 +1772,52 @@ class SkillTokenManagementTests(APITestCase):
             mint_token(self.user)
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "one more"}, format="json")
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(self.client.post(f"{SKILL_URL}bundle/").status_code, 400)
+        # The zip mints nothing, so the cap doesn't stand in its way.
+        self.assertEqual(self.client.get(f"{SKILL_URL}bundle/").status_code, 200)
 
-    def test_the_bundle_carries_the_skill_and_a_working_token(self):
-        Skill.objects.create(user=self.user, name="Python")
-        r = self.client.post(f"{SKILL_URL}bundle/")
+
+class SkillDownloadTests(APITestCase):
+    """Account → Claude's two downloads, on the session: the skill once, the career per chat
+    (the Claude app's sandbox can't reach jac, so the career travels as a file)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.skill = Skill.objects.create(user=cls.user, name="Quetzalcoatl")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_anonymous_is_refused(self):
+        self.client.logout()
+        for url in (f"{SKILL_URL}bundle/", f"{SKILL_URL}career/file/"):
+            with self.subTest(url=url):
+                self.assertIn(self.client.get(url).status_code, (401, 403))
+
+    def test_the_bundle_is_the_skill_alone(self):
+        r = self.client.get(f"{SKILL_URL}bundle/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["Content-Type"], "application/zip")
-        self.assertEqual(r["Cache-Control"], "no-store")
         z = zipfile.ZipFile(io.BytesIO(r.content))
-        names = set(z.namelist())
-        for name in (
-            "SKILL.md",
-            "REVIEW.md",
-            "scripts/jac.py",
-            "config.json",
-            "career.json",
-            "review.json",
-        ):
-            self.assertIn(f"jac/{name}", names)
+        self.assertEqual(
+            sorted(z.namelist()),
+            ["jac/REVIEW.md", "jac/SKILL.md", "jac/scripts/jac.py"],
+        )
         self.assertTrue(z.read("jac/SKILL.md").startswith(b"---\nname: jac\n"))
-        career = json.loads(z.read("jac/career.json"))
-        self.assertEqual(career["entries"]["skills"][0]["name"], "Python")
-        key = json.loads(z.read("jac/config.json"))["token"]
-        self.client.logout()
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
-        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 200)
+        everything = b"".join(z.read(name) for name in z.namelist())
+        self.assertNotIn(b"Quetzalcoatl", everything)  # nothing about the user
+        self.assertFalse(AccessToken.objects.exists())  # and it mints no token
 
-    def test_a_failed_bundle_leaves_no_token(self):
-        # The key only ever lives in the zip: a token minted for a zip that never went out is
-        # one nobody holds, and it counts toward the cap.
-        self.client.raise_request_exception = False
-        # The forced 500 logs its traceback through django.request.
-        with _muted(), patch("jac.views.skill_bundle", side_effect=ValueError("boom")):
-            r = self.client.post(f"{SKILL_URL}bundle/")
-        self.assertEqual(r.status_code, 500)
-        self.assertFalse(AccessToken.objects.filter(user=self.user).exists())
+    def test_the_career_file_is_the_career_with_its_review(self):
+        r = self.client.get(f"{SKILL_URL}career/file/")
+        self.assertEqual(r.status_code, 200)
+        data = json.loads(r.content)
+        self.assertEqual(data["format"], "jac-career-for-claude")
+        skill = data["entries"]["skills"][0]
+        self.assertEqual(skill["id"], f"skill:{self.skill.pk}")
+        self.assertTrue(skill["updated_at"])  # what a career change's `seen` must match
+        self.assertIn("findings", data["review"])
+        self.assertIn("counts", data["review"])
 
 
 class SkillCareerTests(_SkillCase):

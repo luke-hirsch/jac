@@ -29,7 +29,6 @@ from django.db import transaction
 from django.db.models.functions import Coalesce, Least
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from django.utils.text import slugify
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from kombu.exceptions import OperationalError
@@ -107,6 +106,7 @@ from jac.serializers import (
 from jac.skill import (
     application_payload,
     application_summary,
+    career_file,
     career_payload,
     save_application,
     skill_bundle,
@@ -1238,34 +1238,27 @@ class AccessTokenViewSet(
 
 
 class SkillBundleView(APIView):
-    """POST: mint a token and hand back the skill as a zip with that token inside, ready to
-    upload to Claude. Session only, for the same reason as the token list."""
+    """GET: the skill as a zip, ready to upload to Claude. It holds the skill alone, no token and
+    no career (`jac.skill.skill_bundle`), so downloading it mints nothing."""
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [_LiveScopedRateThrottle]
-    throttle_scope = "skill-token"
+
+    @extend_schema(responses={200: OpenApiResponse(description="jac-skill.zip")})
+    def get(self, request):
+        response = HttpResponse(skill_bundle(), content_type="application/zip")
+        response["Content-Disposition"] = 'attachment; filename="jac-skill.zip"'
+        return response
+
+
+class SkillCareerFileView(APIView):
+    """GET: the career file for a chat in the Claude app (`jac.skill.career_file`): the career
+    and its machine review, with the ids and stamps the files Claude writes back point at.
+    Session only: the download button in Account → Claude."""
+
+    permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        request=None, responses={200: OpenApiResponse(description="jac-skill.zip")}
+        responses=OpenApiResponse(description="The career document + `review`")
     )
-    def post(self, request):
-        if AccessToken.objects.filter(user=request.user).count() >= (
-            AccessToken.MAX_PER_USER
-        ):
-            return Response(
-                {
-                    "detail": f"At most {AccessToken.MAX_PER_USER} tokens: revoke one first."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        # One transaction: a token whose zip never went out is a key nobody holds.
-        with transaction.atomic():
-            _, key = mint_token(
-                request.user, f"Claude skill, {timezone.localdate().isoformat()}"
-            )
-            bundle = skill_bundle(request.user, key)
-        response = HttpResponse(bundle, content_type="application/zip")
-        response["Content-Disposition"] = 'attachment; filename="jac-skill.zip"'
-        # It carries a live token: no cache along the way may keep a copy.
-        response["Cache-Control"] = "no-store"
-        return response
+    def get(self, request):
+        return Response(career_file(request.user))

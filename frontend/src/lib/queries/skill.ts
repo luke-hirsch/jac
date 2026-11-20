@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, csrfHeaders } from "@/lib/api";
-import { downloadBlob } from "@/lib/export";
+import { api, ApiError } from "@/lib/api";
+import { downloadBlob, downloadText } from "@/lib/export";
 import type { Page } from "./paginated";
 
 /* ---------- types ---------- */
@@ -223,11 +223,10 @@ const SKILL_API = "/api/jac/skill/";
 const KEY = ["jac", "skill", "tokens"] as const;
 const CHANGES_KEY = ["jac", "skill", "career-changes"] as const;
 
-/** POST the bundle and return the zip. A raw fetch: `api()` reads the body as text. */
+/** GET the skill as a zip: the skill alone, no token, no career. A raw fetch: `api()` reads
+ *  the body as text. */
 export async function fetchSkillBundle(): Promise<Blob> {
   const res = await fetch(`${SKILL_API}bundle/`, {
-    method: "POST",
-    headers: csrfHeaders(),
     credentials: "same-origin",
   });
   if (!res.ok) {
@@ -272,13 +271,36 @@ export function useRevokeAccessToken() {
   });
 }
 
-/** Download the skill as a zip. The server mints a token for it, so the list changes. */
+/** Download the skill as a zip, to upload to Claude once. */
 export function useDownloadSkill() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: async () =>
       downloadBlob(await fetchSkillBundle(), "jac-skill.zip"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+/** `jac-career-for-claude-YYYY-MM-DD.json` on the local date: `toISOString()` is UTC, still
+ *  yesterday for the first hour or two after midnight in Berlin. The date says how fresh the
+ *  copy is; the skill finds the file by its `format` marker, not by this name. */
+export function careerFileName(now = new Date()): string {
+  const day = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  return `jac-career-for-claude-${day}.json`;
+}
+
+/** Download the career for one chat in the Claude app, whose sandbox can't reach jac: the
+ *  career and its machine review, with the ids the files Claude writes back point at. */
+export function useDownloadCareerFile() {
+  return useMutation({
+    mutationFn: async () =>
+      downloadText(
+        `${JSON.stringify(await api(`${SKILL_API}career/file/`), null, 1)}\n`,
+        careerFileName(),
+        "application/json",
+      ),
   });
 }
 

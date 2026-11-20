@@ -449,7 +449,7 @@ REST_FRAMEWORK = {
         "uploads": os.getenv("UPLOAD_RATE", "100/day"),
         # The Claude skill, per account: a conversation reads the career and saves a few times.
         "skill": os.getenv("SKILL_RATE", "300/hour"),
-        # Minting a token (or a skill zip, which mints one).
+        # Minting a token for Claude Code.
         "skill-token": os.getenv("SKILL_TOKEN_RATE", "20/hour"),
     },
 }

@@ -11,7 +11,6 @@ same domain rule the pipeline force-keeps (`CV.highest_degree_id`).
 from __future__ import annotations
 
 import io
-import json
 import re
 import zipfile
 from pathlib import Path
@@ -43,6 +42,9 @@ from spa.models import PersonalityProfile, PersonalityQuestion
 
 SKILL_DIR = Path(__file__).resolve().parent / "resources" / "skill"
 SKILL_NAME = "jac"
+# Marks the career file, so the skill's script finds it among a chat's uploads whatever the user
+# (or the Claude app) named it.
+CAREER_FILE_FORMAT = "jac-career-for-claude"
 
 # The writer's band (`CoverLetterWriter._TARGET_WORDS`): one DIN page holds about 230 words.
 LETTER_WORDS = (170, 230)
@@ -430,25 +432,26 @@ def save_application(
     return application, warnings
 
 
-def skill_bundle(user, key: str) -> bytes:
-    """The skill as a zip Claude takes as an upload: the skill folder, a `config.json` with
-    this site's address and the token, and two snapshots for when the sandbox can't reach jac:
-    `career.json` (the career DB) and `review.json` (the machine review of it)."""
+def career_file(user) -> dict:
+    """The career for one chat in the Claude app, whose sandbox can't reach jac (Pro and Max
+    plans can't allow a custom domain): what `career` and `review` answer online, in one file the
+    user attaches. The files Claude writes back point at its ids and `updated_at` stamps, so a
+    fresh one per chat keeps the imports from going stale."""
+    return {
+        "format": CAREER_FILE_FORMAT,
+        **career_payload(user),
+        "review": review_career(user),
+    }
+
+
+def skill_bundle() -> bytes:
+    """The skill as a zip Claude takes as an upload: the skill folder and nothing else. No token
+    and no personal data, so it's the same for everyone and uploaded once: the career comes per
+    chat (`career_file`), and Claude Code reaches jac with a token of its own (JAC_URL /
+    JAC_TOKEN)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(SKILL_DIR.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 z.write(path, f"{SKILL_NAME}/{path.relative_to(SKILL_DIR)}")
-        z.writestr(
-            f"{SKILL_NAME}/config.json",
-            json.dumps({"url": settings.FRONTEND_URL, "token": key}, indent=2),
-        )
-        z.writestr(
-            f"{SKILL_NAME}/career.json",
-            json.dumps(career_payload(user), indent=1, ensure_ascii=False),
-        )
-        z.writestr(
-            f"{SKILL_NAME}/review.json",
-            json.dumps(review_career(user), indent=1, ensure_ascii=False),
-        )
     return buf.getvalue()

@@ -11,8 +11,8 @@ and the public portfolio, which renders from the same entries.
    (the entries it's about, empty for the career as a whole), a `check`, a `level` (`fix`, then
    `improve`, then `consider`) and one sentence. Treat it as a checklist, not the verdict. Check
    each finding against the career, drop the ones that don't hold (a skill name matched by
-   accident), and add what a script can't see (below). If both come from the snapshot
-   (`OFFLINE`), say so once.
+   accident), and add what a script can't see (below). In file mode both come from the career
+   file the user attached: name the date it was taken, once.
 2. **Report.** Open with a short verdict, two or three sentences: what's strong, and what holds the
    CVs back most. Then the findings grouped by theme, most costly first:
    1. data errors;
@@ -31,10 +31,15 @@ and the public portfolio, which renders from the same entries.
 4. **Propose a batch.** Show each change as before → after: the full new text of a description,
    and what's added and removed for links. Give one line on why. Five to fifteen changes keep a
    batch reviewable.
-5. **Apply only after the user says yes to that batch.** First `apply FILE --check`; fix what it
-   refuses; then `apply FILE`. The ids `--check` shows for new skills are placeholders: keep
-   linking them as `new:<ref>` until the real `apply` answers with their ids. Tell the user what changed and that every batch can be undone,
-   with `undo ID` here or in jac under Account → Claude.
+5. **Apply only after the user says yes to that batch.**
+   - **In file mode**, `apply FILE` checks the batch against the career file (ids, `seen`, links,
+     the batch size) and hands the file over; fix what it refuses and run it again. Tell the user:
+     in jac, Account → Claude → Import changes, pick the file. jac shows the batch there with
+     before and after, and it can be undone in the same place.
+   - **Online**, first `apply FILE --check`; fix what it refuses; then `apply FILE`. The ids
+     `--check` shows for new skills are placeholders: keep linking them as `new:<ref>` until the
+     real `apply` answers with their ids. Tell the user what changed and that every batch can be
+     undone, with `undo ID` here or in jac under Account → Claude.
 6. Go on with the next theme, or stop when the user has had enough.
 
 ## What to look for beyond the machine review
@@ -117,9 +122,10 @@ Write the batch to a file, e.g. `career-changes.json`:
 
 - **`id` + `seen`:** the entry, and its `updated_at` exactly as `career` shows it.
   - If the entry changed in jac since, the whole batch is refused (409, naming the ids). Run
-    `career` again and redo those changes from the fresh text.
+    `career` again (in file mode: from a fresh career file) and redo those changes from the
+    fresh text.
   - An applied batch gives the entries it touched a new `updated_at`. Run `career` again before
-    changing one of them a second time.
+    changing one of them a second time; in file mode that takes a fresh career file (above).
 - **`set`:** the fields to change, by the names `career` shows:
   - dates as `YYYY-MM-DD`;
   - `degree_level` by name (`bachelor`, `master`, …);
@@ -138,9 +144,16 @@ Write the batch to a file, e.g. `career-changes.json`:
 The answer lists every change with its `before` and `after`. A 400 names what's wrong, per change,
 by its position in the list (from 0); then nothing was applied.
 
-**If `apply` reports `OFFLINE`**, nothing changed. Offer the user the file to download; in jac
-they import it under Account → Claude → Import changes. If an entry was edited in jac after the
-snapshot, the import refuses the batch: that's the `seen` check doing its job.
+**In file mode, a batch is final until it's imported.** An imported batch gives the entries it
+touched a new `updated_at`, and the skills it creates get their ids only then. So the next batch
+can't touch those entries, or link those skills, from the same career file:
+- put what the user agrees to into one batch where you can;
+- after the user imports a batch, ask for a fresh career file before a later batch touches the
+  same entries or links a skill the first one created;
+- if an entry was edited in jac after the career file was taken, the import refuses the whole
+  batch: that's the `seen` check doing its job. A fresh career file, and the changes redone from
+  its text, fix it.
 
-**Undo:** `changes` lists the batches, and `undo ID` puts that batch's entries back and deletes the
-skills it created. It's refused once an entry in it has been edited again since.
+**Undo:** online, `changes` lists the batches, and `undo ID` puts that batch's entries back and
+deletes the skills it created. In file mode the same is in jac, Account → Claude → Career changes,
+Undo on the batch. Either way it's refused once an entry in the batch has been edited again since.

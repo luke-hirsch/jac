@@ -14,26 +14,34 @@ You can also review the career itself and, once the user agrees, improve the ent
 the user wants their career data checked or improved, read `REVIEW.md` in this folder first**
 and follow it; the rest of this file is about applications.
 
-All calls go through `scripts/jac.py` in this skill's folder (Python 3, standard library only):
+Everything goes through `scripts/jac.py` in this skill's folder (Python 3, standard library only).
+It works in one of two modes, and picks it itself:
 
-| command | what it does |
-|---|---|
-| `python3 scripts/jac.py career` | the career database as JSON |
-| `python3 scripts/jac.py applications` | the latest applications (id, title, company, status, link) |
-| `python3 scripts/jac.py show ID` | one application, in the shape `save` takes |
-| `python3 scripts/jac.py save FILE` | creates the application in FILE; once FILE carries an `"id"` (written on the first save), saving it again updates the same application |
-| `python3 scripts/jac.py review` | jac's machine review of the career (see `REVIEW.md`) |
-| `python3 scripts/jac.py apply FILE [--check]` | applies the career changes in FILE; `--check` only validates them (see `REVIEW.md`) |
-| `python3 scripts/jac.py changes` | the latest batches of career changes |
-| `python3 scripts/jac.py undo ID` | puts a batch's entries back as they were |
+- **File mode**, in the Claude app. Its sandbox can't reach jac, so the career comes from a file
+  the user attaches to the chat (in jac: Account → Claude → Download career for Claude), and what
+  you write goes back as a file the user imports in jac.
+- **Online mode**, in Claude Code, when `JAC_URL` and `JAC_TOKEN` are set: the script talks to
+  jac directly, and saving saves.
+
+| command | file mode | online mode |
+|---|---|---|
+| `python3 scripts/jac.py career` | the career from the attached file | the career from jac |
+| `python3 scripts/jac.py review` | jac's machine review, from the same file (see `REVIEW.md`) | the review from jac |
+| `python3 scripts/jac.py save FILE` | checks the application in FILE the way jac's import will, and hands it to the user | saves it; once FILE carries an `"id"` (written on the first save), saving again updates that application |
+| `python3 scripts/jac.py apply FILE [--check]` | checks the career changes in FILE against the career file, and hands them over (see `REVIEW.md`) | applies them; `--check` only validates |
+| `applications`, `show ID`, `changes`, `undo ID` | not available: they need jac itself | the latest applications, one application in the shape `save` takes, the batches of career changes, undoing a batch |
 
 ## The flow
 
 1. **Get the posting.** Pasted text, or a link you fetch. Keep the full text: it is stored with
    the application.
-2. **Read the career.** Run `career` once per conversation, before you suggest anything. If it
-   reports `OFFLINE`, tell the user once that you're working from the snapshot taken on the date it
-   names, and that saving will go through an import (see Saving).
+2. **Read the career.** Run `career` once per conversation, before you suggest anything.
+   - In file mode it names the file and the date it was taken. If it finds no career file, ask
+     the user to attach one (in jac: Account → Claude → Download career for Claude) and wait for
+     it; never work from memory or invent a career. If the file is a few days old, ask once
+     whether they've changed their career in jac since; if so, ask for a fresh one.
+   - If the user attached the file and `career` still finds none, look for it among the chat's
+     files yourself and run the command again with `JAC_CAREER_FILE=<its path>` in front.
 3. **Read the posting.** The role title, the company, a contact person and address if the ad
    names them, the language (write in the posting's language), and in a German ad whether it
    says Sie, ihr or du.
@@ -44,8 +52,9 @@ All calls go through `scripts/jac.py` in this skill's folder (Python 3, standard
    generator. Say plainly where the fit is thin and which requirements the career doesn't cover;
    don't paper over a gap with wording. Suggest what to lead with. Keep every correction the user
    makes for the rest of the conversation.
-6. **Save** when the user says so (see Saving). Give them the link; they review and export the
-   PDF in jac.
+6. **Save** when the user says so (see Saving). In file mode, hand them the file and tell them
+   where to import it; online, give them the link. Either way they review and export the PDF in
+   jac.
 
 ## Picking the CV entries
 
@@ -127,17 +136,29 @@ Write the application to a JSON file, e.g. `application.json`, and run
 
 - `posting.text`, `entries` and `letter.body` are required; leave the other posting fields out or
   empty when the ad doesn't give them. `language` is a two-letter code.
+- The ids are the career's own (`job:3`): use only ids `career` showed you.
 - `letter` may also carry `subject`, `salutation` and `closing`, only to override jac's own.
-- The answer gives the application's `url` and any `warnings` (length, a salutation inside the
-  body, a slipped German form, the highest degree added). Fix what's worth fixing, then save the
-  same file again: it updates the application.
-- To continue with an existing application: `applications`, then `show ID` into a file, edit it,
-  keep its `"id"`, and `save` it.
 
-**If `save` reports `OFFLINE`**, nothing was saved. Offer the user the JSON file to download; in
-jac they import it under Applications → Import from Claude. To make the skill reach jac directly,
-the user allows code execution to reach jac's host in Claude's settings (Settings → Capabilities,
-network access).
+**In file mode** nothing is saved from here. `save` checks the file the way jac's import will:
+- what the import would refuse (a missing field, an id that isn't in the career file) is an
+  error: fix the file and run `save` again;
+- the `warnings` (the letter's length, the highest degree jac adds) are worth a look before you
+  hand it over.
 
-**If a call reports that the token isn't accepted**, the token was revoked: the user downloads
-the skill again in jac (Account → Claude) and uploads it to Claude in place of this one.
+Then it answers with the `file` to give the user (in the Claude app it lands among the chat's
+downloads). Tell them: in jac, Applications → Import from Claude, pick the file. jac opens the new
+application and shows its own warnings, such as a salutation inside the body or a slipped German
+form. Every import creates a new application, so for a correction after the user has imported,
+tell them to edit it in jac, or write a fresh file for a fresh import.
+
+**Online**, the answer gives the application's `url` and any `warnings` (length, a salutation
+inside the body, a slipped German form, the highest degree added). Fix what's worth fixing, then
+save the same file again: it updates the application. To continue with an existing application:
+`applications`, then `show ID` into a file, edit it, keep its `"id"`, and `save` it.
+
+**If a command answers `NOT HERE`**, it needs jac itself: in file mode that's `applications`,
+`show`, `changes` and `undo`, and the message says where the same thing is in jac. Online, it means
+jac can't be reached at `JAC_URL`.
+
+**Online, if jac doesn't accept the token**, it was revoked: the user creates a new one in jac
+(Account → Claude → Claude Code) and sets `JAC_TOKEN` to it.

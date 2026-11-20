@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
+  careerFileName,
   changeRows,
   envLines,
   errorLines,
@@ -308,7 +309,7 @@ describe("fetchSkillBundle", () => {
     } as unknown as Response;
   }
 
-  it("POSTs with the CSRF header and returns the zip", async () => {
+  it("GETs the zip: the skill alone, so nothing is minted and nothing to guard", async () => {
     const zip = new Blob(["PK"], { type: "application/zip" });
     const fetchMock = vi.fn(async () =>
       fakeResponse(200, "application/zip", zip),
@@ -318,23 +319,21 @@ describe("fetchSkillBundle", () => {
 
     await expect(fetchSkillBundle()).resolves.toBe(zip);
     expect(fetchMock).toHaveBeenCalledWith("/api/jac/skill/bundle/", {
-      method: "POST",
-      headers: { "X-CSRFToken": "tok123" },
       credentials: "same-origin",
     });
   });
 
-  it("throws the server's JSON at the token limit", async () => {
-    const detail = { detail: "At most 10 tokens: revoke one first." };
+  it("throws the server's JSON", async () => {
+    const detail = { detail: "Authentication credentials were not provided." };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => fakeResponse(400, "application/json", detail)),
+      vi.fn(async () => fakeResponse(403, "application/json", detail)),
     );
     vi.stubGlobal("document", { cookie: "" });
 
     const error = await fetchSkillBundle().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
-    expect((error as ApiError).status).toBe(400);
+    expect((error as ApiError).status).toBe(403);
     expect((error as ApiError).data).toEqual(detail);
   });
 
@@ -348,5 +347,19 @@ describe("fetchSkillBundle", () => {
     const error = await fetchSkillBundle().catch((e: unknown) => e);
     expect((error as ApiError).status).toBe(502);
     expect((error as ApiError).data).toBeNull();
+  });
+});
+
+describe("careerFileName", () => {
+  it("dates the career file, zero-padded", () => {
+    expect(careerFileName(new Date(2026, 0, 5, 12))).toBe(
+      "jac-career-for-claude-2026-01-05.json",
+    );
+  });
+
+  it("uses the local day: just after midnight in Berlin, UTC is still yesterday", () => {
+    expect(careerFileName(new Date(2026, 10, 20, 0, 30))).toBe(
+      "jac-career-for-claude-2026-11-20.json",
+    );
   });
 });

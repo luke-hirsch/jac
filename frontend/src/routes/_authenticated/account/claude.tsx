@@ -26,6 +26,7 @@ import {
   useAccessTokens,
   useCareerChanges,
   useCreateAccessToken,
+  useDownloadCareerFile,
   useDownloadSkill,
   useRevokeAccessToken,
   useUndoCareerChange,
@@ -46,15 +47,18 @@ function ClaudePage() {
         <div>
           <h2 className="text-lg font-medium">Claude</h2>
           <p className="text-sm text-muted-foreground">
-            Write applications with Claude, on your own subscription: paste a
-            posting into Claude, talk the CV and letter through, and save it
-            here. The skill reads your career and writes applications with a
-            personal token. It can't reach your account, your API keys or
-            anything else.
+            Write applications with Claude, on your own subscription: attach
+            your career to a chat, paste a posting, talk the CV and letter
+            through, and import what Claude writes here. The Claude app can't
+            reach jac, so everything goes by file: Claude never sees your
+            account, your API keys or anything you don't hand it.
           </p>
         </div>
-        <DownloadSkill />
         <SetupSteps />
+        <div className="space-y-3">
+          <DownloadSkill />
+          <DownloadCareerFile />
+        </div>
       </section>
       <Separator />
       <CareerChanges />
@@ -81,8 +85,32 @@ function DownloadSkill() {
         {download.isPending ? "Preparing…" : "Download skill (.zip)"}
       </Button>
       <p className="max-w-sm text-xs text-muted-foreground">
-        The zip contains a token: anyone with the file can read your career and
-        write applications until you revoke it below.
+        Once: the skill alone, nothing about you in it. Upload it again only
+        when jac's skill changes.
+      </p>
+    </div>
+  );
+}
+
+function DownloadCareerFile() {
+  const download = useDownloadCareerFile();
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button
+        variant="outline"
+        disabled={download.isPending}
+        onClick={() =>
+          download.mutate(undefined, {
+            onError: (e) => toast.error(errorLines(e, "Download failed.")[0]),
+          })
+        }
+      >
+        {download.isPending ? "Preparing…" : "Download career for Claude"}
+      </Button>
+      <p className="max-w-sm text-xs text-muted-foreground">
+        For each chat: your career and its review as of now, with your contact
+        details for the letter. Download a fresh one after you change your
+        career here.
       </p>
     </div>
   );
@@ -92,20 +120,20 @@ function SetupSteps() {
   return (
     <ol className="list-decimal space-y-1 pl-5 text-sm">
       <li>
-        In Claude: Settings → Capabilities → Skills → upload{" "}
-        <code>jac-skill.zip</code>.
+        Once: download the skill and upload <code>jac-skill.zip</code> in
+        Claude, under Settings → Capabilities → Skills.
       </li>
       <li>
-        In the same settings, allow code execution to reach{" "}
-        <code>{window.location.host}</code> under network access. Without it the
-        skill still works from the snapshot in the zip, and you import what it
-        writes under{" "}
+        For each chat: download your career for Claude, attach the file, and
+        paste a job posting (or its link).
+      </li>
+      <li>
+        Claude hands you a file to import: an application under{" "}
         <Link to="/applications" className="underline">
           Applications → Import from Claude
         </Link>
-        .
+        , career changes under Import changes, below.
       </li>
-      <li>Start a chat and paste a job posting (or its link).</li>
     </ol>
   );
 }
@@ -364,7 +392,9 @@ function ClaudeCode() {
       <div>
         <h3 className="font-medium">Claude Code</h3>
         <p className="text-sm text-muted-foreground">
-          The same skill works in Claude Code, with a token of its own.
+          The same skill works in Claude Code, which can reach jac: with a
+          token, Claude reads your career and saves applications here directly,
+          no files in between.
         </p>
       </div>
       {minted ? (
@@ -511,7 +541,7 @@ function TokenList() {
         <p className="text-sm text-muted-foreground">
           {tokens.isLoading
             ? "Loading…"
-            : "No tokens yet. Downloading the skill creates one."}
+            : "No tokens yet. Only Claude Code uses one."}
         </p>
       )}
     </section>
