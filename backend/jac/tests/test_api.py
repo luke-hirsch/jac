@@ -6,8 +6,10 @@ Celery is always mocked (apply_async must return a STRING id — a Mock poisons
 the task_id CharField); the tower probe is mocked wherever resolution consults it.
 """
 
+import io
 import json
 import threading
+import zipfile
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -26,6 +28,8 @@ from jac import views as jac_views
 from jac.career_import import ENTRY_MODELS, wipe_career
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
+    AccessToken,
+    CareerChange,
     DailyGenerationCount,
     Domain,
     Education,
@@ -47,6 +51,7 @@ from jac.queues import (
     runs_ahead,
 )
 from jac.serializers import MAX_POSTING_CHARS
+from jac.tokens import mint_token
 from llm_connector.catalog import default_model
 from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
@@ -1631,3 +1636,649 @@ class BulkActionShapeTests(APITestCase):
         r = self._patch_domains(add=[self.domain.pk])
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(list(self.skill.domains.all()), [self.domain])
+
+
+# --- [fullstack]-claude-skill -------------------------------------------------------------
+
+SKILL_URL = "/api/jac/skill/"
+
+
+def _letter(words=200, word="Wort"):
+    return " ".join([word] * words)
+
+
+class _SkillCase(APITestCase):
+    """A user with a small career and a token; requests go out on the token, not a session."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        cls.python = Skill.objects.create(user=cls.user, name="Python")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Backend Dev", company="Acme", started="2020-01-01"
+        )
+        cls.job.skills.add(cls.python)
+        cls.master = Education.objects.create(
+            user=cls.user,
+            institution="FU Berlin",
+            started="2012-10-01",
+            ended="2017-09-30",
+            degree_level=Education.DegreeLevel.master,
+        )
+        cls.theirs = Skill.objects.create(user=cls.other, name="Theirs")
+
+    def setUp(self):
+        cache.clear()  # scoped-throttle history lives in the default cache
+        self.token, self.key = mint_token(self.user, "test")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.key}")
+
+    def _payload(self, **kw):
+        return {
+            "posting": {
+                "text": "Wir suchen eine:n Backend-Entwickler:in. Sie arbeiten mit Python.",
+                "title": "Backend-Entwickler:in",
+                "language": "de",
+                "company": "Beispiel GmbH",
+                "contact_name": "Frau Muster",
+            },
+            "entries": [f"job:{self.job.pk}", f"skill:{self.python.pk}"],
+            "letter": {"body": _letter(), "tone": "formal"},
+            **kw,
+        }
+
+    def _create(self, **kw):
+        return self.client.post(
+            f"{SKILL_URL}applications/", self._payload(**kw), format="json"
+        )
+
+
+class SkillTokenAuthTests(_SkillCase):
+    """The token opens the skill's endpoints and nothing else."""
+
+    def test_the_token_reads_the_career_and_marks_itself_used(self):
+        r = self.client.get(f"{SKILL_URL}career/")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.token.refresh_from_db()
+        self.assertIsNotNone(self.token.last_used_at)
+
+    def test_no_credentials_is_refused(self):
+        self.client.credentials()
+        self.assertIn(self.client.get(f"{SKILL_URL}career/").status_code, (401, 403))
+
+    def test_a_revoked_token_is_a_401(self):
+        self.token.delete()
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_a_made_up_token_is_a_401(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer jac_nope")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_the_token_does_not_open_the_rest_of_the_api(self):
+        for url in (APPS_URL, "/api/jac/cv/entries/", "/api/llm/configs/"):
+            with self.subTest(url=url):
+                self.assertIn(self.client.get(url).status_code, (401, 403))
+
+    def test_a_token_cannot_mint_tokens(self):
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "more"}, format="json")
+        self.assertIn(r.status_code, (401, 403))
+        self.assertIn(self.client.post(f"{SKILL_URL}bundle/").status_code, (401, 403))
+
+    def test_only_the_hash_is_stored(self):
+        self.assertNotEqual(self.token.key_hash, self.key)
+        self.assertNotIn(self.key, self.token.key_hash)
+        self.assertEqual(self.token.prefix, self.key[:12])
+
+
+class SkillTokenManagementTests(APITestCase):
+    """Minting, listing and revoking happen on the session, in Account → Claude."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_login(self.user)
+
+    def test_the_key_comes_back_once(self):
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "laptop"}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertTrue(r.data["key"].startswith("jac_"))
+        listed = self.client.get(f"{SKILL_URL}tokens/").data["results"]
+        self.assertEqual([t["name"] for t in listed], ["laptop"])
+        self.assertNotIn("key", listed[0])
+
+    def test_revoking_ends_the_token(self):
+        token, key = mint_token(self.user)
+        r = self.client.delete(f"{SKILL_URL}tokens/{token.pk}/")
+        self.assertEqual(r.status_code, 204)
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_someone_elses_token_is_a_404(self):
+        token, _ = mint_token(self.other)
+        r = self.client.delete(f"{SKILL_URL}tokens/{token.pk}/")
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(AccessToken.objects.filter(pk=token.pk).exists())
+
+    def test_the_number_of_tokens_is_capped(self):
+        for _ in range(AccessToken.MAX_PER_USER):
+            mint_token(self.user)
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "one more"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.client.post(f"{SKILL_URL}bundle/").status_code, 400)
+
+    def test_the_bundle_carries_the_skill_and_a_working_token(self):
+        Skill.objects.create(user=self.user, name="Python")
+        r = self.client.post(f"{SKILL_URL}bundle/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/zip")
+        self.assertEqual(r["Cache-Control"], "no-store")
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        names = set(z.namelist())
+        for name in (
+            "SKILL.md",
+            "REVIEW.md",
+            "scripts/jac.py",
+            "config.json",
+            "career.json",
+            "review.json",
+        ):
+            self.assertIn(f"jac/{name}", names)
+        self.assertTrue(z.read("jac/SKILL.md").startswith(b"---\nname: jac\n"))
+        career = json.loads(z.read("jac/career.json"))
+        self.assertEqual(career["entries"]["skills"][0]["name"], "Python")
+        key = json.loads(z.read("jac/config.json"))["token"]
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 200)
+
+
+class SkillCareerTests(_SkillCase):
+    def test_entries_carry_ids_and_names_not_keys(self):
+        data = self.client.get(f"{SKILL_URL}career/").data
+        job = data["entries"]["jobs"][0]
+        self.assertEqual(job["id"], f"job:{self.job.pk}")
+        self.assertEqual(job["skills"], ["Python"])
+        edu = data["entries"]["educations"][0]
+        self.assertEqual(edu["degree_level"], "master")
+        self.assertTrue(edu["completed"])
+        self.assertEqual(data["highest_degree"], f"education:{self.master.pk}")
+
+    def test_only_the_users_own_entries(self):
+        data = self.client.get(f"{SKILL_URL}career/").data
+        names = [s["name"] for s in data["entries"]["skills"]]
+        self.assertEqual(names, ["Python"])
+
+
+class SkillApplicationTests(_SkillCase):
+    """What the skill saves is an ordinary application: the editor, the fit and the export
+    read it like a generated one."""
+
+    def test_create_builds_posting_cv_and_letter_frame(self):
+        r = self._create()
+        self.assertEqual(r.status_code, 201, r.data)
+        app = JobApplication.objects.get(pk=r.data["id"])
+        self.assertEqual(app.user, self.user)
+        self.assertEqual(app.posting.title, "Backend-Entwickler:in")
+        self.assertEqual(app.posting.language, "de")
+        self.assertEqual(app.posting.address.company, "Beispiel GmbH")
+        self.assertEqual(
+            [e["id"] for e in app.cv_content["jobs"]], [f"job:{self.job.pk}"]
+        )
+        self.assertIn("Backend Dev at Acme", app.cv_content["jobs"][0]["label"])
+        meta = app.letter_meta
+        self.assertEqual(meta["subject"], "Bewerbung als Backend-Entwickler:in")
+        self.assertIn("Frau Muster", meta["salutation"])
+        self.assertEqual(meta["closing"], "Mit freundlichen Grüßen")
+        self.assertEqual(meta["address_form"], "sie")
+        self.assertEqual(meta["recipient"]["company"], "Beispiel GmbH")
+        self.assertEqual(meta["sender"]["name"], "alice")
+        self.assertTrue(r.data["url"].endswith(f"/applications/{app.pk}"))
+
+    def test_the_highest_degree_is_added_and_pinned(self):
+        r = self._create()
+        top = f"education:{self.master.pk}"
+        self.assertIn(top, r.data["entries"])
+        self.assertIn(top, r.data["pinned"])
+        self.assertTrue(any(top in w for w in r.data["warnings"]))
+
+    def test_it_shows_up_in_the_applications_list(self):
+        app_id = self._create().data["id"]
+        self.client.credentials()
+        self.client.force_login(self.user)
+        ids = [row["id"] for row in self.client.get(APPS_URL).data["results"]]
+        self.assertIn(app_id, ids)
+
+    def test_the_session_can_import_a_file_the_skill_wrote(self):
+        self.client.credentials()
+        self.client.force_login(self.user)
+        self.assertEqual(self._create().status_code, 201)
+
+    def test_someone_elses_entry_is_rejected(self):
+        r = self._create(entries=[f"skill:{self.theirs.pk}"])
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("entries", r.data)
+
+    def test_create_needs_posting_entries_and_letter(self):
+        for field in ("posting", "entries", "letter"):
+            with self.subTest(field=field):
+                payload = self._payload()
+                del payload[field]
+                r = self.client.post(
+                    f"{SKILL_URL}applications/", payload, format="json"
+                )
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(field, r.data)
+
+    def test_warnings_tell_the_skill_what_to_fix(self):
+        body = (
+            "Sehr geehrte Frau Muster,\n\n"
+            + _letter(50)
+            + " du\n\nMit freundlichen Grüßen"
+        )
+        r = self._create(letter={"body": body, "tone": "formal"})
+        text = " ".join(r.data["warnings"])
+        self.assertIn("words", text)
+        self.assertIn("salutation", text)
+        self.assertIn("closing", text)
+        self.assertIn("du", text)
+
+    def test_a_clean_letter_has_no_letter_warnings(self):
+        r = self._create(entries=[f"job:{self.job.pk}", f"education:{self.master.pk}"])
+        self.assertEqual(r.data["warnings"], [])
+
+    def test_patch_changes_only_what_is_sent(self):
+        app_id = self._create().data["id"]
+        url = f"{SKILL_URL}applications/{app_id}/"
+        r = self.client.patch(
+            url, {"letter": {"body": _letter(word="Neu")}}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        app = JobApplication.objects.get(pk=app_id)
+        self.assertTrue(app.cover_letter.startswith("Neu"))
+        self.assertEqual(
+            [e["id"] for e in app.cv_content["jobs"]], [f"job:{self.job.pk}"]
+        )
+        self.assertEqual(app.posting.title, "Backend-Entwickler:in")
+
+    def test_read_back_round_trips(self):
+        created = self._create().data
+        r = self.client.get(f"{SKILL_URL}applications/{created['id']}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["entries"], created["entries"])
+        self.assertEqual(r.data["letter"]["body"], _letter())
+        self.assertEqual(r.data["posting"]["company"], "Beispiel GmbH")
+
+    def test_someone_elses_application_is_a_404(self):
+        theirs = make_application(self.other)
+        url = f"{SKILL_URL}applications/{theirs.pk}/"
+        self.assertEqual(self.client.get(url).status_code, 404)
+        r = self.client.patch(url, {"notes": "x"}, format="json")
+        self.assertEqual(r.status_code, 404)
+
+    def test_the_list_is_the_users_own(self):
+        make_application(self.other)
+        own = self._create().data["id"]
+        ids = [row["id"] for row in self.client.get(f"{SKILL_URL}applications/").data]
+        self.assertEqual(ids, [own])
+
+
+
+def _words(n, word="built"):
+    return " ".join([word] * n)
+
+
+class SkillReviewTests(_SkillCase):
+    """The machine half of a review: what a script can find without judgment."""
+
+    def _review(self):
+        r = self.client.get(f"{SKILL_URL}review/")
+        self.assertEqual(r.status_code, 200, r.data)
+        return r.data
+
+    def _about(self, data, entry_id, check=None):
+        return [
+            f
+            for f in data["findings"]
+            if entry_id in f["ids"] and (check is None or f["check"] == check)
+        ]
+
+    def test_a_thin_job_that_names_skills_it_doesnt_link(self):
+        docker = Skill.objects.create(user=self.user, name="Docker")
+        job = Job.objects.create(
+            user=self.user,
+            title="Dev",
+            company="Beta",
+            started="2018-01-01",
+            ended="2019-12-31",
+            description="Built APIs in Python, shipped with docker.",
+        )
+        data = self._review()
+        jid = f"job:{job.pk}"
+        self.assertTrue(self._about(data, jid, "thin_description"))
+        self.assertTrue(self._about(data, jid, "no_skills"))
+        named = self._about(data, jid, "skill_named_not_linked")[0]
+        self.assertIn(f"skill:{self.python.pk}", named["ids"])
+        self.assertIn(f"skill:{docker.pk}", named["ids"])
+        self.assertEqual(named["level"], "improve")
+
+    def test_a_well_kept_job_has_no_findings(self):
+        self.job.description = _words(30)
+        self.job.save()
+        self.assertEqual(self._about(self._review(), f"job:{self.job.pk}"), [])
+
+    def test_short_names_match_only_as_written(self):
+        go = Skill.objects.create(user=self.user, name="Go")
+        self.job.description = _words(30) + " and we go to market"
+        self.job.save()
+        self.assertFalse(
+            self._about(self._review(), f"skill:{go.pk}", "skill_named_not_linked")
+        )
+        self.job.description = _words(30) + " services written in Go"
+        self.job.save()
+        named = self._about(
+            self._review(), f"job:{self.job.pk}", "skill_named_not_linked"
+        )
+        self.assertIn(f"skill:{go.pk}", named[0]["ids"])
+
+    def test_a_skill_name_inside_a_longer_one_is_no_match(self):
+        Skill.objects.create(user=self.user, name="Java")
+        self.job.description = _words(30) + " JavaScript all day"
+        self.job.save()
+        found = self._about(
+            self._review(), f"job:{self.job.pk}", "skill_named_not_linked"
+        )
+        self.assertEqual(found, [])
+
+    def test_dates_that_contradict_themselves_come_first(self):
+        Job.objects.create(
+            user=self.user,
+            title="Backwards",
+            company="X",
+            started="2021-01-01",
+            ended="2020-01-01",
+        )
+        data = self._review()
+        self.assertEqual(data["findings"][0]["check"], "ended_before_started")
+        levels = [f["level"] for f in data["findings"]]
+        self.assertEqual(
+            levels, sorted(levels, key=["fix", "improve", "consider"].index)
+        )
+        self.assertEqual(data["counts"]["fix"], 1)
+
+    def test_a_gap_between_education_and_the_first_job(self):
+        gaps = [f for f in self._review()["findings"] if f["check"] == "gap"]
+        self.assertTrue(
+            any("2017-09" in f["say"] and "2020-01" in f["say"] for f in gaps)
+        )
+
+    def test_a_degree_named_but_recorded_as_not_completed(self):
+        edu = Education.objects.create(
+            user=self.user,
+            institution="TU",
+            started="2008-10-01",
+            ended="2011-09-30",
+            degree="B.Sc.",
+        )
+        found = self._about(
+            self._review(), f"education:{edu.pk}", "degree_not_completed"
+        )
+        self.assertTrue(found)
+
+    def test_near_duplicate_skills(self):
+        a = Skill.objects.create(user=self.user, name="Node.js")
+        b = Skill.objects.create(user=self.user, name="NodeJS")
+        found = self._about(self._review(), f"skill:{a.pk}", "duplicate_skills")
+        self.assertIn(f"skill:{b.pk}", found[0]["ids"])
+
+    def test_a_skill_nothing_backs(self):
+        lone = Skill.objects.create(user=self.user, name="Kotlin")
+        found = self._about(self._review(), f"skill:{lone.pk}", "skill_unbacked")
+        self.assertNotIn(f"skill:{self.python.pk}", found[0]["ids"])
+
+    def test_only_the_users_own_career(self):
+        Job.objects.create(
+            user=self.other, title="Theirs", company="Y", started="2020-01-01"
+        )
+        text = json.dumps(self._review())
+        self.assertNotIn("Theirs", text)
+
+
+class SkillCareerChangeTests(_SkillCase):
+    """Edits the user agreed to: all or nothing, through the entries' own serializers, logged
+    with what they replaced so a batch can be undone."""
+
+    URL = f"{SKILL_URL}career/changes/"
+
+    def _seen(self, obj):
+        obj.refresh_from_db()
+        return obj.updated_at.isoformat()
+
+    def _apply(self, *changes, **kw):
+        return self.client.post(
+            self.URL, {"changes": list(changes), **kw}, format="json"
+        )
+
+    def _describe(self, text="- Built the billing API\n- Ran it on Kubernetes"):
+        return {
+            "id": f"job:{self.job.pk}",
+            "seen": self._seen(self.job),
+            "why": "Says what was built.",
+            "set": {"description": text},
+        }
+
+    def test_a_batch_edits_creates_and_links(self):
+        change = {
+            **self._describe(),
+            "add": {"skills": ["new:k8s"]},
+            "remove": {"skills": [f"skill:{self.python.pk}"]},
+        }
+        new = {
+            "new": "skill",
+            "ref": "k8s",
+            "why": "Named in the job, missing as a skill.",
+            "set": {"name": "Kubernetes", "category": "technical"},
+            "add": {"builds_on": [f"skill:{self.python.pk}"]},
+        }
+        r = self._apply(change, new)
+        self.assertEqual(r.status_code, 201, r.data)
+        k8s = Skill.objects.get(user=self.user, name="Kubernetes")
+        self.assertEqual(r.data["created"], {"new:k8s": f"skill:{k8s.pk}"})
+        self.job.refresh_from_db()
+        self.assertTrue(self.job.description.startswith("- Built"))
+        self.assertEqual(list(self.job.skills.all()), [k8s])
+        self.assertEqual(list(k8s.builds_on.all()), [self.python])
+        logged = r.data["changes"][0]
+        self.assertEqual(logged["before"]["skills"], [f"skill:{self.python.pk}"])
+        self.assertEqual(logged["after"]["skills"], [f"skill:{k8s.pk}"])
+        self.assertEqual(logged["label"], "Backend Dev at Acme")
+        self.assertIsNone(r.data["changes"][1]["before"])
+        self.assertEqual(r.data["labels"][f"skill:{k8s.pk}"], "Kubernetes")
+        batch = CareerChange.objects.get(pk=r.data["id"])
+        self.assertEqual(batch.source, CareerChange.Source.claude)
+
+    def test_seen_from_the_career_round_trips(self):
+        career = self.client.get(f"{SKILL_URL}career/").data
+        job = career["entries"]["jobs"][0]
+        r = self._apply(
+            {
+                "id": job["id"],
+                "seen": job["updated_at"],
+                "set": {"url": "https://acme.test"},
+            }
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+
+    def test_a_dry_run_answers_and_changes_nothing(self):
+        r = self._apply(self._describe(), dry_run=True)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertIsNone(r.data["id"])
+        self.assertTrue(
+            r.data["changes"][0]["after"]["description"].startswith("- Built")
+        )
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "")
+        self.assertFalse(CareerChange.objects.exists())
+
+    def test_a_stale_entry_refuses_the_whole_batch(self):
+        seen = self._seen(self.python)
+        stale = self._describe()
+        Job.objects.filter(pk=self.job.pk).update(updated_at=timezone.now())
+        fine = {
+            "id": f"skill:{self.python.pk}",
+            "seen": seen,
+            "set": {"description": "x"},
+        }
+        r = self._apply(fine, stale)
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertEqual(r.data["stale"], [f"job:{self.job.pk}"])
+        self.assertEqual(r.data["labels"], {f"job:{self.job.pk}": "Backend Dev at Acme"})
+        self.assertIn("Read the career again", r.data["detail"])
+        self.python.refresh_from_db()
+        self.assertEqual(self.python.description, "")
+
+    def test_one_bad_change_applies_none(self):
+        r = self._apply(
+            self._describe(),
+            {"new": "skill", "ref": "dup", "set": {"name": "Python"}},
+        )
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertIn("1", r.data["changes"])
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "")
+
+    def test_what_a_change_may_not_do(self):
+        jid = f"job:{self.job.pk}"
+        seen = self._seen(self.job)
+        bad = {
+            "no seen": {"id": jid, "set": {"description": "x"}},
+            "a job": {"new": "job", "ref": "j", "set": {"title": "Made up"}},
+            "theirs": {
+                "id": f"skill:{self.theirs.pk}",
+                "seen": seen,
+                "set": {"name": "x"},
+            },
+            "their skill": {
+                "id": jid,
+                "seen": seen,
+                "add": {"skills": [f"skill:{self.theirs.pk}"]},
+            },
+            "a list via set": {"id": jid, "seen": seen, "set": {"skills": []}},
+            "a field it lacks": {
+                "id": jid,
+                "seen": seen,
+                "set": {"user": self.other.pk},
+            },
+            "nothing": {"id": jid, "seen": seen},
+            "an unknown domain": {
+                "id": jid,
+                "seen": seen,
+                "add": {"domains": ["Nope"]},
+            },
+        }
+        for name, change in bad.items():
+            with self.subTest(name):
+                self.assertEqual(self._apply(change).status_code, 400)
+        r = self._apply(self._describe(), self._describe())
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("One change per entry", json.dumps(r.data))
+
+    def test_the_favourite_cap_holds(self):
+        for n in range(Job.FAVOURITE_LIMIT):
+            Job.objects.create(
+                user=self.user,
+                title=f"Fav {n}",
+                company="F",
+                started="2015-01-01",
+                favourite=True,
+            )
+        r = self._apply(
+            {
+                "id": f"job:{self.job.pk}",
+                "seen": self._seen(self.job),
+                "set": {"favourite": True},
+            }
+        )
+        self.assertEqual(r.status_code, 400, r.data)
+
+    def test_links_by_name_and_by_id(self):
+        Domain.objects.create(user=self.user, name="Fintech")
+        project = Project.objects.create(user=self.user, name="Billing")
+        r = self._apply(
+            {
+                "id": f"project:{project.pk}",
+                "seen": self._seen(project),
+                "set": {"job": f"job:{self.job.pk}"},
+                "add": {"domains": ["Fintech"]},
+            },
+            {
+                "id": f"education:{self.master.pk}",
+                "seen": self._seen(self.master),
+                "set": {"degree_level": "bachelor"},
+            },
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        project.refresh_from_db()
+        self.assertEqual(project.job, self.job)
+        self.assertEqual([d.name for d in project.domains.all()], ["Fintech"])
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.degree_level, Education.DegreeLevel.bachelor)
+        self.assertEqual(r.data["changes"][1]["before"], {"degree_level": "master"})
+
+    def test_undo_puts_it_back_and_drops_the_new_skill(self):
+        r = self._apply(
+            {**self._describe(), "add": {"skills": ["new:k8s"]}},
+            {"new": "skill", "ref": "k8s", "set": {"name": "Kubernetes"}},
+        )
+        undo = self.client.post(f"{self.URL}{r.data['id']}/undo/")
+        self.assertEqual(undo.status_code, 200, undo.data)
+        self.assertIsNotNone(undo.data["undone_at"])
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "")
+        self.assertEqual(list(self.job.skills.all()), [self.python])
+        self.assertFalse(Skill.objects.filter(name="Kubernetes").exists())
+        again = self.client.post(f"{self.URL}{r.data['id']}/undo/")
+        self.assertEqual(again.status_code, 409)
+
+    def test_undo_refuses_to_overwrite_a_later_edit(self):
+        batch = self._apply(self._describe()).data["id"]
+        self.job.refresh_from_db()
+        self.job.description = "edited in jac"
+        self.job.save()
+        r = self.client.post(f"{self.URL}{batch}/undo/")
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertEqual(r.data["stale"], [f"job:{self.job.pk}"])
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "edited in jac")
+
+    def test_the_session_imports_and_lists(self):
+        self.client.credentials()
+        self.client.force_login(self.user)
+        r = self._apply(self._describe())
+        self.assertEqual(r.status_code, 201, r.data)
+        listed = self.client.get(self.URL).data
+        self.assertEqual([b["id"] for b in listed], [r.data["id"]])
+        self.assertEqual(listed[0]["source"], CareerChange.Source.imported)
+
+    def test_someone_elses_batch(self):
+        theirs = CareerChange.objects.create(user=self.other, changes=[], stamps={})
+        self.assertEqual(self.client.get(self.URL).data, [])
+        r = self.client.post(f"{self.URL}{theirs.pk}/undo/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_the_log_keeps_the_latest_batches(self):
+        for n in range(CareerChange.KEEP + 2):
+            self._apply(
+                {
+                    "id": f"job:{self.job.pk}",
+                    "seen": self._seen(self.job),
+                    "set": {"url": f"https://a.test/{n}"},
+                }
+            )
+        self.assertEqual(
+            CareerChange.objects.filter(user=self.user).count(), CareerChange.KEEP
+        )

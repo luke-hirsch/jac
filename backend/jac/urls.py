@@ -11,6 +11,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from jac.views import (
+    AccessTokenViewSet,
     ApplicationLayoutViewSet,
     CertificationViewSet,
     CvAttachmentViewSet,
@@ -24,6 +25,13 @@ from jac.views import (
     LocationViewSet,
     ProjectViewSet,
     SampleCareerView,
+    SkillApplicationDetailView,
+    SkillApplicationListView,
+    SkillBundleView,
+    SkillCareerChangeListView,
+    SkillCareerChangeUndoView,
+    SkillCareerView,
+    SkillReviewView,
     SkillViewSet,
 )
 
@@ -40,8 +48,33 @@ router.register("generations", GenerationRunViewSet, basename="generation")
 router.register("applications", JobApplicationViewSet, basename="application")
 router.register("layouts", ApplicationLayoutViewSet, basename="layout")
 router.register("attachments", CvAttachmentViewSet, basename="attachment")
+router.register("skill/tokens", AccessTokenViewSet, basename="skill-token")
 
 urlpatterns = router.urls + [
     path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),
     path("sample-career/", SampleCareerView.as_view(), name="sample-career"),
+    # The Claude skill: a personal token or the session (jac/skill.py).
+    path("skill/career/", SkillCareerView.as_view(), name="skill-career"),
+    path(
+        "skill/applications/",
+        SkillApplicationListView.as_view(),
+        name="skill-applications",
+    ),
+    path(
+        "skill/applications/<int:pk>/",
+        SkillApplicationDetailView.as_view(),
+        name="skill-application",
+    ),
+    path("skill/review/", SkillReviewView.as_view(), name="skill-review"),
+    path(
+        "skill/career/changes/",
+        SkillCareerChangeListView.as_view(),
+        name="skill-career-changes",
+    ),
+    path(
+        "skill/career/changes/<int:pk>/undo/",
+        SkillCareerChangeUndoView.as_view(),
+        name="skill-career-change-undo",
+    ),
+    path("skill/bundle/", SkillBundleView.as_view(), name="skill-bundle"),
 ]
