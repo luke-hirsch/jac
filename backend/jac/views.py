@@ -1258,12 +1258,13 @@ class SkillBundleView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        _, key = mint_token(
-            request.user, f"Claude skill, {timezone.localdate().isoformat()}"
-        )
-        response = HttpResponse(
-            skill_bundle(request.user, key), content_type="application/zip"
-        )
+        # One transaction: a token whose zip never went out is a key nobody holds.
+        with transaction.atomic():
+            _, key = mint_token(
+                request.user, f"Claude skill, {timezone.localdate().isoformat()}"
+            )
+            bundle = skill_bundle(request.user, key)
+        response = HttpResponse(bundle, content_type="application/zip")
         response["Content-Disposition"] = 'attachment; filename="jac-skill.zip"'
         # It carries a live token: no cache along the way may keep a copy.
         response["Cache-Control"] = "no-store"

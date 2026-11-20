@@ -215,9 +215,8 @@ def career_payload(user) -> dict:
     cv = CV(user.pk)
     # What the shapes read beyond CV's own prefetches.
     prefetch_related_objects(cv.entries["skills"], "related_skills", "builds_on")
-    prefetch_related_objects(
-        [*cv.entries["educations"], *cv.entries["certifications"]], "domains"
-    )
+    prefetch_related_objects(cv.entries["educations"], "domains")
+    prefetch_related_objects(cv.entries["certifications"], "domains")
     profile = getattr(user, "profile", None)
     personality = PersonalityProfile.objects.filter(user=user).first()
     labels = {q.slug: q.prompt for q in PersonalityQuestion.objects.for_user(user)}
