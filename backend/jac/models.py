@@ -778,10 +778,11 @@ class CvAttachment(models.Model):
 
 
 class AccessToken(models.Model):
-    """A personal token for the Claude skill: it reads the career DB and writes applications
-    over `/api/jac/skill/`, and nothing else (`jac.tokens.AccessTokenAuthentication` sits on
-    those views only, never in DRF's defaults). Only the SHA-256 of the key is stored; the key
-    itself is shown once. Revoking is deleting the row."""
+    """A personal token for the Claude skill: it reads the career DB, writes applications and
+    edits career entries over `/api/jac/skill/`, and nothing else
+    (`jac.tokens.AccessTokenAuthentication` sits on those views only, never in DRF's
+    defaults). It deletes nothing but a skill its own batch created, on undo. Only the SHA-256
+    of the key is stored; the key itself is shown once. Revoking is deleting the row."""
 
     MAX_PER_USER = 10
 
@@ -800,3 +801,32 @@ class AccessToken(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name or 'token'} ({self.prefix}…)"
+
+
+class CareerChange(models.Model):
+    """One batch of career edits the Claude skill applied, or the SPA imported from a file it
+    wrote (`jac.career_changes`). Each change keeps the touched fields as they were before and
+    after, so the batch can be undone; `stamps` holds every touched entry's `updated_at` after
+    the batch, so an undo can tell when the user has edited one since."""
+
+    KEEP = 50
+
+    class Source(models.TextChoices):
+        claude = "claude", _("Claude")
+        imported = "import", _("Imported")
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="career_changes"
+    )
+    source = models.CharField(max_length=10, choices=Source, default=Source.claude)
+    # [{id, label, why, before, after}]; before is None for an entry the batch created.
+    changes = models.JSONField(default=list)
+    stamps = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    undone_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"career change {self.pk} ({len(self.changes)})"

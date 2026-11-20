@@ -28,7 +28,10 @@ from jac.views import (
     SkillApplicationDetailView,
     SkillApplicationListView,
     SkillBundleView,
+    SkillCareerChangeListView,
+    SkillCareerChangeUndoView,
     SkillCareerView,
+    SkillReviewView,
     SkillViewSet,
 )
 
@@ -61,6 +64,17 @@ urlpatterns = router.urls + [
         "skill/applications/<int:pk>/",
         SkillApplicationDetailView.as_view(),
         name="skill-application",
+    ),
+    path("skill/review/", SkillReviewView.as_view(), name="skill-review"),
+    path(
+        "skill/career/changes/",
+        SkillCareerChangeListView.as_view(),
+        name="skill-career-changes",
+    ),
+    path(
+        "skill/career/changes/<int:pk>/undo/",
+        SkillCareerChangeUndoView.as_view(),
+        name="skill-career-change-undo",
     ),
     path("skill/bundle/", SkillBundleView.as_view(), name="skill-bundle"),
 ]

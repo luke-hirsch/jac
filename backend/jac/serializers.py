@@ -1023,6 +1023,18 @@ class SkillApplicationSerializer(serializers.Serializer):
         return owned_entry_ids(self.context["request"].user, value)
 
 
+class SkillCareerChangesSerializer(serializers.Serializer):
+    """A batch of career edits from the skill. Only the envelope is checked here; each change
+    is checked against its entry's own serializer in `jac.career_changes`."""
+
+    MAX_CHANGES = 100
+
+    changes = serializers.ListField(
+        child=serializers.JSONField(), min_length=1, max_length=MAX_CHANGES
+    )
+    dry_run = serializers.BooleanField(default=False)
+
+
 class AccessTokenSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccessToken

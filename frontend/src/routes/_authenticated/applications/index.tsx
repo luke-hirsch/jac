@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
+import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
+import { Lines } from "@/components/toast-lines";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
 import {
@@ -230,35 +232,32 @@ function ApplicationsPage() {
   );
 }
 
-/** One message per line, for a toast that has several to say. */
-function Lines({ lines }: { lines: string[] }) {
-  return (
-    <div className="space-y-0.5">
-      {lines.map((line, i) => (
-        <p key={i}>{line}</p>
-      ))}
-    </div>
-  );
-}
-
 /** Import an application the Claude skill wrote as a file, when Claude's sandbox couldn't reach
- *  jac to save it itself (account → Claude). */
+ *  jac to save it itself (account → Claude). A file of career changes is imported as those. */
 function ImportFromClaude() {
   const navigate = useNavigate();
   const importApp = useImportApplication();
+  const importChanges = useImportChangesFile(
+    "Account → Claude lists them, and can undo them.",
+  );
   const fileRef = useRef<HTMLInputElement>(null);
+  const pending = importApp.isPending || importChanges.isPending;
 
   async function onFile(file: File) {
-    let body;
+    let parsed;
     try {
-      body = parseImportFile(await file.text());
+      parsed = parseImportFile(await file.text());
     } catch (e) {
       toast.error((e as Error).message);
       return;
     }
+    if (parsed.kind === "changes") {
+      await importChanges.apply(parsed.changes);
+      return;
+    }
     let app;
     try {
-      app = await importApp.mutateAsync(body);
+      app = await importApp.mutateAsync(parsed.body);
     } catch (e) {
       toast.error("Could not import the application", {
         description: <Lines lines={errorLines(e, "Try again in a moment.")} />,
@@ -293,10 +292,10 @@ function ImportFromClaude() {
       />
       <Button
         variant="outline"
-        disabled={importApp.isPending}
+        disabled={pending}
         onClick={() => fileRef.current?.click()}
       >
-        {importApp.isPending ? "Importing…" : "Import from Claude"}
+        {pending ? "Importing…" : "Import from Claude"}
       </Button>
     </>
   );

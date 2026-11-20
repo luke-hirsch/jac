@@ -18,8 +18,10 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import prefetch_related_objects
 from django.utils import timezone
 
+from jac.career_review import review_career
 from jac.cover_letter import (
     letter_closing,
     letter_salutation,
@@ -29,7 +31,13 @@ from jac.cover_letter import (
 )
 from jac.cv import CV
 from jac.generation_result import serialize_cv_selection
-from jac.models import Education, JobApplication, JobPostAddress, JobPosting
+from jac.models import (
+    Domain,
+    Education,
+    JobApplication,
+    JobPostAddress,
+    JobPosting,
+)
 from jac.register import register_leaks, resolve_address_form
 from spa.models import PersonalityProfile, PersonalityQuestion
 
@@ -66,6 +74,11 @@ def _iso(value) -> str | None:
     return value.isoformat() if value else None
 
 
+def _stamp(obj) -> str:
+    # Full precision: a career change sends it back as `seen`, and jac compares it exactly.
+    return obj.updated_at.isoformat()
+
+
 def _names(manager) -> list[str]:
     return [o.name for o in manager.all()]
 
@@ -91,6 +104,7 @@ def _job(j) -> dict:
         "domains": _names(j.domains),
         "projects": [f"project:{p.pk}" for p in j.projects.all()],
         "favourite": j.favourite,
+        "updated_at": _stamp(j),
     }
 
 
@@ -107,6 +121,7 @@ def _project(p) -> dict:
         "skills": _names(p.skills),
         "domains": _names(p.domains),
         "favourite": p.favourite,
+        "updated_at": _stamp(p),
     }
 
 
@@ -125,7 +140,9 @@ def _education(e) -> dict:
         "ended": _iso(e.ended),
         "description": e.description,
         "skills": _names(e.skills),
+        "domains": _names(e.domains),
         "favourite": e.favourite,
+        "updated_at": _stamp(e),
     }
 
 
@@ -136,10 +153,13 @@ def _certification(c) -> dict:
         "issuer": c.issuer,
         "issued_on": _iso(c.issued_on),
         "expires_on": _iso(c.expires_on),
+        "credential_id": c.credential_id,
         "url": c.url,
         "description": c.description,
         "skills": _names(c.skills),
+        "domains": _names(c.domains),
         "favourite": c.favourite,
+        "updated_at": _stamp(c),
     }
 
 
@@ -150,9 +170,17 @@ def _skill(s) -> dict:
         "proficiency": s.proficiency,
         "category": s.category,
         "years": s.years_of_experience,
+        "first_used": _iso(s.first_used),
         "description": s.description,
         "domains": _names(s.domains),
+        # Skill-to-skill links, by id: what this one is related to, and what it builds on.
+        "related_skills": [f"skill:{o.pk}" for o in s.related_skills.all()],
+        "builds_on": [f"skill:{o.pk}" for o in s.builds_on.all()],
+        "certification": (
+            f"certification:{s.certification_id}" if s.certification_id else None
+        ),
         "favourite": s.favourite,
+        "updated_at": _stamp(s),
     }
 
 
@@ -161,8 +189,12 @@ def _language(la) -> dict:
         "id": f"language:{la.pk}",
         "name": la.name,
         "fluency": la.fluency,
+        "certification": (
+            f"certification:{la.certification_id}" if la.certification_id else None
+        ),
         "description": la.description,
         "favourite": la.favourite,
+        "updated_at": _stamp(la),
     }
 
 
@@ -181,6 +213,11 @@ def career_payload(user) -> dict:
     letters, and every career entry with its `type:pk` id. Names instead of foreign keys, so
     Claude reads it without a second lookup."""
     cv = CV(user.pk)
+    # What the shapes read beyond CV's own prefetches.
+    prefetch_related_objects(cv.entries["skills"], "related_skills", "builds_on")
+    prefetch_related_objects(
+        [*cv.entries["educations"], *cv.entries["certifications"]], "domains"
+    )
     profile = getattr(user, "profile", None)
     personality = PersonalityProfile.objects.filter(user=user).first()
     labels = {q.slug: q.prompt for q in PersonalityQuestion.objects.for_user(user)}
@@ -204,6 +241,10 @@ def career_payload(user) -> dict:
         ],
         "writing_sample": (personality.writing_sample if personality else "") or "",
         "highest_degree": cv.highest_degree_id(),
+        # The domains an entry may be tagged with, by name: jac's defaults and the user's own.
+        "domains": sorted(
+            set(Domain.objects.for_user(user).values_list("name", flat=True))
+        ),
         "entries": {
             section: [shape(obj) for obj in cv.entries[section]]
             for section, shape in _ENTRY_SHAPES.items()
@@ -392,8 +433,8 @@ def save_application(
 
 def skill_bundle(user, key: str) -> bytes:
     """The skill as a zip Claude takes as an upload: the skill folder, a `config.json` with
-    this site's address and the token, and `career.json`, a snapshot of the career DB for when
-    the sandbox can't reach jac."""
+    this site's address and the token, and two snapshots for when the sandbox can't reach jac:
+    `career.json` (the career DB) and `review.json` (the machine review of it)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(SKILL_DIR.rglob("*")):
@@ -406,5 +447,9 @@ def skill_bundle(user, key: str) -> bytes:
         z.writestr(
             f"{SKILL_NAME}/career.json",
             json.dumps(career_payload(user), indent=1, ensure_ascii=False),
+        )
+        z.writestr(
+            f"{SKILL_NAME}/review.json",
+            json.dumps(review_career(user), indent=1, ensure_ascii=False),
         )
     return buf.getvalue()

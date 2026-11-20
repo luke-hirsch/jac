@@ -6,11 +6,18 @@
     python3 scripts/jac.py show ID             one application, in the shape `save` takes
     python3 scripts/jac.py save FILE           create the application in FILE, or update it
                                                when FILE carries an "id" (written on create)
+    python3 scripts/jac.py review              the machine review of the career, as JSON
+    python3 scripts/jac.py apply FILE [--check]
+                                               apply the career changes in FILE; --check only
+                                               validates them and shows the result
+    python3 scripts/jac.py changes             the latest batches of career changes
+    python3 scripts/jac.py undo ID             put a batch's entries back as they were
 
 Where jac is and the token: JAC_URL / JAC_TOKEN from the environment (Claude Code), else
 config.json next to SKILL.md (the zip jac hands out). When jac can't be reached from here,
-`career` falls back to career.json, the snapshot in the zip, and `save` says how to import
-the file in jac instead. Exit codes: 0 ok, 1 jac refused (the message says why), 2 offline.
+`career` and `review` fall back to career.json and review.json, the snapshots in the zip, and
+`save` and `apply` say how to import the file in jac instead. Exit codes: 0 ok, 1 jac refused
+(the message says why), 2 offline.
 """
 
 from __future__ import annotations
@@ -105,23 +112,32 @@ def offline_note(reason: str) -> str:
     )
 
 
-def cmd_career(_args) -> int:
+def read_or_snapshot(path: str, snapshot_name: str) -> int:
     try:
-        show(call("GET", "career/"))
+        show(call("GET", path))
         return 0
     except Offline as err:
-        snapshot = SKILL_DIR / "career.json"
+        snapshot = SKILL_DIR / snapshot_name
         if not snapshot.exists():
             print(offline_note(str(err)), file=sys.stderr)
             return OFFLINE
         data = json.loads(snapshot.read_text())
         print(
             f"{offline_note(str(err))}\nUsing the snapshot in the skill, taken "
-            f"{data.get('generated_at', '?')}. Saving works by import: see `save`.",
+            f"{data.get('generated_at', '?')}. Saving works by import: see `save` and "
+            "`apply`.",
             file=sys.stderr,
         )
         show(data)
         return 0
+
+
+def cmd_career(_args) -> int:
+    return read_or_snapshot("career/", "career.json")
+
+
+def cmd_review(_args) -> int:
+    return read_or_snapshot("review/", "review.json")
 
 
 def cmd_applications(_args) -> int:
@@ -169,11 +185,83 @@ def cmd_save(args) -> int:
     return 0
 
 
+def cmd_apply(args) -> int:
+    check = "--check" in args
+    args = [a for a in args if a != "--check"]
+    if len(args) != 1:
+        raise Refused("Usage: jac.py apply FILE [--check]")
+    path = Path(args[0])
+    data = json.loads(path.read_text())
+    if data.get("applied_as"):
+        raise Refused(
+            f"{path.name} was applied already, as batch {data['applied_as']}. To take it "
+            f"back: `undo {data['applied_as']}`. For more changes, write a new file."
+        )
+    body = {"changes": data.get("changes", []), "dry_run": check}
+    try:
+        result = call("POST", "career/changes/", body)
+    except Offline as err:
+        print(
+            f"{offline_note(str(err))}\nNothing was changed. Give the user {path.name} to "
+            "download and import in jac: Account → Claude → Import changes.",
+            file=sys.stderr,
+        )
+        return OFFLINE
+    if not check:
+        # A second apply of the same file would double up: mark it.
+        path.write_text(
+            json.dumps(
+                {"applied_as": result["id"], **data}, indent=1, ensure_ascii=False
+            )
+        )
+    show(
+        {
+            "id": result["id"],
+            "checked_only": check,
+            "changes": len(result["changes"]),
+            "created": result.get("created", {}),
+            "after": {c["id"]: c["after"] for c in result["changes"]},
+        }
+    )
+    return 0
+
+
+def cmd_changes(_args) -> int:
+    batches = call("GET", "career/changes/")
+    show(
+        [
+            {
+                "id": b["id"],
+                "created_at": b["created_at"],
+                "source": b["source"],
+                "undone_at": b["undone_at"],
+                "changes": [
+                    f"{c['id']} {c['label']}: {c['why']}" for c in b["changes"]
+                ],
+            }
+            for b in batches
+        ]
+    )
+    return 0
+
+
+def cmd_undo(args) -> int:
+    if len(args) != 1 or not args[0].isdigit():
+        raise Refused("Usage: jac.py undo ID")
+    result = call("POST", f"career/changes/{args[0]}/undo/")
+    show({"id": result["id"], "undone_at": result["undone_at"]})
+    return 0
+
+
 COMMANDS = {
     "career": cmd_career,
     "applications": cmd_applications,
     "show": cmd_show,
     "save": cmd_save,
+    "review": cmd_review,
+    "apply": cmd_apply,
+    "changes": cmd_changes,
+    "undo": cmd_undo,
 }
 
 

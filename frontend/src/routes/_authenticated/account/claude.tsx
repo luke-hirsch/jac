@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { QueryError } from "@/components/query-error";
+import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
+import { Lines } from "@/components/toast-lines";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,13 +18,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  changeRows,
   envLines,
   errorLines,
+  parseImportFile,
+  staleLines,
   useAccessTokens,
+  useCareerChanges,
   useCreateAccessToken,
   useDownloadSkill,
   useRevokeAccessToken,
+  useUndoCareerChange,
   type AccessTokenRow,
+  type CareerChange,
+  type CareerChangeBatch,
   type NewAccessToken,
 } from "@/lib/queries/skill";
 
@@ -46,6 +56,8 @@ function ClaudePage() {
         <DownloadSkill />
         <SetupSteps />
       </section>
+      <Separator />
+      <CareerChanges />
       <Separator />
       <ClaudeCode />
       <Separator />
@@ -95,6 +107,237 @@ function SetupSteps() {
       </li>
       <li>Start a chat and paste a job posting (or its link).</li>
     </ol>
+  );
+}
+
+function when(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+/** The batches of career edits Claude applied or the user imported, newest first, each one
+ *  undoable. */
+function CareerChanges() {
+  const batches = useCareerChanges();
+  const rows = batches.data ?? [];
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="font-medium">Career changes</h3>
+        <p className="text-sm text-muted-foreground">
+          Claude can review your career and, once you agree, edit entries:
+          descriptions, the skills a job used, skills that are missing. Every
+          batch of changes is listed here and can be undone. If Claude handed
+          you a <code>career-changes.json</code>, import it here.
+        </p>
+      </div>
+      <ImportChanges />
+      {rows.length ? (
+        <ul className="divide-y">
+          {rows.map((batch) => (
+            <BatchItem key={batch.id} batch={batch} />
+          ))}
+        </ul>
+      ) : batches.isError ? (
+        <QueryError
+          error={batches.error}
+          what="your career changes"
+          onRetry={() => batches.refetch()}
+          retrying={batches.isFetching}
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {batches.isLoading ? "Loading…" : "No changes yet."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Import the changes Claude wrote as a file, when its sandbox couldn't reach jac. */
+function ImportChanges() {
+  const importChanges = useImportChangesFile();
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onFile(file: File) {
+    let parsed;
+    try {
+      parsed = parseImportFile(await file.text());
+    } catch (e) {
+      toast.error((e as Error).message);
+      return;
+    }
+    if (parsed.kind === "application")
+      toast.error(
+        "That's an application: import it under Applications → Import from Claude.",
+      );
+    else await importChanges.apply(parsed.changes);
+  }
+
+  return (
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = ""; // the same file again is a new pick
+          if (file) onFile(file);
+        }}
+      />
+      <Button
+        variant="outline"
+        disabled={importChanges.isPending}
+        onClick={() => fileRef.current?.click()}
+      >
+        {importChanges.isPending ? "Importing…" : "Import changes"}
+      </Button>
+    </>
+  );
+}
+
+function BatchItem({ batch }: { batch: CareerChangeBatch }) {
+  const undo = useUndoCareerChange();
+  const n = batch.changes.length;
+  const count = `${n} change${n === 1 ? "" : "s"}`;
+
+  function onUndo() {
+    if (!confirm(`Undo ${count}? The entries go back to how they were.`))
+      return;
+    undo.mutate(batch.id, {
+      onSuccess: () => toast.success("Changes undone"),
+      onError: (e) =>
+        toast.error("Could not undo", {
+          description: (
+            <Lines lines={staleLines(e, "Try again in a moment.", batch)} />
+          ),
+          duration: 10_000,
+        }),
+    });
+  }
+
+  return (
+    <li className="space-y-2 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm">
+          <span className="font-medium">{when(batch.created_at)}</span>
+          <span className="text-muted-foreground">
+            {" "}
+            · {batch.source === "claude" ? "by Claude" : "imported"} · {count}
+          </span>
+        </p>
+        {batch.undone_at ? (
+          <span className="text-xs text-muted-foreground">
+            undone {when(batch.undone_at)}
+          </span>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={undo.isPending}
+            onClick={onUndo}
+          >
+            {undo.isPending ? "Undoing…" : "Undo"}
+          </Button>
+        )}
+      </div>
+      <ul className={batch.undone_at ? "space-y-1 opacity-60" : "space-y-1"}>
+        {batch.changes.map((change, i) => (
+          <ChangeItem
+            key={`${change.id}-${i}`}
+            change={change}
+            labels={batch.labels}
+          />
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+function ChangeItem({
+  change,
+  labels,
+}: {
+  change: CareerChange;
+  labels: Record<string, string>;
+}) {
+  const rows = changeRows(change, labels);
+  // A new entry has no before, a removed one no after: one column says it all.
+  const oneSide = change.before === null || change.after === null;
+  return (
+    <li>
+      <details className="rounded border px-3 py-2">
+        <summary className="cursor-pointer text-sm">
+          <span className="font-medium">{change.label || change.id}</span>
+          {change.before === null && (
+            <Badge variant="secondary" className="ml-2">
+              new
+            </Badge>
+          )}
+          {change.after === null && (
+            <Badge variant="outline" className="ml-2">
+              removed
+            </Badge>
+          )}
+          {change.why && (
+            <span className="text-muted-foreground"> · {change.why}</span>
+          )}
+        </summary>
+        <div className="mt-2 space-y-3">
+          {rows.length ? (
+            rows.map((row) => (
+              <div key={row.field} className="space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {row.field}
+                </p>
+                {row.kind === "list" ? (
+                  <div className="text-sm">
+                    {row.added.length > 0 && (
+                      <p>added: {row.added.join(", ")}</p>
+                    )}
+                    {row.removed.length > 0 && (
+                      <p>removed: {row.removed.join(", ")}</p>
+                    )}
+                  </div>
+                ) : oneSide ? (
+                  <FieldText text={row.after ?? row.before} />
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <FieldText caption="before" text={row.before} />
+                    <FieldText caption="after" text={row.after} />
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">Nothing to show.</p>
+          )}
+        </div>
+      </details>
+    </li>
+  );
+}
+
+function FieldText({
+  caption,
+  text,
+}: {
+  caption?: string;
+  text: string | null;
+}) {
+  return (
+    <div className="min-w-0 rounded bg-muted px-2 py-1 text-sm">
+      {caption && <p className="text-xs text-muted-foreground">{caption}</p>}
+      {text === null ? (
+        <p className="italic text-muted-foreground">empty</p>
+      ) : (
+        <p className="whitespace-pre-wrap break-words">{text}</p>
+      )}
+    </div>
   );
 }
 

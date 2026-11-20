@@ -43,12 +43,23 @@ from rest_framework.settings import api_settings as drf_api_settings
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from jac.career_changes import (
+    ChangeError,
+    StaleError,
+    UndoRefused,
+    apply_changes,
+    batch_payload,
+    entry_labels,
+    undo_batch,
+)
 from jac.career_import import CareerNotEmpty, load_sample_career
+from jac.career_review import review_career
 from jac.cv import CV
 from jac.llm_prompts import LetterChat
 from jac.models import (
     AccessToken,
     ApplicationLayout,
+    CareerChange,
     Certification,
     CvAttachment,
     Domain,
@@ -90,6 +101,7 @@ from jac.serializers import (
     RewriteRequestSerializer,
     ShortenRequestSerializer,
     SkillApplicationSerializer,
+    SkillCareerChangesSerializer,
     SkillSerializer,
 )
 from jac.skill import (
@@ -1069,6 +1081,106 @@ class SkillApplicationDetailView(_SkillView):
             request.user, serializer.validated_data, application
         )
         return Response({**application_payload(application), "warnings": warnings})
+
+
+class SkillReviewView(_SkillView):
+    """The machine half of a career review (`jac.career_review`): findings Claude reads next to
+    the career before it adds its own judgment."""
+
+    @extend_schema(responses=OpenApiResponse(description="{counts, findings}"))
+    def get(self, request):
+        return Response(review_career(request.user))
+
+
+class SkillCareerChangeListView(_SkillView):
+    """GET the latest batches of career edits; POST a batch (`jac.career_changes`). On the
+    token it's Claude applying it; on the session it's the SPA importing a file Claude wrote."""
+
+    LIMIT = 20
+
+    @extend_schema(responses=OpenApiResponse(description="[batch]"))
+    def get(self, request):
+        rows = CareerChange.objects.filter(user=request.user)[: self.LIMIT]
+        return Response([batch_payload(b) for b in rows])
+
+    @extend_schema(
+        request=SkillCareerChangesSerializer,
+        responses={
+            201: OpenApiResponse(description="The batch + `created`"),
+            409: OpenApiResponse(description="{detail, stale}: entries edited since"),
+        },
+    )
+    def post(self, request):
+        serializer = SkillCareerChangesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        on_token = isinstance(
+            request.successful_authenticator, AccessTokenAuthentication
+        )
+        dry_run = serializer.validated_data["dry_run"]
+        try:
+            payload = apply_changes(
+                request,
+                serializer.validated_data["changes"],
+                source=CareerChange.Source.claude
+                if on_token
+                else CareerChange.Source.imported,
+                dry_run=dry_run,
+            )
+        except ChangeError as err:
+            return Response({"changes": err.errors}, status=status.HTTP_400_BAD_REQUEST)
+        except StaleError as err:
+            # Claude reads this on the token, the user on an import.
+            redo = (
+                "Read the career again and redo these changes from what it says now."
+                if on_token
+                else "Ask Claude to read your career again and redo these changes."
+            )
+            return Response(
+                {
+                    "detail": f"{err.detail} {redo}",
+                    "stale": err.ids,
+                    "labels": entry_labels(request.user, err.ids),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(
+            payload, status=status.HTTP_200_OK if dry_run else status.HTTP_201_CREATED
+        )
+
+
+class SkillCareerChangeUndoView(_SkillView):
+    """POST: put a batch's entries back as they were. Someone else's batch is a 404."""
+
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="The batch, undone"),
+            409: OpenApiResponse(description="{detail, stale?}: can't undo"),
+        },
+    )
+    def post(self, request, pk):
+        get_object_or_404(CareerChange, pk=pk, user=request.user)
+        try:
+            return Response(undo_batch(request, pk))
+        except UndoRefused as err:
+            return Response({"detail": str(err)}, status=status.HTTP_409_CONFLICT)
+        except StaleError as err:
+            return Response(
+                {
+                    "detail": err.detail,
+                    "stale": err.ids,
+                    "labels": entry_labels(request.user, err.ids),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except ChangeError as err:
+            return Response(
+                {
+                    "detail": "jac can't put these back as they were.",
+                    "changes": err.errors,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
 
 class AccessTokenViewSet(

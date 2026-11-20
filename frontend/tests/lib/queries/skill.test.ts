@@ -1,17 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
+  changeRows,
   envLines,
   errorLines,
   fetchSkillBundle,
   parseImportFile,
+  staleLines,
   validationLines,
+  type CareerChange,
 } from "@/lib/queries/skill";
 
 /**
  * The Claude skill's SPA side (account → Claude, applications → Import from Claude): the
- * env lines for Claude Code, DRF errors as readable lines, the import file check, and the
- * bundle's raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
+ * env lines for Claude Code, DRF errors as readable lines, the import file check (an
+ * application or career changes), a career change as display rows, the 409's stale entries
+ * by name, and the bundle's raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
  */
 
 afterEach(() => vi.unstubAllGlobals());
@@ -86,18 +90,208 @@ describe("errorLines", () => {
 });
 
 describe("parseImportFile", () => {
-  it("returns the object as it is", () => {
+  it("returns an application file as it is", () => {
     const file = { posting: { text: "Ad" }, entries: ["job:3"], letter: {} };
-    expect(parseImportFile(JSON.stringify(file))).toEqual(file);
+    expect(parseImportFile(JSON.stringify(file))).toEqual({
+      kind: "application",
+      body: file,
+    });
+    // One of the three is enough: the server says what else is missing.
+    expect(parseImportFile('{"letter": {}}').kind).toBe("application");
+  });
+
+  it("tells a changes file by its list, and keeps only the list", () => {
+    const changes = [{ id: "job:3", why: "Clearer." }];
+    expect(parseImportFile(JSON.stringify({ changes, applied_as: 7 }))).toEqual(
+      { kind: "changes", changes },
+    );
   });
 
   it("says so when the file isn't JSON", () => {
     expect(() => parseImportFile("{ not json")).toThrow(/isn't valid JSON/);
   });
 
-  it("says so when the JSON isn't an object", () => {
-    for (const text of ["[]", "null", "42", '"text"'])
-      expect(() => parseImportFile(text)).toThrow(/isn't an application/);
+  it("says so when the JSON is neither", () => {
+    for (const text of [
+      "[]",
+      "null",
+      "42",
+      '"text"',
+      "{}",
+      '{"name": "jac"}',
+      '{"changes": "job:3"}',
+    ])
+      expect(() => parseImportFile(text)).toThrow(
+        /isn't an application or career changes/,
+      );
+  });
+});
+
+describe("changeRows", () => {
+  const change = (
+    before: CareerChange["before"],
+    after: CareerChange["after"],
+  ): CareerChange => ({
+    id: "job:3",
+    label: "Dev at Acme",
+    why: "",
+    before,
+    after,
+  });
+
+  it("gives a value before and after, multi-line text as it is", () => {
+    expect(
+      changeRows(
+        change(
+          { description: "Old.", current: false, hours: 20 },
+          { description: "New.\nTwo lines.", current: true, hours: 40 },
+        ),
+        {},
+      ),
+    ).toEqual([
+      {
+        kind: "value",
+        field: "description",
+        before: "Old.",
+        after: "New.\nTwo lines.",
+      },
+      { kind: "value", field: "current", before: "no", after: "yes" },
+      { kind: "value", field: "hours", before: "20", after: "40" },
+    ]);
+  });
+
+  it("reads an empty value as null", () => {
+    expect(
+      changeRows(
+        change({ summary: "", end: "2024" }, { summary: "Text", end: null }),
+        {},
+      ),
+    ).toEqual([
+      { kind: "value", field: "summary", before: null, after: "Text" },
+      { kind: "value", field: "end", before: "2024", after: null },
+    ]);
+  });
+
+  it("gives a relation list's additions and removals, ids by label", () => {
+    const labels = { "skill:12": "Docker", "skill:5": "Python" };
+    expect(
+      changeRows(
+        change(
+          { skills: ["skill:12", "skill:5"], domains: ["Backend"] },
+          { skills: ["skill:5", "skill:44"], domains: ["Backend", "Cloud"] },
+        ),
+        labels,
+      ),
+    ).toEqual([
+      // skill:44 has no label: its id stands in.
+      {
+        kind: "list",
+        field: "skills",
+        added: ["skill:44"],
+        removed: ["Docker"],
+      },
+      { kind: "list", field: "domains", added: ["Cloud"], removed: [] },
+    ]);
+  });
+
+  it("shows a new entry's fields as added, without the empty ones", () => {
+    expect(
+      changeRows(
+        change(null, {
+          name: "Docker",
+          description: "",
+          domains: ["DevOps"],
+          builds_on: [],
+        }),
+        {},
+      ),
+    ).toEqual([
+      { kind: "value", field: "name", before: null, after: "Docker" },
+      { kind: "list", field: "domains", added: ["DevOps"], removed: [] },
+    ]);
+  });
+
+  it("shows a removed entry's fields as they were", () => {
+    expect(changeRows(change({ name: "Docker" }, null), {})).toEqual([
+      { kind: "value", field: "name", before: "Docker", after: null },
+    ]);
+  });
+
+  it("leaves out fields that read the same, and spells out field names", () => {
+    expect(
+      changeRows(
+        change(
+          { skills: ["skill:5", "skill:12"], title: "Dev", builds_on: null },
+          {
+            skills: ["skill:12", "skill:5"],
+            title: "Dev",
+            builds_on: "skill:12",
+          },
+        ),
+        { "skill:12": "Docker" },
+      ),
+    ).toEqual([
+      { kind: "value", field: "builds on", before: null, after: "Docker" },
+    ]);
+  });
+});
+
+describe("staleLines", () => {
+  const stale = new ApiError(409, {
+    detail: "Edited in jac since.",
+    stale: ["job:3", "skill:12", "project:9"],
+  });
+
+  it("names the stale entries by the batch, else by id", () => {
+    const batch = {
+      changes: [
+        { id: "job:3", label: "Dev at Acme", why: "", before: {}, after: {} },
+      ],
+      labels: { "skill:12": "Docker" },
+    };
+    expect(staleLines(stale, "fallback", batch)).toEqual([
+      "Edited in jac since.",
+      "Dev at Acme",
+      "Docker",
+      "project:9",
+    ]);
+  });
+
+  it("gives the ids as they are without a batch or labels", () => {
+    expect(staleLines(stale, "fallback")).toEqual([
+      "Edited in jac since.",
+      "job:3",
+      "skill:12",
+      "project:9",
+    ]);
+  });
+
+  it("names them by the 409's own labels on an import", () => {
+    const answer = new ApiError(409, {
+      detail: "Changed in jac since Claude read them.",
+      stale: ["job:3", "job:4"],
+      labels: { "job:3": "Dev at Acme" },
+    });
+    expect(staleLines(answer, "fallback")).toEqual([
+      "Changed in jac since Claude read them.",
+      "Dev at Acme",
+      "job:4",
+    ]);
+  });
+
+  it("reads any other failure as errorLines", () => {
+    expect(
+      staleLines(new ApiError(409, { detail: "Already undone." }), "fallback"),
+    ).toEqual(["Already undone."]);
+    expect(
+      staleLines(
+        new ApiError(400, { changes: { 2: { description: ["Too long."] } } }),
+        "fallback",
+      ),
+    ).toEqual(["changes.2.description: Too long."]);
+    expect(staleLines(new TypeError("Failed to fetch"), "fallback")).toEqual([
+      "fallback",
+    ]);
   });
 });
 

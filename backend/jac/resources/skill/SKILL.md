@@ -1,6 +1,6 @@
 ---
 name: jac
-description: Tailor a CV and a cover letter to a job posting from the user's career database in jac, talk both through with them, and save the result to jac, where they export the PDF. Use when the user pastes or links a job posting, asks for a CV, Lebenslauf, cover letter, Anschreiben or Bewerbung, or asks about their applications in jac.
+description: Tailor a CV and a cover letter to a job posting from the user's career database in jac, talk both through with them, and save the result to jac, where they export the PDF. Also reviews that career database and improves it with the user's consent. Use when the user pastes or links a job posting, asks for a CV, Lebenslauf, cover letter, Anschreiben or Bewerbung, asks about their applications in jac, or wants their career data, CV entries or skills checked, completed or improved.
 ---
 
 # jac: applications from the career database
@@ -10,6 +10,10 @@ renders and exports the finished application as a PDF. In this conversation you 
 tailoring: you pick the CV entries, write the letter body and talk it through with the user.
 Nothing reaches jac until the user wants it saved.
 
+You can also review the career itself and, once the user agrees, improve the entries. **When
+the user wants their career data checked or improved, read `REVIEW.md` in this folder first**
+and follow it; the rest of this file is about applications.
+
 All calls go through `scripts/jac.py` in this skill's folder (Python 3, standard library only):
 
 | command | what it does |
@@ -18,6 +22,10 @@ All calls go through `scripts/jac.py` in this skill's folder (Python 3, standard
 | `python3 scripts/jac.py applications` | the latest applications (id, title, company, status, link) |
 | `python3 scripts/jac.py show ID` | one application, in the shape `save` takes |
 | `python3 scripts/jac.py save FILE` | creates the application in FILE; once FILE carries an `"id"` (written on the first save), saving it again updates the same application |
+| `python3 scripts/jac.py review` | jac's machine review of the career (see `REVIEW.md`) |
+| `python3 scripts/jac.py apply FILE [--check]` | applies the career changes in FILE; `--check` only validates them (see `REVIEW.md`) |
+| `python3 scripts/jac.py changes` | the latest batches of career changes |
+| `python3 scripts/jac.py undo ID` | puts a batch's entries back as they were |
 
 ## The flow
 
@@ -43,8 +51,8 @@ All calls go through `scripts/jac.py` in this skill's folder (Python 3, standard
 
 - **Only entries from `career`, by their `id`** (`job:3`, `skill:12`, …). Never invent an entry,
   and never rewrite one: jac prints each entry's own text from the database. Here you decide
-  *which* entries and in *what order*. If an entry's wording should change for good, tell the user
-  to edit it in jac.
+  *which* entries and in *what order*. If an entry's wording should change for good, offer to
+  improve it as a career change (`REVIEW.md`), separately from the application.
 - **Most relevant first within each section.** The order is the rank: when the page is full, jac
   drops entries from the end of a section, favourites after everything else.
 - **The highest completed degree is always on the CV** (`highest_degree` in the career data).
