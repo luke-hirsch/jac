@@ -59,7 +59,7 @@ from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
 
-from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
+from ._helpers import TEST_HIRSCHAI, _muted, make_application, make_user, queued_jobs
 
 RUNS_URL = "/api/jac/generations/"
 APPS_URL = "/api/jac/applications/"
@@ -1801,7 +1801,8 @@ class SkillTokenManagementTests(APITestCase):
         # The key only ever lives in the zip: a token minted for a zip that never went out is
         # one nobody holds, and it counts toward the cap.
         self.client.raise_request_exception = False
-        with patch("jac.views.skill_bundle", side_effect=ValueError("boom")):
+        # The forced 500 logs its traceback through django.request.
+        with _muted(), patch("jac.views.skill_bundle", side_effect=ValueError("boom")):
             r = self.client.post(f"{SKILL_URL}bundle/")
         self.assertEqual(r.status_code, 500)
         self.assertFalse(AccessToken.objects.filter(user=self.user).exists())
