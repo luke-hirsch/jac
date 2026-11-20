@@ -44,6 +44,7 @@ import { Route as AuthenticatedAccountPersonalityRouteImport } from './routes/_a
 import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authenticated/account/llm'
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
 import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
+import { Route as AuthenticatedAccountClaudeRouteImport } from './routes/_authenticated/account/claude'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -234,6 +235,12 @@ const AuthenticatedAccountDangerRoute =
     path: '/danger',
     getParentRoute: () => AuthenticatedAccountRoute,
   } as any)
+const AuthenticatedAccountClaudeRoute =
+  AuthenticatedAccountClaudeRouteImport.update({
+    id: '/claude',
+    path: '/claude',
+    getParentRoute: () => AuthenticatedAccountRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -250,6 +257,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle/': typeof HandleIndexRoute
+  '/account/claude': typeof AuthenticatedAccountClaudeRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -282,6 +290,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle': typeof HandleIndexRoute
+  '/account/claude': typeof AuthenticatedAccountClaudeRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -320,6 +329,7 @@ export interface FileRoutesById {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle/': typeof HandleIndexRoute
+  '/_authenticated/account/claude': typeof AuthenticatedAccountClaudeRoute
   '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
   '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -358,6 +368,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle/'
+    | '/account/claude'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -390,6 +401,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle'
+    | '/account/claude'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -427,6 +439,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle/'
+    | '/_authenticated/account/claude'
     | '/_authenticated/account/danger'
     | '/_authenticated/account/email'
     | '/_authenticated/account/llm'
@@ -703,6 +716,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountDangerRouteImport
       parentRoute: typeof AuthenticatedAccountRoute
     }
+    '/_authenticated/account/claude': {
+      id: '/_authenticated/account/claude'
+      path: '/claude'
+      fullPath: '/account/claude'
+      preLoaderRoute: typeof AuthenticatedAccountClaudeRouteImport
+      parentRoute: typeof AuthenticatedAccountRoute
+    }
   }
 }
 
@@ -720,6 +740,7 @@ const HandleRouteWithChildren =
   HandleRoute._addFileChildren(HandleRouteChildren)
 
 interface AuthenticatedAccountRouteChildren {
+  AuthenticatedAccountClaudeRoute: typeof AuthenticatedAccountClaudeRoute
   AuthenticatedAccountDangerRoute: typeof AuthenticatedAccountDangerRoute
   AuthenticatedAccountEmailRoute: typeof AuthenticatedAccountEmailRoute
   AuthenticatedAccountLlmRoute: typeof AuthenticatedAccountLlmRoute
@@ -729,6 +750,7 @@ interface AuthenticatedAccountRouteChildren {
 }
 
 const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
+  AuthenticatedAccountClaudeRoute: AuthenticatedAccountClaudeRoute,
   AuthenticatedAccountDangerRoute: AuthenticatedAccountDangerRoute,
   AuthenticatedAccountEmailRoute: AuthenticatedAccountEmailRoute,
   AuthenticatedAccountLlmRoute: AuthenticatedAccountLlmRoute,

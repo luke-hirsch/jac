@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,11 @@ import {
   useCvEntries,
 } from "@/lib/queries/jac";
 import { hasOwnName, useProfile } from "@/lib/queries/profile";
+import {
+  errorLines,
+  parseImportFile,
+  useImportApplication,
+} from "@/lib/queries/skill";
 
 export const Route = createFileRoute("/_authenticated/applications/")({
   component: ApplicationsPage,
@@ -131,20 +136,23 @@ function ApplicationsPage() {
                 all wake the AI once, and you get one mail at the end.
               </p>
             )}
-            {postings.length > 0 ? (
-              <Button onClick={onCreateBatch} disabled={batch.isPending}>
-                {batch.isPending
-                  ? "Queueing…"
-                  : `Queue ${postings.length} applications`}
-              </Button>
-            ) : (
-              <Button
-                onClick={onCreate}
-                disabled={create.isPending || !postingText.trim()}
-              >
-                {create.isPending ? "Creating…" : "Create application"}
-              </Button>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {postings.length > 0 ? (
+                <Button onClick={onCreateBatch} disabled={batch.isPending}>
+                  {batch.isPending
+                    ? "Queueing…"
+                    : `Queue ${postings.length} applications`}
+                </Button>
+              ) : (
+                <Button
+                  onClick={onCreate}
+                  disabled={create.isPending || !postingText.trim()}
+                >
+                  {create.isPending ? "Creating…" : "Create application"}
+                </Button>
+              )}
+              <ImportFromClaude />
+            </div>
           </CardContent>
         </Card>
       )}
@@ -219,5 +227,77 @@ function ApplicationsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** One message per line, for a toast that has several to say. */
+function Lines({ lines }: { lines: string[] }) {
+  return (
+    <div className="space-y-0.5">
+      {lines.map((line, i) => (
+        <p key={i}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
+/** Import an application the Claude skill wrote as a file, when Claude's sandbox couldn't reach
+ *  jac to save it itself (account → Claude). */
+function ImportFromClaude() {
+  const navigate = useNavigate();
+  const importApp = useImportApplication();
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onFile(file: File) {
+    let body;
+    try {
+      body = parseImportFile(await file.text());
+    } catch (e) {
+      toast.error((e as Error).message);
+      return;
+    }
+    let app;
+    try {
+      app = await importApp.mutateAsync(body);
+    } catch (e) {
+      toast.error("Could not import the application", {
+        description: <Lines lines={errorLines(e, "Try again in a moment.")} />,
+        duration: 10_000,
+      });
+      return;
+    }
+    if (app.warnings.length)
+      toast.warning("Imported, with warnings", {
+        description: <Lines lines={app.warnings} />,
+        duration: 10_000,
+      });
+    else toast.success("Imported from Claude");
+    navigate({
+      to: "/applications/$applicationId",
+      params: { applicationId: String(app.id) },
+    });
+  }
+
+  return (
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = ""; // the same file again is a new pick
+          if (file) onFile(file);
+        }}
+      />
+      <Button
+        variant="outline"
+        disabled={importApp.isPending}
+        onClick={() => fileRef.current?.click()}
+      >
+        {importApp.isPending ? "Importing…" : "Import from Claude"}
+      </Button>
+    </>
   );
 }

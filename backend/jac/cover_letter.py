@@ -78,6 +78,65 @@ def _furniture(table: dict, language: str, tone: str) -> str:
     return ""
 
 
+# The letter's frame as functions: a generated letter and one written elsewhere (the Claude
+# skill, jac/skill.py) get the same sender, recipient, subject, salutation and closing.
+
+
+def candidate_name(user) -> str:
+    profile = getattr(user, "profile", None)
+    if profile and profile.display_name:
+        return profile.display_name
+    full = f"{user.first_name} {user.last_name}".strip()
+    return full or user.username
+
+
+def sender_block(user) -> dict:
+    p = getattr(user, "profile", None)
+    g = lambda attr: (getattr(p, attr, "") or "") if p else ""
+    return {
+        "name": candidate_name(user),
+        "email": user.email or "",
+        "phone": g("phone"),
+        "street": g("street"),
+        "address_line2": g("address_line2"),
+        "zip": g("zip"),
+        "city": g("city"),
+        "country": g("country"),
+        "website": g("website"),
+        "linkedin": g("linkedin_url"),
+    }
+
+
+def recipient_block(address) -> dict:
+    g = lambda attr: (getattr(address, attr, "") or "") if address else ""
+    return {
+        "company": g("company"),
+        "contact_name": g("contact_name"),
+        "street": g("street"),
+        "address_line2": g("address_line2"),
+        "zip": g("zip"),
+        "city": g("city"),
+        "country": g("country"),
+        "email": g("email"),
+        "phone": g("phone"),
+    }
+
+
+def letter_subject(language: str, title: str) -> str:
+    title = title or "the advertised position"
+    return _SUBJECT.get(language, _SUBJECT["en"]).format(title=title)
+
+
+def letter_salutation(language: str, tone: str, contact_name: str) -> str:
+    table = _SALUTATION_NAMED if contact_name else _SALUTATION_GENERIC
+    text = _furniture(table, language, tone)
+    return text.format(name=contact_name) if contact_name else text
+
+
+def letter_closing(language: str, tone: str) -> str:
+    return _furniture(_CLOSING, language, tone)
+
+
 def editable_body(letter: dict) -> str:
     """The sendable middle of a built letter — the composed body (the company-fit opening is now
     folded into it). Subject/salutation/date/closing/addresses live in `letter_meta`, re-assembled
@@ -241,55 +300,22 @@ class CoverLetter:
     # --- assembly helpers --------------------------------------------------------------
 
     def _candidate_name(self) -> str:
-        profile = getattr(self.user, "profile", None)
-        if profile and profile.display_name:
-            return profile.display_name
-        full = f"{self.user.first_name} {self.user.last_name}".strip()
-        return full or self.user.username
+        return candidate_name(self.user)
 
     def _sender(self) -> dict:
-        p = getattr(self.user, "profile", None)
-        g = lambda attr: (getattr(p, attr, "") or "") if p else ""
-        return {
-            "name": self._candidate_name(),
-            "email": self.user.email or "",
-            "phone": g("phone"),
-            "street": g("street"),
-            "address_line2": g("address_line2"),
-            "zip": g("zip"),
-            "city": g("city"),
-            "country": g("country"),
-            "website": g("website"),
-            "linkedin": g("linkedin_url"),
-        }
+        return sender_block(self.user)
 
     def _recipient(self) -> dict:
-        a = self.address
-        g = lambda attr: (getattr(a, attr, "") or "") if a else ""
-        return {
-            "company": g("company"),
-            "contact_name": g("contact_name"),
-            "street": g("street"),
-            "address_line2": g("address_line2"),
-            "zip": g("zip"),
-            "city": g("city"),
-            "country": g("country"),
-            "email": g("email"),
-            "phone": g("phone"),
-        }
+        return recipient_block(self.address)
 
     def _posting_text(self) -> str:
         return getattr(self.job_posting, "posting_text", "") or ""
 
     def _subject(self, language: str, title: str) -> str:
-        title = title or "the advertised position"
-        return _SUBJECT.get(language, _SUBJECT["en"]).format(title=title)
+        return letter_subject(language, title)
 
     def _salutation(self, language: str, tone: str) -> str:
-        name = self._recipient()["contact_name"]
-        table = _SALUTATION_NAMED if name else _SALUTATION_GENERIC
-        text = _furniture(table, language, tone)
-        return text.format(name=name) if name else text
+        return letter_salutation(language, tone, self._recipient()["contact_name"])
 
     def _profile(self):
         """The user's PersonalityProfile row, or None. The only cross-app (spa) dependency."""

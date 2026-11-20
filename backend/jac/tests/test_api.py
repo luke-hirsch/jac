@@ -6,8 +6,10 @@ Celery is always mocked (apply_async must return a STRING id — a Mock poisons
 the task_id CharField); the tower probe is mocked wherever resolution consults it.
 """
 
+import io
 import json
 import threading
+import zipfile
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -26,6 +28,7 @@ from jac import views as jac_views
 from jac.career_import import ENTRY_MODELS, wipe_career
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
+    AccessToken,
     DailyGenerationCount,
     Domain,
     Education,
@@ -47,6 +50,7 @@ from jac.queues import (
     runs_ahead,
 )
 from jac.serializers import MAX_POSTING_CHARS
+from jac.tokens import mint_token
 from llm_connector.catalog import default_model
 from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
@@ -1601,3 +1605,285 @@ class BulkActionShapeTests(APITestCase):
         r = self._patch_domains(add=[self.domain.pk])
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(list(self.skill.domains.all()), [self.domain])
+
+
+# --- [fullstack]-claude-skill -------------------------------------------------------------
+
+SKILL_URL = "/api/jac/skill/"
+
+
+def _letter(words=200, word="Wort"):
+    return " ".join([word] * words)
+
+
+class _SkillCase(APITestCase):
+    """A user with a small career and a token; requests go out on the token, not a session."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        cls.python = Skill.objects.create(user=cls.user, name="Python")
+        cls.job = Job.objects.create(
+            user=cls.user, title="Backend Dev", company="Acme", started="2020-01-01"
+        )
+        cls.job.skills.add(cls.python)
+        cls.master = Education.objects.create(
+            user=cls.user,
+            institution="FU Berlin",
+            started="2012-10-01",
+            ended="2017-09-30",
+            degree_level=Education.DegreeLevel.master,
+        )
+        cls.theirs = Skill.objects.create(user=cls.other, name="Theirs")
+
+    def setUp(self):
+        cache.clear()  # scoped-throttle history lives in the default cache
+        self.token, self.key = mint_token(self.user, "test")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.key}")
+
+    def _payload(self, **kw):
+        return {
+            "posting": {
+                "text": "Wir suchen eine:n Backend-Entwickler:in. Sie arbeiten mit Python.",
+                "title": "Backend-Entwickler:in",
+                "language": "de",
+                "company": "Beispiel GmbH",
+                "contact_name": "Frau Muster",
+            },
+            "entries": [f"job:{self.job.pk}", f"skill:{self.python.pk}"],
+            "letter": {"body": _letter(), "tone": "formal"},
+            **kw,
+        }
+
+    def _create(self, **kw):
+        return self.client.post(
+            f"{SKILL_URL}applications/", self._payload(**kw), format="json"
+        )
+
+
+class SkillTokenAuthTests(_SkillCase):
+    """The token opens the skill's endpoints and nothing else."""
+
+    def test_the_token_reads_the_career_and_marks_itself_used(self):
+        r = self.client.get(f"{SKILL_URL}career/")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.token.refresh_from_db()
+        self.assertIsNotNone(self.token.last_used_at)
+
+    def test_no_credentials_is_refused(self):
+        self.client.credentials()
+        self.assertIn(self.client.get(f"{SKILL_URL}career/").status_code, (401, 403))
+
+    def test_a_revoked_token_is_a_401(self):
+        self.token.delete()
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_a_made_up_token_is_a_401(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer jac_nope")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_the_token_does_not_open_the_rest_of_the_api(self):
+        for url in (APPS_URL, "/api/jac/cv/entries/", "/api/llm/configs/"):
+            with self.subTest(url=url):
+                self.assertIn(self.client.get(url).status_code, (401, 403))
+
+    def test_a_token_cannot_mint_tokens(self):
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "more"}, format="json")
+        self.assertIn(r.status_code, (401, 403))
+        self.assertIn(self.client.post(f"{SKILL_URL}bundle/").status_code, (401, 403))
+
+    def test_only_the_hash_is_stored(self):
+        self.assertNotEqual(self.token.key_hash, self.key)
+        self.assertNotIn(self.key, self.token.key_hash)
+        self.assertEqual(self.token.prefix, self.key[:12])
+
+
+class SkillTokenManagementTests(APITestCase):
+    """Minting, listing and revoking happen on the session, in Account → Claude."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_login(self.user)
+
+    def test_the_key_comes_back_once(self):
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "laptop"}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertTrue(r.data["key"].startswith("jac_"))
+        listed = self.client.get(f"{SKILL_URL}tokens/").data["results"]
+        self.assertEqual([t["name"] for t in listed], ["laptop"])
+        self.assertNotIn("key", listed[0])
+
+    def test_revoking_ends_the_token(self):
+        token, key = mint_token(self.user)
+        r = self.client.delete(f"{SKILL_URL}tokens/{token.pk}/")
+        self.assertEqual(r.status_code, 204)
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_someone_elses_token_is_a_404(self):
+        token, _ = mint_token(self.other)
+        r = self.client.delete(f"{SKILL_URL}tokens/{token.pk}/")
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(AccessToken.objects.filter(pk=token.pk).exists())
+
+    def test_the_number_of_tokens_is_capped(self):
+        for _ in range(AccessToken.MAX_PER_USER):
+            mint_token(self.user)
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "one more"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.client.post(f"{SKILL_URL}bundle/").status_code, 400)
+
+    def test_the_bundle_carries_the_skill_and_a_working_token(self):
+        Skill.objects.create(user=self.user, name="Python")
+        r = self.client.post(f"{SKILL_URL}bundle/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/zip")
+        self.assertEqual(r["Cache-Control"], "no-store")
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        names = set(z.namelist())
+        for name in ("SKILL.md", "scripts/jac.py", "config.json", "career.json"):
+            self.assertIn(f"jac/{name}", names)
+        self.assertTrue(z.read("jac/SKILL.md").startswith(b"---\nname: jac\n"))
+        career = json.loads(z.read("jac/career.json"))
+        self.assertEqual(career["entries"]["skills"][0]["name"], "Python")
+        key = json.loads(z.read("jac/config.json"))["token"]
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 200)
+
+
+class SkillCareerTests(_SkillCase):
+    def test_entries_carry_ids_and_names_not_keys(self):
+        data = self.client.get(f"{SKILL_URL}career/").data
+        job = data["entries"]["jobs"][0]
+        self.assertEqual(job["id"], f"job:{self.job.pk}")
+        self.assertEqual(job["skills"], ["Python"])
+        edu = data["entries"]["educations"][0]
+        self.assertEqual(edu["degree_level"], "master")
+        self.assertTrue(edu["completed"])
+        self.assertEqual(data["highest_degree"], f"education:{self.master.pk}")
+
+    def test_only_the_users_own_entries(self):
+        data = self.client.get(f"{SKILL_URL}career/").data
+        names = [s["name"] for s in data["entries"]["skills"]]
+        self.assertEqual(names, ["Python"])
+
+
+class SkillApplicationTests(_SkillCase):
+    """What the skill saves is an ordinary application: the editor, the fit and the export
+    read it like a generated one."""
+
+    def test_create_builds_posting_cv_and_letter_frame(self):
+        r = self._create()
+        self.assertEqual(r.status_code, 201, r.data)
+        app = JobApplication.objects.get(pk=r.data["id"])
+        self.assertEqual(app.user, self.user)
+        self.assertEqual(app.posting.title, "Backend-Entwickler:in")
+        self.assertEqual(app.posting.language, "de")
+        self.assertEqual(app.posting.address.company, "Beispiel GmbH")
+        self.assertEqual(
+            [e["id"] for e in app.cv_content["jobs"]], [f"job:{self.job.pk}"]
+        )
+        self.assertIn("Backend Dev at Acme", app.cv_content["jobs"][0]["label"])
+        meta = app.letter_meta
+        self.assertEqual(meta["subject"], "Bewerbung als Backend-Entwickler:in")
+        self.assertIn("Frau Muster", meta["salutation"])
+        self.assertEqual(meta["closing"], "Mit freundlichen Grüßen")
+        self.assertEqual(meta["address_form"], "sie")
+        self.assertEqual(meta["recipient"]["company"], "Beispiel GmbH")
+        self.assertEqual(meta["sender"]["name"], "alice")
+        self.assertTrue(r.data["url"].endswith(f"/applications/{app.pk}"))
+
+    def test_the_highest_degree_is_added_and_pinned(self):
+        r = self._create()
+        top = f"education:{self.master.pk}"
+        self.assertIn(top, r.data["entries"])
+        self.assertIn(top, r.data["pinned"])
+        self.assertTrue(any(top in w for w in r.data["warnings"]))
+
+    def test_it_shows_up_in_the_applications_list(self):
+        app_id = self._create().data["id"]
+        self.client.credentials()
+        self.client.force_login(self.user)
+        ids = [row["id"] for row in self.client.get(APPS_URL).data["results"]]
+        self.assertIn(app_id, ids)
+
+    def test_the_session_can_import_a_file_the_skill_wrote(self):
+        self.client.credentials()
+        self.client.force_login(self.user)
+        self.assertEqual(self._create().status_code, 201)
+
+    def test_someone_elses_entry_is_rejected(self):
+        r = self._create(entries=[f"skill:{self.theirs.pk}"])
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("entries", r.data)
+
+    def test_create_needs_posting_entries_and_letter(self):
+        for field in ("posting", "entries", "letter"):
+            with self.subTest(field=field):
+                payload = self._payload()
+                del payload[field]
+                r = self.client.post(
+                    f"{SKILL_URL}applications/", payload, format="json"
+                )
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(field, r.data)
+
+    def test_warnings_tell_the_skill_what_to_fix(self):
+        body = (
+            "Sehr geehrte Frau Muster,\n\n"
+            + _letter(50)
+            + " du\n\nMit freundlichen Grüßen"
+        )
+        r = self._create(letter={"body": body, "tone": "formal"})
+        text = " ".join(r.data["warnings"])
+        self.assertIn("words", text)
+        self.assertIn("salutation", text)
+        self.assertIn("closing", text)
+        self.assertIn("du", text)
+
+    def test_a_clean_letter_has_no_letter_warnings(self):
+        r = self._create(entries=[f"job:{self.job.pk}", f"education:{self.master.pk}"])
+        self.assertEqual(r.data["warnings"], [])
+
+    def test_patch_changes_only_what_is_sent(self):
+        app_id = self._create().data["id"]
+        url = f"{SKILL_URL}applications/{app_id}/"
+        r = self.client.patch(
+            url, {"letter": {"body": _letter(word="Neu")}}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        app = JobApplication.objects.get(pk=app_id)
+        self.assertTrue(app.cover_letter.startswith("Neu"))
+        self.assertEqual(
+            [e["id"] for e in app.cv_content["jobs"]], [f"job:{self.job.pk}"]
+        )
+        self.assertEqual(app.posting.title, "Backend-Entwickler:in")
+
+    def test_read_back_round_trips(self):
+        created = self._create().data
+        r = self.client.get(f"{SKILL_URL}applications/{created['id']}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["entries"], created["entries"])
+        self.assertEqual(r.data["letter"]["body"], _letter())
+        self.assertEqual(r.data["posting"]["company"], "Beispiel GmbH")
+
+    def test_someone_elses_application_is_a_404(self):
+        theirs = make_application(self.other)
+        url = f"{SKILL_URL}applications/{theirs.pk}/"
+        self.assertEqual(self.client.get(url).status_code, 404)
+        r = self.client.patch(url, {"notes": "x"}, format="json")
+        self.assertEqual(r.status_code, 404)
+
+    def test_the_list_is_the_users_own(self):
+        make_application(self.other)
+        own = self._create().data["id"]
+        ids = [row["id"] for row in self.client.get(f"{SKILL_URL}applications/").data]
+        self.assertEqual(ids, [own])

@@ -27,11 +27,14 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
-from django.http import StreamingHttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.text import slugify
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from kombu.exceptions import OperationalError
 from rest_framework import mixins, serializers, status, viewsets
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -44,6 +47,7 @@ from jac.career_import import CareerNotEmpty, load_sample_career
 from jac.cv import CV
 from jac.llm_prompts import LetterChat
 from jac.models import (
+    AccessToken,
     ApplicationLayout,
     Certification,
     CvAttachment,
@@ -67,6 +71,7 @@ from jac.queues import (
 )
 from jac.register import ADDRESS_FORMS
 from jac.serializers import (
+    AccessTokenSerializer,
     ApplicationBatchSerializer,
     ApplicationLayoutSerializer,
     ApplicationTransitionSerializer,
@@ -84,9 +89,18 @@ from jac.serializers import (
     ProjectSerializer,
     RewriteRequestSerializer,
     ShortenRequestSerializer,
+    SkillApplicationSerializer,
     SkillSerializer,
 )
+from jac.skill import (
+    application_payload,
+    application_summary,
+    career_payload,
+    save_application,
+    skill_bundle,
+)
 from jac.tasks import generate_run, notify_when_drained, publish_event
+from jac.tokens import AccessTokenAuthentication, mint_token
 from llm_connector.base import LLMWarmingUp
 from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from llm_connector.jobs import start_ai_job
@@ -970,3 +984,163 @@ class CvAttachmentViewSet(viewsets.ModelViewSet):
         return private_file_response(
             attachment.file, content_type="application/pdf", filename=f"{name}.pdf"
         )
+
+
+# --- the Claude skill ---------------------------------------------------------------------------
+
+
+class _SkillView(APIView):
+    """The skill's endpoints: a personal token (`Authorization: Bearer jac_…`) or the session,
+    nothing else. The session is there so the SPA can import a file the skill wrote when
+    Claude's sandbox can't reach jac."""
+
+    authentication_classes = [AccessTokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [_LiveScopedRateThrottle]
+    throttle_scope = "skill"
+
+
+class SkillCareerView(_SkillView):
+    """The whole career DB in one document, shaped for Claude to read (`jac.skill`)."""
+
+    @extend_schema(responses=OpenApiResponse(description="The career document"))
+    def get(self, request):
+        return Response(career_payload(request.user))
+
+
+class SkillApplicationListView(_SkillView):
+    """GET the user's latest applications; POST one the skill wrote."""
+
+    LIMIT = 50
+
+    @extend_schema(responses=OpenApiResponse(description="[{id, title, company, …}]"))
+    def get(self, request):
+        rows = (
+            JobApplication.objects.filter(user=request.user)
+            .select_related("posting__address")
+            .order_by("-created_at")[: self.LIMIT]
+        )
+        return Response([application_summary(a) for a in rows])
+
+    @extend_schema(
+        request=SkillApplicationSerializer,
+        responses={201: OpenApiResponse(description="The application + warnings")},
+    )
+    def post(self, request):
+        serializer = SkillApplicationSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        application, warnings = save_application(
+            request.user, serializer.validated_data
+        )
+        return Response(
+            {**application_payload(application), "warnings": warnings},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SkillApplicationDetailView(_SkillView):
+    """GET one application in the skill's shape; PATCH what the conversation changed. Someone
+    else's id is a 404, like a missing one."""
+
+    def _get(self, request, pk):
+        return get_object_or_404(
+            JobApplication.objects.select_related("posting__address"),
+            pk=pk,
+            user=request.user,
+        )
+
+    @extend_schema(responses=OpenApiResponse(description="The application"))
+    def get(self, request, pk):
+        return Response(application_payload(self._get(request, pk)))
+
+    @extend_schema(
+        request=SkillApplicationSerializer,
+        responses=OpenApiResponse(description="The application + warnings"),
+    )
+    def patch(self, request, pk):
+        application = self._get(request, pk)
+        serializer = SkillApplicationSerializer(
+            data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        application, warnings = save_application(
+            request.user, serializer.validated_data, application
+        )
+        return Response({**application_payload(application), "warnings": warnings})
+
+
+class AccessTokenViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """The user's skill tokens: list, mint (the key is in this one response only), revoke.
+    Session only: a token can't mint more of itself."""
+
+    serializer_class = AccessTokenSerializer
+    permission_classes = [IsAuthenticated]
+    throttle_scope = None
+
+    def get_queryset(self):
+        return AccessToken.objects.filter(user=self.request.user)
+
+    def get_throttles(self):
+        if self.action == "create":
+            self.throttle_scope = "skill-token"
+            return [_LiveScopedRateThrottle()]
+        return super().get_throttles()
+
+    @extend_schema(
+        responses={201: OpenApiResponse(description="The token row + its `key`, once")}
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if self.get_queryset().count() >= AccessToken.MAX_PER_USER:
+            return Response(
+                {
+                    "detail": f"At most {AccessToken.MAX_PER_USER} tokens: revoke one first."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        token, key = mint_token(request.user, serializer.validated_data.get("name", ""))
+        return Response(
+            {**AccessTokenSerializer(token).data, "key": key},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SkillBundleView(APIView):
+    """POST: mint a token and hand back the skill as a zip with that token inside, ready to
+    upload to Claude. Session only, for the same reason as the token list."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [_LiveScopedRateThrottle]
+    throttle_scope = "skill-token"
+
+    @extend_schema(
+        request=None, responses={200: OpenApiResponse(description="jac-skill.zip")}
+    )
+    def post(self, request):
+        if AccessToken.objects.filter(user=request.user).count() >= (
+            AccessToken.MAX_PER_USER
+        ):
+            return Response(
+                {
+                    "detail": f"At most {AccessToken.MAX_PER_USER} tokens: revoke one first."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        _, key = mint_token(
+            request.user, f"Claude skill, {timezone.localdate().isoformat()}"
+        )
+        response = HttpResponse(
+            skill_bundle(request.user, key), content_type="application/zip"
+        )
+        response["Content-Disposition"] = 'attachment; filename="jac-skill.zip"'
+        # It carries a live token: no cache along the way may keep a copy.
+        response["Cache-Control"] = "no-store"
+        return response

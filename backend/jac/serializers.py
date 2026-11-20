@@ -11,6 +11,7 @@ from rest_framework.validators import UniqueTogetherValidator
 
 from jac.llm_prompts import ParagraphRewrite, ShortenLetter
 from jac.models import (
+    AccessToken,
     ApplicationLayout,
     Certification,
     CvAttachment,
@@ -49,6 +50,37 @@ MAX_POSTING_CHARS = 50_000
 MAX_LETTER_CHARS = 20_000
 MAX_NOTES_CHARS = 20_000
 MAX_APPLICATION_JSON_BYTES = 256 * 1024
+
+ENTRY_ID_RE = re.compile(r"^(skill|job|project|education|certification|language):\d+$")
+ENTRY_MODELS = {
+    "skill": Skill,
+    "job": Job,
+    "project": Project,
+    "education": Education,
+    "certification": Certification,
+    "language": Language,
+}
+
+
+def owned_entry_ids(user, value: list[str]) -> list[str]:
+    """`type:pk` career-entry ids: well-formed and the user's own, deduped in order. Stale ids
+    (an entry deleted later) are tolerated where they're read; garbage isn't at write time."""
+    bad = [v for v in value if not ENTRY_ID_RE.match(v)]
+    if bad:
+        raise serializers.ValidationError(f"Malformed entry ids: {bad}")
+    for etype, model in ENTRY_MODELS.items():
+        pks = [int(v.split(":")[1]) for v in value if v.startswith(f"{etype}:")]
+        if not pks:
+            continue
+        owned = set(
+            model.objects.filter(user=user, pk__in=pks).values_list("pk", flat=True)
+        )
+        missing = [pk for pk in pks if pk not in owned]
+        if missing:
+            raise serializers.ValidationError(
+                f"Not found or not yours: {etype}:{missing}"
+            )
+    return list(dict.fromkeys(value))
 
 
 class FavouriteLimitMixin:
@@ -575,7 +607,6 @@ class GenerationRunSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-
     def get_queue_ahead(self, obj) -> int:
         return runs_ahead(obj)
 
@@ -631,15 +662,6 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
     create-only. `layout` may reference the user's own layouts or the system defaults.
     """
 
-    _PIN_RE = re.compile(r"^(skill|job|project|education|certification|language):\d+$")
-    _PIN_MODELS = {
-        "skill": Skill,
-        "job": Job,
-        "project": Project,
-        "education": Education,
-        "certification": Certification,
-        "language": Language,
-    }
     MAX_PINS = 50
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -758,23 +780,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             raise serializers.ValidationError(
                 f"At most {self.MAX_PINS} pins — pin less, or build the CV manually."
             )
-        bad = [v for v in value if not self._PIN_RE.match(v)]
-        if bad:
-            raise serializers.ValidationError(f"Malformed entry ids: {bad}")
-        user = self.context["request"].user
-        for etype, model in self._PIN_MODELS.items():
-            pks = [int(v.split(":")[1]) for v in value if v.startswith(f"{etype}:")]
-            if not pks:
-                continue
-            owned = set(
-                model.objects.filter(user=user, pk__in=pks).values_list("pk", flat=True)
-            )
-            missing = [pk for pk in pks if pk not in owned]
-            if missing:
-                raise serializers.ValidationError(
-                    f"Not found or not yours: {etype}:{missing}"
-                )
-        return list(dict.fromkeys(value))
+        return owned_entry_ids(self.context["request"].user, value)
 
     def validate_attachments(self, value):
         """Ordered list of the user's own CvAttachment ids (dedup, ownership-checked). Stale
@@ -942,3 +948,83 @@ class CvAttachmentSerializer(ScopeRelatedToUserMixin, serializers.ModelSerialize
                 f"(got {', '.join(set_links)})."
             )
         return attrs
+
+
+# --- the Claude skill (/api/jac/skill/) -------------------------------------------------------
+
+
+class SkillPostingSerializer(serializers.Serializer):
+    """The posting half of what the skill saves: the ad, plus what Claude read out of it. jac's
+    own pipeline extracts title, language and address with a model; here Claude already has."""
+
+    text = serializers.CharField(max_length=MAX_POSTING_CHARS)
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    language = serializers.RegexField(r"^[a-z]{2}$", required=False)
+    source_url = serializers.URLField(required=False, allow_blank=True)
+    company = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    contact_name = serializers.CharField(
+        max_length=200, required=False, allow_blank=True
+    )
+    street = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    address_line2 = serializers.CharField(
+        max_length=200, required=False, allow_blank=True
+    )
+    zip = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    country = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
+
+
+class SkillLetterSerializer(serializers.Serializer):
+    """The letter body Claude wrote. Subject, salutation and closing default to jac's own
+    furniture for the posting's language and the tone; send them only to override."""
+
+    body = serializers.CharField(max_length=MAX_LETTER_CHARS)
+    tone = serializers.ChoiceField(
+        choices=PersonalityProfile.Tone.choices, required=False
+    )
+    subject = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    salutation = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    closing = serializers.CharField(max_length=300, required=False, allow_blank=True)
+
+
+class SkillApplicationSerializer(serializers.Serializer):
+    """An application as the skill saves it. On create, `posting`, `entries` and `letter` are
+    required; on update (partial) only what's sent changes. `entries` is the CV: `type:pk` ids
+    in the order they should appear."""
+
+    MAX_ENTRIES = 300
+
+    posting = SkillPostingSerializer()
+    entries = serializers.ListField(
+        child=serializers.CharField(max_length=40), max_length=MAX_ENTRIES
+    )
+    pinned = serializers.ListField(
+        child=serializers.CharField(max_length=40),
+        max_length=JobApplicationSerializer.MAX_PINS,
+        required=False,
+    )
+    sections_off = serializers.ListField(
+        child=serializers.ChoiceField(
+            choices=sorted(JobApplicationSerializer._SECTIONS)
+        ),
+        required=False,
+    )
+    letter = SkillLetterSerializer()
+    notes = serializers.CharField(
+        max_length=MAX_NOTES_CHARS, required=False, allow_blank=True
+    )
+
+    def validate_entries(self, value):
+        return owned_entry_ids(self.context["request"].user, value)
+
+    def validate_pinned(self, value):
+        return owned_entry_ids(self.context["request"].user, value)
+
+
+class AccessTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccessToken
+        fields = ["id", "name", "prefix", "created_at", "last_used_at"]
+        read_only_fields = ["id", "prefix", "created_at", "last_used_at"]

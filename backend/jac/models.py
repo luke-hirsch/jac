@@ -775,3 +775,28 @@ class CvAttachment(models.Model):
 
     def __str__(self) -> str:
         return self.label or f"attachment {self.pk}"
+
+
+class AccessToken(models.Model):
+    """A personal token for the Claude skill: it reads the career DB and writes applications
+    over `/api/jac/skill/`, and nothing else (`jac.tokens.AccessTokenAuthentication` sits on
+    those views only, never in DRF's defaults). Only the SHA-256 of the key is stored; the key
+    itself is shown once. Revoking is deleting the row."""
+
+    MAX_PER_USER = 10
+
+    user = models.ForeignKey(
+        "auth.User", on_delete=models.CASCADE, related_name="access_tokens"
+    )
+    name = models.CharField(max_length=60, blank=True)
+    # The key's first characters, so a list of tokens can tell them apart.
+    prefix = models.CharField(max_length=12)
+    key_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.name or 'token'} ({self.prefix}…)"
