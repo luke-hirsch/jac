@@ -4,7 +4,6 @@ import { ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -22,6 +21,8 @@ import {
   executorDisabledReason,
   defaultModeFor,
   defaultModelFor,
+  keepKnobs,
+  knobsFor,
   providerLabel,
 } from "@/lib/queries/llm";
 
@@ -64,8 +65,9 @@ function toneClass(tone: "green" | "amber" | "muted") {
 // let the model default decide". Mapped back to "" before it enters the pick.
 const KNOB_DEFAULT = "__default__";
 
-// knobs: generic per-knob values keyed by the spec name (effort/temperature);
-// "" means unset. Reset to {} on every executor pick.
+// knobs: per-knob values keyed by the spec name (effort), offered by the picked
+// MODEL; "" means unset. Reset to {} on every executor pick; a model switch keeps
+// only what the new model offers too.
 type Pick = {
   provider: string;
   model: string;
@@ -122,6 +124,7 @@ export function GeneratePanel({
   // Never yank: a refetch that disables the picked row keeps the selection and
   // surfaces the reason on the Generate button instead.
   const pickedReason = pickedRow ? executorDisabledReason(pickedRow) : null;
+  const knobSpec = knobsFor(pickedRow, picked?.model ?? "");
 
   // A real personal paragraph is possible ⇔ a commercial (web-search-capable) pick.
   const capable = pickedRow != null && !pickedRow.self_hosted;
@@ -251,7 +254,18 @@ export function GeneratePanel({
                 <Select
                   value={picked?.model ?? ""}
                   onValueChange={(model) =>
-                    setPicked((p) => (p ? { ...p, model } : p))
+                    setPicked((p) =>
+                      p
+                        ? {
+                            ...p,
+                            model,
+                            knobs: keepKnobs(
+                              p.knobs,
+                              knobsFor(pickedRow, model),
+                            ),
+                          }
+                        : p,
+                    )
                   }
                 >
                   <SelectTrigger className="w-56" aria-label="Model">
@@ -284,7 +298,7 @@ export function GeneratePanel({
                   ))}
                 </div>
               </div>
-              {Object.keys(pickedRow.knobs).length > 0 && (
+              {Object.keys(knobSpec).length > 0 && (
                 <>
                   <button
                     type="button"
@@ -294,92 +308,47 @@ export function GeneratePanel({
                     {showAdvanced ? "Hide advanced" : "Advanced settings"}
                   </button>
                   {showAdvanced &&
-                    Object.entries(pickedRow.knobs).map(([name, spec]) => {
-                      const value = picked?.knobs[name] ?? "";
-                      const setKnob = (v: string) =>
-                        setPicked((p) => {
-                          if (!p) return p;
-                          const next = { ...p.knobs, [name]: v };
-                          // Setting a knob clears any mutually-exclusive one
-                          // (excludes is declared one-directionally) so a
-                          // disabled control never submits a stale value the
-                          // server would 400 on.
-                          if (v)
-                            for (const [other, os] of Object.entries(
-                              pickedRow.knobs,
-                            ))
-                              if (
-                                other !== name &&
-                                ((spec.excludes ?? []).includes(other) ||
-                                  (os.excludes ?? []).includes(name))
-                              )
-                                next[other] = "";
-                          return { ...p, knobs: next };
-                        });
-                      // A choices knob (effort) → a Select with a "model
-                      // default" blank; a bounded knob (temperature) → a
-                      // numeric input, disabled while any excluding knob is set.
-                      if (spec.choices)
-                        return (
-                          <div key={name} className="space-y-1">
-                            <Label className="capitalize">{name}</Label>
-                            <Select
-                              value={value || KNOB_DEFAULT}
-                              onValueChange={(v) =>
-                                setKnob(v === KNOB_DEFAULT ? "" : v)
-                              }
-                            >
-                              <SelectTrigger className="w-40" aria-label={name}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={KNOB_DEFAULT}>
-                                  model default
-                                </SelectItem>
-                                {spec.choices.map((c) => (
-                                  <SelectItem
-                                    key={c}
-                                    value={c}
-                                    className="capitalize"
-                                  >
-                                    {c}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        );
-                      const blockedBy = (spec.excludes ?? []).filter(
-                        (other) => (picked?.knobs[other] ?? "") !== "",
-                      );
-                      const disabled = blockedBy.length > 0;
-                      return (
-                        <div key={name} className="space-y-1">
-                          <Label className="capitalize">{name}</Label>
-                          <Input
-                            aria-label={name}
-                            type="number"
-                            className="w-28"
-                            min={spec.min}
-                            max={spec.max}
-                            step={0.1}
-                            placeholder={
-                              spec.min != null
-                                ? `${spec.min}–${spec.max}`
-                                : undefined
-                            }
-                            value={value}
-                            disabled={disabled}
-                            onChange={(e) => setKnob(e.target.value)}
-                          />
-                          {disabled && (
-                            <p className="text-xs text-muted-foreground">
-                              unset {blockedBy.join(", ")} to use
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
+                    // Each knob is a choice the model reports (effort) → a Select
+                    // with a "model default" blank.
+                    Object.entries(knobSpec).map(([name, spec]) => (
+                      <div key={name} className="space-y-1">
+                        <Label className="capitalize">{name}</Label>
+                        <Select
+                          value={picked?.knobs[name] || KNOB_DEFAULT}
+                          onValueChange={(v) =>
+                            setPicked((p) =>
+                              p
+                                ? {
+                                    ...p,
+                                    knobs: {
+                                      ...p.knobs,
+                                      [name]: v === KNOB_DEFAULT ? "" : v,
+                                    },
+                                  }
+                                : p,
+                            )
+                          }
+                        >
+                          <SelectTrigger className="w-40" aria-label={name}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={KNOB_DEFAULT}>
+                              model default
+                            </SelectItem>
+                            {spec.choices.map((c) => (
+                              <SelectItem
+                                key={c}
+                                value={c}
+                                className="capitalize"
+                              >
+                                {c}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
                 </>
               )}
               <div className="grid grid-cols-2 gap-2">
@@ -440,7 +409,8 @@ export function GeneratePanel({
           </Button>
           {!running && pickedReason && (
             <span className="text-sm text-amber-700">
-              {providerLabel(rows, picked!.provider)} is {pickedReason}.
+              {providerLabel(rows, picked!.provider)}: {pickedReason}. See
+              Account → LLM providers.
             </span>
           )}
 

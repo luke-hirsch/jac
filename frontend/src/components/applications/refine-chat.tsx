@@ -30,6 +30,7 @@ import {
 } from "@/lib/letter-chat";
 import {
   defaultExecutorRow,
+  defaultModelFor,
   executorDisabledReason,
   useExecutors,
 } from "@/lib/queries/llm";
@@ -76,7 +77,8 @@ export function RefineChat({
   // Preselect the backend default once rows arrive; never overwrite an explicit pick.
   if (picked === null && rows.length > 0) {
     const def = defaultExecutorRow(rows);
-    if (def) setPicked({ provider: def.provider, model: def.models[0]?.id ?? "" });
+    // The key's own default pick, not its newest model (Opus is listed before Sonnet).
+    if (def) setPicked({ provider: def.provider, model: defaultModelFor(def) });
   }
 
   const pickedRow = rows.find((r) => r.provider === picked?.provider) ?? null;
@@ -194,7 +196,10 @@ export function RefineChat({
             onValueChange={(provider) => {
               const row = rows.find((r) => r.provider === provider);
               if (row)
-                setPicked({ provider: row.provider, model: row.models[0]?.id ?? "" });
+                setPicked({
+                  provider: row.provider,
+                  model: defaultModelFor(row),
+                });
             }}
           >
             <SelectTrigger className="h-8 w-56 text-xs">

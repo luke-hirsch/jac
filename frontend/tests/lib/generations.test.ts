@@ -255,19 +255,18 @@ describe("unseeded runs", () => {
 });
 
 /**
- * [fullstack]-model-knobs — per-run knobs (effort/temperature) travel as a
- * `params` object; blanks never travel.
+ * [fullstack]-model-knobs — per-run knobs (effort, per model since
+ * [fullstack]-live-model-catalog) travel as a `params` object; blanks never travel.
  */
 describe("model knobs ([fullstack]-model-knobs)", () => {
   it("builds params from the panel's knob state, omitting blanks", () => {
     expect(knobParams({})).toEqual({});
     expect(knobParams({ effort: "high" })).toEqual({ effort: "high" });
-    expect(knobParams({ temperature: "0.3" })).toEqual({ temperature: 0.3 });
+    expect(knobParams({ effort: "" })).toEqual({});
   });
 
-  it("drops garbage temperature input — the server owns validation, not NaN", () => {
-    expect(knobParams({ temperature: "warm" })).toEqual({});
-    expect(knobParams({ temperature: "  " })).toEqual({});
+  it("every knob is a choice now: values travel as the strings the model reported", () => {
+    expect(knobParams({ effort: "xhigh" })).toEqual({ effort: "xhigh" });
   });
 
   it("toPayload carries non-empty params and omits empty ones", () => {
