@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
 import { useLoadSampleCareer } from "@/lib/queries/jac";
@@ -43,11 +44,13 @@ export function EmptyCareerCard() {
           <Button variant="outline" asChild>
             <Link to="/cv/jobs">Add a job first</Link>
           </Button>
+          <ImportButton kind="career" label="Import a career file" />
         </div>
         <p className="text-xs text-muted-foreground">
           The sample is a made-up person, loaded in one click, so you can see a
           real run without typing a CV. Its entries are marked (sample): nothing
-          made from them is meant to be sent.
+          made from them is meant to be sent. A career file is the one Download
+          career writes on the CV page, here or on another jac.
         </p>
       </CardContent>
     </Card>

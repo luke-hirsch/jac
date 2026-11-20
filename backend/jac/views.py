@@ -42,6 +42,13 @@ from rest_framework.settings import api_settings as drf_api_settings
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from jac.application_transfer import (
+    ApplicationImportError,
+    ApplicationsNotEmpty,
+    CareerMissing,
+    export_applications,
+    load_into_empty_applications,
+)
 from jac.career_changes import (
     ChangeError,
     StaleError,
@@ -51,7 +58,13 @@ from jac.career_changes import (
     entry_labels,
     undo_batch,
 )
-from jac.career_import import CareerNotEmpty, load_sample_career
+from jac.career_export import export_career
+from jac.career_import import (
+    CareerImportError,
+    CareerNotEmpty,
+    load_into_empty_career,
+    load_sample_career,
+)
 from jac.career_review import review_career
 from jac.cv import CV
 from jac.llm_prompts import LetterChat
@@ -497,6 +510,89 @@ class SampleCareerView(APIView):
         return Response({"created": created}, status=status.HTTP_201_CREATED)
 
 
+# An exported career or application list is well under this; the nginx in front allows 12 MB.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+class UploadError(ValueError):
+    """The upload isn't a JSON file. The message is meant for the user."""
+
+
+def _uploaded_json(request):
+    """The JSON file in the upload's `file` field, parsed. It's a multipart upload, not a JSON
+    body, because Django refuses a body over 2.5 MB (DATA_UPLOAD_MAX_MEMORY_SIZE) and a list of
+    applications with their postings can be that."""
+    upload = request.FILES.get("file")
+    if upload is None:
+        raise UploadError("No file: send it as `file`.")
+    if upload.size > MAX_UPLOAD_BYTES:
+        raise UploadError("The file is larger than 10 MB.")
+    try:
+        return json.loads(upload.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UploadError(
+            "That file isn't JSON: pick the .json file jac wrote."
+        ) from exc
+
+
+class CareerExportView(APIView):
+    """GET: the requesting user's career as the JSON `cv_import` reads (jac/career_export.py),
+    for the CV overview's download. Only their own rows; it writes nothing."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(
+                description="{section: [entry, …]}, the cv_import shape"
+            )
+        }
+    )
+    def get(self, request):
+        return Response(export_career(request.user))
+
+
+class CareerImportView(APIView):
+    """POST a career file (the download's shape) as `file`: it fills an EMPTY career, every row
+    checked as the editor checks it. Like the sample, it refuses rather than merges."""
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+    throttle_classes = [_LiveScopedRateThrottle]
+    throttle_scope = "career-import"
+
+    @extend_schema(
+        request=inline_serializer(
+            "CareerImportUpload", fields={"file": serializers.FileField()}
+        ),
+        responses={
+            201: OpenApiResponse(
+                description="{'created': {section: rows}, 'warnings': []}"
+            ),
+            400: OpenApiResponse(
+                description="Not a career file, or a row breaks a rule"
+            ),
+            409: OpenApiResponse(description="The user already has career entries"),
+        },
+    )
+    def post(self, request):
+        try:
+            created = load_into_empty_career(request.user, _uploaded_json(request))
+        except CareerNotEmpty:
+            return Response(
+                {
+                    "detail": "Your career already has entries: an import only fills an "
+                    "empty one."
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except (UploadError, CareerImportError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"created": created, "warnings": []}, status=status.HTTP_201_CREATED
+        )
+
+
 class JobApplicationViewSet(viewsets.ModelViewSet):
     """The user-facing applications. Create binds (or inline-creates) the posting; the
     tailored content (`cv_content`/`cover_letter`) stays editable via PATCH — that's also
@@ -523,6 +619,70 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             .select_related("posting", "layout")
             .prefetch_related("runs")
         )
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(
+                description="{postings, applications}, CV picks by natural key "
+                "(jac/application_transfer.py)"
+            )
+        }
+    )
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        """Every application with its posting, as the file the import takes back."""
+        return Response(export_applications(request.user))
+
+    @extend_schema(
+        request=inline_serializer(
+            "ApplicationsImportUpload", fields={"file": serializers.FileField()}
+        ),
+        responses={
+            201: OpenApiResponse(
+                description="{'created': {postings, applications}, 'warnings': [...]}"
+            ),
+            400: OpenApiResponse(
+                description="Not an applications file, or a broken row"
+            ),
+            409: OpenApiResponse(
+                description="The user has applications already, or no career yet"
+            ),
+        },
+    )
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="import",
+        parser_classes=[MultiPartParser],
+        throttle_classes=[_LiveScopedRateThrottle],
+        throttle_scope="application-import",
+    )
+    def import_file(self, request):
+        """POST an applications file as `file`: it fills an account without applications,
+        CV picks matched against the career by natural key. It queues no run."""
+        try:
+            result = load_into_empty_applications(
+                request.user, _uploaded_json(request), request=request
+            )
+        except ApplicationsNotEmpty:
+            return Response(
+                {
+                    "detail": "You have applications already: an import only fills an "
+                    "empty list."
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except CareerMissing:
+            return Response(
+                {
+                    "detail": "Your career is empty: import it first, the applications' "
+                    "CVs point at its entries."
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except (UploadError, ApplicationImportError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         """Create the application and queue its first generation run."""

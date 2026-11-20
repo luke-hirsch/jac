@@ -3,7 +3,13 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +17,7 @@ import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
 import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
 import { Lines } from "@/components/toast-lines";
+import { ExportButton, ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
 import {
@@ -162,6 +169,14 @@ function ApplicationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Applications</CardTitle>
+          {apps.data?.length ? (
+            <CardAction>
+              <ExportButton
+                kind="applications"
+                label="Download applications (.json)"
+              />
+            </CardAction>
+          ) : null}
         </CardHeader>
         <CardContent>
           {apps.data?.length ? (
@@ -219,12 +234,26 @@ function ApplicationsPage() {
               onRetry={() => apps.refetch()}
               retrying={apps.isFetching}
             />
+          ) : apps.isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              {apps.isLoading
-                ? "Loading…"
-                : "No applications yet — paste a posting above to start one."}
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                No applications yet — paste a posting above to start one.
+              </p>
+              {!careerEmpty && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <ImportButton
+                    kind="applications"
+                    label="Import applications"
+                  />
+                  <p className="max-w-sm text-xs text-muted-foreground">
+                    The file Download applications wrote, here or on another
+                    jac. Its CVs are matched to your career by name.
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </CardContent>
       </Card>

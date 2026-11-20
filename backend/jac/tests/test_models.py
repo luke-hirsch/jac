@@ -17,7 +17,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from jac.career_import import SAMPLE_CAREER
+from jac.career_import import SAMPLE_CAREER, import_career
 from jac.models import (
     Education,
     GenerationRun,
@@ -247,3 +247,40 @@ class CvImportCommandTests(TestCase):
             }
         )
         self.assertEqual(Job.objects.get(user=self.user).location.city, "Berlin")
+
+
+class CvExportCommandTests(TestCase):
+    """The command stays a thin wrapper over `jac.career_export` (guide 07), with its old output."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.other = make_user("bob")
+        import_career(self.user, json.loads(SAMPLE_CAREER.read_text(encoding="utf-8")))
+
+    def _export(self, user) -> str:
+        out = io.StringIO()
+        call_command("cv_export", "--user", str(user.pk), stdout=out)
+        return out.getvalue()
+
+    def test_round_trips_through_cv_import(self):
+        # Green before and after guide 07: it guards moving the sections out of the command.
+        exported = self._export(self.user)
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as fh:
+            fh.write(exported)
+            fh.flush()
+            call_command(
+                "cv_import",
+                "--file",
+                fh.name,
+                "--user",
+                str(self.other.pk),
+                stdout=io.StringIO(),
+            )
+        self.assertEqual(json.loads(self._export(self.other)), json.loads(exported))
+
+    def test_is_a_wrapper_over_export_career(self):
+        # Imported here, not at the top: until the module exists, only this test is red.
+        from jac.career_export import export_career
+
+        expected = json.loads(json.dumps(export_career(self.user), default=str))
+        self.assertEqual(json.loads(self._export(self.user)), expected)
