@@ -18,6 +18,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings as dj_settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
@@ -25,7 +26,13 @@ from kombu.exceptions import OperationalError
 from rest_framework.test import APIClient, APITestCase
 
 from jac import views as jac_views
-from jac.career_import import ENTRY_MODELS, wipe_career
+from jac.career_export import export_career
+from jac.career_import import (
+    ENTRY_MODELS,
+    import_career,
+    load_sample_career,
+    wipe_career,
+)
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
     AccessToken,
@@ -37,6 +44,7 @@ from jac.models import (
     GenerationRun,
     Job,
     JobApplication,
+    JobPostAddress,
     JobPosting,
     Language,
     Location,
@@ -1553,6 +1561,334 @@ class SampleCareerApiTests(APITestCase):
         self.assertEqual(self._post().status_code, 201)
         self.assertEqual(self._post().status_code, 429)
 
+
+EXPORT_URL = "/api/jac/career/export/"
+
+
+class CareerExportApiTests(APITestCase):
+    """GET /career/export/ is the `cv_export` file: what `cv_import` reads, for the user only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _export(self):
+        r = self.client.get(EXPORT_URL)
+        self.assertEqual(r.status_code, 200)
+        return json.loads(r.content)  # the bytes the browser gets, dates as strings
+
+    def test_anonymous_is_refused(self):
+        self.client.logout()
+        self.assertIn(self.client.get(EXPORT_URL).status_code, (401, 403))
+
+    def test_the_file_imports_back_as_the_same_career(self):
+        load_sample_career(self.user)
+        data = self._export()
+        self.assertEqual(len(data["jobs"]), 2)
+        self.assertEqual(data["jobs"][0]["started"][:4], "2018")  # ISO, oldest first
+        import_career(self.other, data)
+        self.client.force_login(self.other)
+        self.assertEqual(self._export(), data)
+
+    def test_only_the_users_own_rows(self):
+        Job.objects.create(
+            user=self.other, title="Theirs", company="Bob AG", started="2020-01-01"
+        )
+        data = self._export()
+        self.assertEqual(data["jobs"], [])
+        self.assertEqual(
+            sorted(data),
+            [
+                "certifications",
+                "domains",
+                "educations",
+                "jobs",
+                "languages",
+                "locations",
+                "projects",
+                "skills",
+            ],
+        )
+
+
+CAREER_IMPORT_URL = "/api/jac/career/import/"
+THROTTLED_IMPORT_RF = {
+    **dj_settings.REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {"career-import": "1/min", "application-import": "1/min"},
+}
+
+
+def _upload(client, url, data, name="file.json"):
+    body = data if isinstance(data, bytes) else json.dumps(data).encode()
+    return client.post(
+        url,
+        {"file": SimpleUploadedFile(name, body, content_type="application/json")},
+        format="multipart",
+    )
+
+
+class CareerImportApiTests(APITestCase):
+    """POST /career/import/ fills an EMPTY career from the download, every row checked as the
+    editor checks it; a file it can't take is a 400 that writes nothing, never a 500."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        cache.clear()  # scoped-throttle history lives in the default cache
+
+    def _counts(self, user):
+        return sum(m.objects.filter(user=user).count() for m in ENTRY_MODELS)
+
+    def _job(self, **kw):
+        return {
+            "jobs": [{"title": "Dev", "company": "Acme", "started": "2020-01-01", **kw}]
+        }
+
+    def test_anonymous_is_refused(self):
+        self.client.logout()
+        r = _upload(self.client, CAREER_IMPORT_URL, self._job())
+        self.assertIn(r.status_code, (401, 403))
+
+    def test_the_download_round_trips_favourites_included(self):
+        load_sample_career(self.other)
+        job = Job.objects.filter(user=self.other).order_by("started").first()
+        job.favourite = True
+        job.save()
+        self.client.force_login(self.other)
+        data = json.loads(self.client.get(EXPORT_URL).content)
+        self.client.force_login(self.user)
+        r = _upload(self.client, CAREER_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["created"]["jobs"], 2)
+        self.assertEqual(r.data["warnings"], [])
+        self.assertEqual(json.loads(self.client.get(EXPORT_URL).content), data)
+        self.assertTrue(Job.objects.get(user=self.user, title=job.title).favourite)
+
+    def test_a_career_with_entries_is_refused_and_untouched(self):
+        Language.objects.create(user=self.user, name="French")
+        r = _upload(self.client, CAREER_IMPORT_URL, self._job())
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(self._counts(self.user), 1)
+
+    def test_a_script_url_is_a_400_and_writes_nothing(self):
+        # The portfolio links an entry's url: only what the editor accepts may land.
+        r = _upload(
+            self.client, CAREER_IMPORT_URL, self._job(url="javascript:alert(1)")
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("url", r.data["detail"])
+        self.assertEqual(self._counts(self.user), 0)
+
+    def test_a_bad_choice_is_a_400(self):
+        r = _upload(self.client, CAREER_IMPORT_URL, self._job(job_type="pirate"))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("job_type", r.data["detail"])
+
+    def test_a_missing_field_is_a_400_not_a_crash(self):
+        data = {"jobs": [{"title": "Dev", "started": "2020-01-01"}]}
+        r = _upload(self.client, CAREER_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("company", r.data["detail"])
+
+    def test_a_bad_date_is_a_400(self):
+        r = _upload(self.client, CAREER_IMPORT_URL, self._job(started="01.01.2020"))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("01.01.2020", r.data["detail"])
+
+    def test_two_skills_of_one_name_are_a_400(self):
+        data = {"skills": [{"name": "Python"}, {"name": "Python"}]}
+        r = _upload(self.client, CAREER_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self._counts(self.user), 0)
+
+    def test_a_late_failure_rolls_back_the_rows_before_it(self):
+        data = {**self._job(), "languages": [{"name": "German", "fluency": "fluent?"}]}
+        r = _upload(self.client, CAREER_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self._counts(self.user), 0)
+
+    def test_what_isnt_a_career_file_is_a_400(self):
+        for body in (b"not json", b"[1, 2]", json.dumps({"applications": []}).encode()):
+            with self.subTest(body=body):
+                r = _upload(self.client, CAREER_IMPORT_URL, body)
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("detail", r.data)
+
+    def test_without_a_file_is_a_400(self):
+        r = self.client.post(CAREER_IMPORT_URL, {}, format="multipart")
+        self.assertEqual(r.status_code, 400)
+
+    @override_settings(REST_FRAMEWORK=THROTTLED_IMPORT_RF)
+    def test_it_is_throttled(self):
+        self.assertEqual(
+            _upload(self.client, CAREER_IMPORT_URL, self._job()).status_code, 201
+        )
+        self.assertEqual(
+            _upload(self.client, CAREER_IMPORT_URL, self._job()).status_code, 429
+        )
+
+
+APPS_EXPORT_URL = "/api/jac/applications/export/"
+APPS_IMPORT_URL = "/api/jac/applications/import/"
+
+
+class ApplicationTransferApiTests(APITestCase):
+    """GET /applications/export/ + POST /applications/import/: the applications as a file whose
+    CV picks name entries by natural key, so they land on the importing user's own entries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        load_sample_career(cls.user)
+        cls.job = Job.objects.filter(user=cls.user).order_by("started").first()
+        cls.skill = Skill.objects.filter(user=cls.user).order_by("name").first()
+        posting = JobPosting.objects.create(
+            user=cls.user, title="Backend Dev", posting_text="We need a backend dev."
+        )
+        JobPostAddress.objects.create(
+            job_posting=posting, company="Beispiel GmbH", city="Berlin"
+        )
+        cls.sent = JobApplication.objects.create(
+            user=cls.user,
+            posting=posting,
+            cv_content={
+                "jobs": [{"id": f"job:{cls.job.pk}", "label": "Job", "pinned": True}],
+                "skills": [
+                    {
+                        "id": f"skill:{cls.skill.pk}",
+                        "label": "Skill",
+                        "detail": "compact",
+                    }
+                ],
+            },
+            pinned_entries=[f"job:{cls.job.pk}"],
+            cover_letter="Dear team, …",
+            letter_meta={"language": "en", "subject": "Backend Dev"},
+            sections_off=["certifications"],
+            notes="Called on Monday.",
+            deadline="2026-12-01",
+            status=JobApplication.StatusChoices.sent,
+            delivery_method=JobApplication.DeliveryMethod.email,
+            sent_at=timezone.now() - timedelta(days=3),
+        )
+        cls.draft = JobApplication.objects.create(user=cls.user, posting=posting)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        cache.clear()
+
+    def _export(self):
+        r = self.client.get(APPS_EXPORT_URL)
+        self.assertEqual(r.status_code, 200)
+        return json.loads(r.content)
+
+    def _give_other_the_career(self):
+        import_career(
+            self.other, json.loads(json.dumps(export_career(self.user), default=str))
+        )
+
+    def test_anonymous_is_refused(self):
+        self.client.logout()
+        self.assertIn(self.client.get(APPS_EXPORT_URL).status_code, (401, 403))
+        self.assertIn(_upload(self.client, APPS_IMPORT_URL, {}).status_code, (401, 403))
+
+    def test_the_file_names_entries_by_key_and_shares_the_posting(self):
+        data = self._export()
+        self.assertEqual(len(data["postings"]), 1)
+        self.assertEqual([a["posting"] for a in data["applications"]], [0, 0])
+        sent = data["applications"][0]
+        row = sent["cv_content"]["jobs"][0]
+        self.assertNotIn("id", row)
+        self.assertEqual(
+            row["ref"],
+            ["job", self.job.title, self.job.company, self.job.started.isoformat()],
+        )
+        self.assertEqual(
+            sent["cv_content"]["skills"][0]["ref"], ["skill", self.skill.name]
+        )
+        self.assertEqual(sent["pinned_entries"], [row["ref"]])
+        self.assertEqual(data["postings"][0]["address"]["company"], "Beispiel GmbH")
+
+    def test_only_the_users_own_applications(self):
+        make_application(self.other)
+        self.assertEqual(len(self._export()["applications"]), 2)
+
+    def test_the_file_round_trips_onto_the_other_users_entries(self):
+        data = self._export()
+        self._give_other_the_career()
+        self.client.force_login(self.other)
+        with patch("jac.views.generate_run") as task:
+            r = _upload(self.client, APPS_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["created"], {"postings": 1, "applications": 2})
+        self.assertEqual(r.data["warnings"], [])
+        task.apply_async.assert_not_called()  # an import queues no run
+        self.assertFalse(GenerationRun.objects.exists())
+        self.assertEqual(self._export(), data)
+        imported = JobApplication.objects.get(user=self.other, status="sent")
+        job = Job.objects.get(user=self.other, title=self.job.title)
+        self.assertEqual(imported.pinned_entries, [f"job:{job.pk}"])
+        self.assertEqual(imported.cv_content["jobs"][0]["id"], f"job:{job.pk}")
+
+    def test_an_entry_the_career_lacks_is_left_out_with_a_warning(self):
+        data = self._export()
+        self._give_other_the_career()
+        Skill.objects.filter(user=self.other, name=self.skill.name).delete()
+        self.client.force_login(self.other)
+        r = _upload(self.client, APPS_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(len(r.data["warnings"]), 1)
+        self.assertIn("1 CV entry", r.data["warnings"][0])
+        imported = JobApplication.objects.get(user=self.other, status="sent")
+        self.assertEqual(imported.cv_content["skills"], [])
+
+    def test_with_applications_already_it_is_refused(self):
+        data = self._export()
+        r = _upload(self.client, APPS_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(JobApplication.objects.filter(user=self.user).count(), 2)
+
+    def test_without_a_career_it_is_refused(self):
+        data = self._export()
+        self.client.force_login(self.other)
+        r = _upload(self.client, APPS_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("career", r.data["detail"])
+
+    def test_a_bad_status_is_a_400_and_writes_nothing(self):
+        data = self._export()
+        data["applications"][1]["status"] = "hired"
+        self._give_other_the_career()
+        self.client.force_login(self.other)
+        r = _upload(self.client, APPS_IMPORT_URL, data)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("status", r.data["detail"])
+        self.assertFalse(JobPosting.objects.filter(user=self.other).exists())
+        self.assertFalse(JobApplication.objects.filter(user=self.other).exists())
+
+    def test_a_posting_index_outside_the_file_is_a_400(self):
+        data = self._export()
+        data["applications"][0]["posting"] = 5
+        self._give_other_the_career()
+        self.client.force_login(self.other)
+        self.assertEqual(_upload(self.client, APPS_IMPORT_URL, data).status_code, 400)
+
+    def test_a_career_file_is_not_an_applications_file(self):
+        self._give_other_the_career()
+        self.client.force_login(self.other)
+        career = json.loads(self.client.get(EXPORT_URL).content)
+        r = _upload(self.client, APPS_IMPORT_URL, career)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("applications file", r.data["detail"])
 
 
 class ApplicationTransitionApiTests(APITestCase):

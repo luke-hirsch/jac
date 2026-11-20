@@ -13,6 +13,8 @@ from rest_framework.routers import DefaultRouter
 from jac.views import (
     AccessTokenViewSet,
     ApplicationLayoutViewSet,
+    CareerExportView,
+    CareerImportView,
     CertificationViewSet,
     CvAttachmentViewSet,
     CVEntryListView,
@@ -53,6 +55,8 @@ router.register("skill/tokens", AccessTokenViewSet, basename="skill-token")
 urlpatterns = router.urls + [
     path("cv/entries/", CVEntryListView.as_view(), name="cv-entries"),
     path("sample-career/", SampleCareerView.as_view(), name="sample-career"),
+    path("career/export/", CareerExportView.as_view(), name="career-export"),
+    path("career/import/", CareerImportView.as_view(), name="career-import"),
     # The Claude skill: a personal token or the session (jac/skill.py).
     path("skill/career/", SkillCareerView.as_view(), name="skill-career"),
     path(

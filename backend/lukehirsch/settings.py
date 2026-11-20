@@ -445,6 +445,9 @@ REST_FRAMEWORK = {
         "prewarm": os.getenv("PREWARM_RATE", "30/hour"),
         # Only a user who keeps emptying their career can get past the 409 to the writes.
         "sample-career": "20/hour",
+        # Filling an empty career or application list from a downloaded file.
+        "career-import": "20/hour",
+        "application-import": "20/hour",
         # Anything that puts a file on disk, per account.
         "uploads": os.getenv("UPLOAD_RATE", "100/day"),
         # The Claude skill, per account: a conversation reads the career and saves a few times.

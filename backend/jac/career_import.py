@@ -1,7 +1,11 @@
 """Load a career (the JSON shape `cv_export` writes) into a user's CV entries.
 
-Shared by the `cv_import` command and the sample-career endpoint. The shape and the name-based
-reference rules are documented on the command. Callers own the transaction.
+Shared by the `cv_import` command, the sample-career endpoint and the CV page's import. The shape
+and the name-based reference rules are documented on the command. Callers own the transaction.
+
+The file may come from a browser, so every row is checked with the model's own `full_clean()`
+before it's saved: choices, lengths and URL schemes hold as in the editor, and a file that breaks
+them is a `CareerImportError` with a sentence for the user, never a 500.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from django.contrib.auth.models import User
+from django.core.exceptions import MultipleObjectsReturned, ValidationError
 from django.db import transaction
 
 from jac.models import (
@@ -39,33 +44,64 @@ ENTRY_MODELS = (
 
 SAMPLE_CAREER = Path(__file__).resolve().parent / "resources" / "sample_career.json"
 
+# What `cv_export` writes; a file with none of them isn't a career.
+SECTIONS = (
+    "domains",
+    "locations",
+    "certifications",
+    "skills",
+    "jobs",
+    "projects",
+    "educations",
+    "languages",
+)
+# An upload's ceiling: a real career is a few hundred rows, and each row costs a few queries.
+MAX_IMPORT_ROWS = 2000
+
 
 class CareerImportError(ValueError):
-    """The data names something it never declared (an unknown skill, job, …)."""
+    """The data can't be imported: it names something it never declared (an unknown skill, job,
+    …), misses a field, or breaks a field's rules. The message is meant for the user."""
 
 
 class CareerNotEmpty(Exception):
-    """The sample only ever loads into an empty career, so it can't clobber anything."""
+    """The sample and an upload only ever load into an empty career, so they can't clobber
+    anything."""
 
 
 def has_career_entries(user: User) -> bool:
     return any(model.objects.filter(user=user).exists() for model in ENTRY_MODELS)
 
 
-def load_sample_career(user: User) -> dict[str, int]:
-    """Load the fictional sample into `user`'s EMPTY career. Raises CareerNotEmpty otherwise.
+def load_into_empty_career(user: User, data: Any) -> dict[str, int]:
+    """Load `data` into `user`'s EMPTY career. Raises CareerNotEmpty otherwise, CareerImportError
+    for a file it can't take; either way nothing is written.
 
     The check runs twice: the first turns a refused request away without taking the row lock, the
     second is what makes a double click safe.
     """
     if has_career_entries(user):
         raise CareerNotEmpty
-    data = json.loads(SAMPLE_CAREER.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not any(key in data for key in SECTIONS):
+        raise CareerImportError(
+            "That isn't a career file: pick the one Download career wrote."
+        )
+    rows = sum(len(v) for v in data.values() if isinstance(v, list))
+    if rows > MAX_IMPORT_ROWS:
+        raise CareerImportError(
+            f"The file has {rows} entries; an import takes at most {MAX_IMPORT_ROWS}."
+        )
     with transaction.atomic():
         User.objects.select_for_update().get(pk=user.pk)
         if has_career_entries(user):
             raise CareerNotEmpty
         return import_career(user, data)
+
+
+def load_sample_career(user: User) -> dict[str, int]:
+    """Load the fictional sample into `user`'s EMPTY career. Raises CareerNotEmpty otherwise."""
+    data = json.loads(SAMPLE_CAREER.read_text(encoding="utf-8"))
+    return load_into_empty_career(user, data)
 
 
 def wipe_career(user: User) -> None:
@@ -74,7 +110,28 @@ def wipe_career(user: User) -> None:
 
 
 def import_career(user: User, data: dict) -> dict[str, int]:
-    """Create `data`'s entries under `user`. Returns {section: rows created}."""
+    """Create `data`'s entries under `user`. Returns {section: rows created}.
+
+    A file of the wrong shape (a section that isn't a list, an entry that isn't an object, a
+    required field missing) is a CareerImportError, not a crash.
+    """
+    try:
+        return _import_all(user, data)
+    except CareerImportError:
+        raise
+    except KeyError as exc:
+        raise CareerImportError(f"An entry is missing {exc.args[0]!r}.") from exc
+    except MultipleObjectsReturned as exc:
+        raise CareerImportError(
+            "Two entries share a name that has to be unique (a skill or a certification)."
+        ) from exc
+    except (TypeError, AttributeError) as exc:
+        raise CareerImportError(
+            "The file doesn't have the shape Download career writes."
+        ) from exc
+
+
+def _import_all(user: User, data: dict) -> dict[str, int]:
     counts: dict[str, int] = {}
     counts["domains"] = _import_domains(user, data.get("domains", []))
     counts["locations"] = _import_locations(user, data.get("locations", []))
@@ -91,41 +148,84 @@ def import_career(user: User, data: dict) -> dict[str, int]:
     return counts
 
 
+def _create(model, **fields):
+    """Build, check and save one row: `full_clean()` is the editor's rules (choices, lengths, URL
+    schemes, the favourite cap), which `objects.create()` would skip."""
+    obj = model(**fields)
+    try:
+        obj.full_clean()
+    except ValidationError as exc:
+        what = next(
+            (
+                fields[k]
+                for k in ("name", "title", "institution", "city")
+                if k in fields
+            ),
+            "",
+        )
+        problems = "; ".join(
+            f"{field}: {' '.join(messages)}"
+            for field, messages in getattr(
+                exc, "message_dict", {"": exc.messages}
+            ).items()
+        )
+        raise CareerImportError(
+            f"{model._meta.verbose_name.capitalize()} {what!r}: {problems}"
+        ) from exc
+    obj.save()
+    return obj
+
+
 def _parse_date(value: Any) -> date | None:
     if value in (None, ""):
         return None
     if isinstance(value, date):
         return value
-    return datetime.strptime(str(value), "%Y-%m-%d").date()
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise CareerImportError(f"Not a date (YYYY-MM-DD): {value!r}") from exc
+
+
+def _unique_names(kind: str, items: list[dict]) -> None:
+    seen: set[str] = set()
+    for item in items:
+        if item["name"] in seen:
+            raise CareerImportError(f"Two {kind}s are named {item['name']!r}.")
+        seen.add(item["name"])
 
 
 def _import_domains(user: User, items: list[dict]) -> int:
     n = 0
     for item in items:
-        _, created = Domain.objects.get_or_create(
-            user=user,
-            name=item["name"],
-            defaults={"description": item.get("description", "")},
-        )
-        n += int(created)
+        if not Domain.objects.filter(user=user, name=item["name"]).exists():
+            _create(
+                Domain,
+                user=user,
+                name=item["name"],
+                description=item.get("description", ""),
+            )
+            n += 1
     return n
 
 
 def _import_locations(user: User, items: list[dict]) -> int:
     n = 0
     for item in items:
-        _, created = Location.objects.get_or_create(
-            user=user,
-            city=item["city"],
-            country=item.get("country"),
-            defaults={
-                "street": item.get("street"),
-                "zip": item.get("zip"),
-                "longitude": item.get("longitude"),
-                "latitude": item.get("latitude"),
-            },
-        )
-        n += int(created)
+        if not Location.objects.filter(
+            user=user, city=item["city"], country=item.get("country")
+        ).exists():
+            _create(
+                Location,
+                user=user,
+                city=item["city"],
+                country=item.get("country"),
+                street=item.get("street"),
+                zip=item.get("zip"),
+                longitude=item.get("longitude"),
+                latitude=item.get("latitude"),
+            )
+            n += 1
     return n
 
 
@@ -134,9 +234,9 @@ def _resolve_location(user: User, name: str | None) -> Location | None:
         return None
     # Scoped to the user; auto-create on a miss so a fresh server need not
     # be pre-seeded with the same locations. Nothing makes a city unique, so first match wins.
-    return Location.objects.filter(
-        user=user, city=name
-    ).first() or Location.objects.create(user=user, city=name)
+    return Location.objects.filter(user=user, city=name).first() or _create(
+        Location, user=user, city=name
+    )
 
 
 def _resolve_domains(user: User, names: list[str]) -> list[Domain]:
@@ -145,7 +245,9 @@ def _resolve_domains(user: User, names: list[str]) -> list[Domain]:
         # Own domains + system defaults; auto-create under the user on miss.
         domain = Domain.objects.for_user(user).filter(name=n).first()
         if not domain:
-            domain, _ = Domain.objects.get_or_create(user=user, name=n)
+            domain = Domain.objects.filter(user=user, name=n).first() or _create(
+                Domain, user=user, name=n
+            )
         out.append(domain)
     return out
 
@@ -181,8 +283,10 @@ def _resolve_job(user: User, title: str | None) -> Job | None:
 
 
 def _import_certifications(user: User, items: list[dict]) -> int:
+    _unique_names("certification", items)
     for item in items:
-        cert = Certification.objects.create(
+        cert = _create(
+            Certification,
             user=user,
             name=item["name"],
             issuer=item["issuer"],
@@ -191,6 +295,7 @@ def _import_certifications(user: User, items: list[dict]) -> int:
             credential_id=item.get("credential_id", ""),
             url=item.get("url", ""),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
         domains = _resolve_domains(user, item.get("domains", []))
         if domains:
@@ -209,10 +314,12 @@ def _wire_certification_skills(user: User, items: list[dict]) -> None:
 
 
 def _import_skills(user: User, items: list[dict]) -> int:
+    _unique_names("skill", items)
     # Two passes: create every skill (so related_skills can reference one
     # defined later in the file), then wire the symmetric relations.
     for item in items:
-        skill = Skill.objects.create(
+        skill = _create(
+            Skill,
             user=user,
             name=item["name"],
             proficiency=item.get("proficiency", Skill.Proficiency_Choices.intermediate),
@@ -221,6 +328,7 @@ def _import_skills(user: User, items: list[dict]) -> int:
             years_of_experience_override=item.get("years_of_experience_override"),
             certification=_resolve_certification(user, item.get("certification")),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
         domains = _resolve_domains(user, item.get("domains", []))
         if domains:
@@ -239,7 +347,8 @@ def _import_skills(user: User, items: list[dict]) -> int:
 
 def _import_jobs(user: User, items: list[dict]) -> int:
     for item in items:
-        job = Job.objects.create(
+        job = _create(
+            Job,
             user=user,
             title=item["title"],
             company=item["company"],
@@ -249,6 +358,7 @@ def _import_jobs(user: User, items: list[dict]) -> int:
             ended=_parse_date(item.get("ended")),
             url=item.get("url", ""),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
         skills = _resolve_skills(user, item.get("skills", []))
         if skills:
@@ -261,7 +371,8 @@ def _import_jobs(user: User, items: list[dict]) -> int:
 
 def _import_projects(user: User, items: list[dict]) -> int:
     for item in items:
-        project = Project.objects.create(
+        project = _create(
+            Project,
             user=user,
             name=item["name"],
             location=_resolve_location(user, item.get("location")),
@@ -270,6 +381,7 @@ def _import_projects(user: User, items: list[dict]) -> int:
             ended=_parse_date(item.get("ended")),
             url=item.get("url", ""),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
         skills = _resolve_skills(user, item.get("skills", []))
         if skills:
@@ -282,7 +394,8 @@ def _import_projects(user: User, items: list[dict]) -> int:
 
 def _import_educations(user: User, items: list[dict]) -> int:
     for item in items:
-        education = Education.objects.create(
+        education = _create(
+            Education,
             user=user,
             institution=item["institution"],
             location=_resolve_location(user, item.get("location")),
@@ -293,6 +406,7 @@ def _import_educations(user: User, items: list[dict]) -> int:
             started=_parse_date(item["started"]),
             ended=_parse_date(item.get("ended")),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
         skills = _resolve_skills(user, item.get("skills", []))
         if skills:
@@ -305,11 +419,13 @@ def _import_educations(user: User, items: list[dict]) -> int:
 
 def _import_languages(user: User, items: list[dict]) -> int:
     for item in items:
-        Language.objects.create(
+        _create(
+            Language,
             user=user,
             name=item["name"],
             fluency=item.get("fluency", Language.Fluency.basic),
             certification=_resolve_certification(user, item.get("certification")),
             description=item.get("description", ""),
+            favourite=item.get("favourite", False),
         )
     return len(items)

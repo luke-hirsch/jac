@@ -5,6 +5,7 @@ import type { ResourceKey } from "@/lib/queries/jac";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyCareerCard } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
+import { ExportButton } from "@/components/transfer-buttons";
 
 const SECTIONS: { key: ResourceKey; label: string; to: string; url: string }[] =
   [
@@ -61,6 +62,11 @@ function CvDashboard() {
   return (
     <div className="space-y-6">
       {careerEmpty && <EmptyCareerCard />}
+      {!careerEmpty && (
+        <div className="flex justify-end">
+          <ExportButton kind="career" label="Download career (.json)" />
+        </div>
+      )}
       {failed.length > 0 && (
         <QueryError
           error={failed[0].error}
