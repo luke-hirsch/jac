@@ -2,8 +2,8 @@
 
 (provider, model, user), frozen. The jac pipeline threads exactly one of these
 through a whole generation run — the single-executor invariant lives here. `model`
-None means "the executor's own default" (HirschAI's row model / the catalog
-default). Embedding is deliberately NOT on this class: it is a tower-only
+None means "the executor's own default" (HirschAI's row model / the default pick from
+the key's stored model list). Embedding is deliberately NOT on this class: it is a tower-only
 capability (llm_connector.embed()), and a commercial executor must never grow one.
 """
 

@@ -31,7 +31,7 @@ from jac.models import (
 from jac.queues import runs_ahead
 from jac.register import ADDRESS_FORMS
 from llm_connector.catalog import validate_params
-from llm_connector.conf import ExecutorError, resolve_executor
+from llm_connector.conf import ExecutorError, executor_knobs, resolve_executor
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from lukehirsch.private_media import PrivateFileField
 from spa.models import PersonalityProfile
@@ -522,7 +522,7 @@ class GenerationRunCreateSerializer(
             )
         except ExecutorError as exc:
             raise serializers.ValidationError({"provider": [str(exc)]})
-        problems = validate_params(executor.provider, attrs.get("params") or {})
+        problems = validate_params(executor_knobs(executor), attrs.get("params") or {})
         if problems:
             raise serializers.ValidationError({"params": problems})
         if mode == Mode.high and executor.is_hirschai:

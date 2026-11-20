@@ -94,6 +94,17 @@ class LLMAdapter(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not support web search.")
 
+    def list_models(self) -> list[dict]:
+        """The models this key reaches, newest first, as the provider lists them.
+
+        Each row is {"id", "label", "knobs"} with the knobs in the shape
+        `catalog.validate_params` reads ({"effort": {"choices": [...]}}), plus whatever the
+        adapter needs later to call that model right (Anthropic: "thinking"). The row is
+        stored on the user's LLMConfig and copied back into the config dict for a run.
+        Optional capability — only the commercial adapters implement it (mirrors embed()).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not list models.")
+
     def map_params(self, params: dict) -> dict:
         """Translate generic per-run knobs into this provider's native kwargs.
         Base: no knobs — unknown-provider safety (ollama must NEVER see knob

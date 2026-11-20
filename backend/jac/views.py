@@ -501,7 +501,19 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Create the application and queue its first generation run."""
         application = serializer.save()
-        executor = default_executor(self.request.user)
+        try:
+            executor = default_executor(self.request.user)
+        except ExecutorError as exc:
+            # The default key has no model to run on. The run says so instead of running on
+            # another executor; it never reached the queue, so it costs no budget.
+            GenerationRun.objects.create(
+                job_application=application,
+                mode=Mode.standard,
+                provider=exc.provider,
+                status=GenerationRun.Status.failed,
+                error=str(exc),
+            )
+            return
         # The check, the row and the count are one step, so parallel requests can't all take the
         # last slot.
         with transaction.atomic():

@@ -1,7 +1,8 @@
 """Connector API surface: per-provider credential CRUD, the executors endpoint
 (the generate panel's single source), the connectivity check, the spend audit.
 
-Target API = `[backend]-executor-connector`.
+Target API = `[backend]-executor-connector`; the model lists per key are
+`[fullstack]-live-model-catalog`.
 """
 
 from unittest.mock import patch
@@ -11,14 +12,24 @@ from django.core.cache import cache
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from llm_connector.catalog import CATALOG, models_for
+from llm_connector.base import LLMTransportError
+from llm_connector.catalog import COMMERCIAL_PROVIDERS
 from llm_connector.conf import HIRSCHAI_PROVIDER, hirschai_row
 from llm_connector.models import LLMConfig, LLMRequestLog
+from llm_connector.providers.anthropic import AnthropicAdapter
 
-from ._helpers import TEST_HIRSCHAI, fake_row, keyed_row
+from ._helpers import ANTHROPIC_MODELS, TEST_HIRSCHAI, FakeAdapter, fake_row, keyed_row
 
 CONFIGS_URL = "/api/llm/configs/"
 EXECUTORS_URL = "/api/llm/executors/"
+
+
+def _no_listing(test):
+    """Saving a key asks the provider for its models: patched out where a test isn't about
+    that, so no test reaches the network."""
+    patcher = patch("llm_connector.serializers.refresh_models", return_value=[])
+    test.addCleanup(patcher.stop)
+    return patcher.start()
 
 
 class LLMConfigApiTests(APITestCase):
@@ -29,6 +40,7 @@ class LLMConfigApiTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.alice)
+        _no_listing(self)
 
     def test_create_returns_row_without_key_material(self):
         r = self.client.post(
@@ -46,9 +58,13 @@ class LLMConfigApiTests(APITestCase):
         self.assertTrue(r.data["default"])
         self.assertTrue(r.data["has_api_key"])
         self.assertNotIn("api_key", r.data)
-        # The thin model is the API: no url/extra/max_tokens surface for users.
+        # The thin model is the API: no url/extra/max_tokens surface for users, and the
+        # model list reaches the SPA through the executors endpoint, as a count here.
         self.assertNotIn("url", r.data)
         self.assertNotIn("extra", r.data)
+        self.assertNotIn("models", r.data)
+        self.assertIn("model_count", r.data)
+        self.assertIn("models_checked_at", r.data)
         row = LLMConfig.objects.get(user=self.alice, provider="anthropic")
         self.assertEqual(row.api_key, "sk-x")
 
@@ -142,6 +158,7 @@ class TransferConsentTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.alice)
+        _no_listing(self)
 
     def _post(self, **body):
         return self.client.post(
@@ -224,6 +241,72 @@ class TransferConsentTests(APITestCase):
         self.assertEqual(r.status_code, 200, r.data)
 
 
+class KeySaveListsModelsTests(APITestCase):
+    """Saving a key asks the provider which models it reaches, synchronously, so the generate
+    panel offers them at once. A provider that doesn't answer never stops the key."""
+
+    LIST = "llm_connector.providers.anthropic.AnthropicAdapter.list_models"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice", password="pw")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def _post(self):
+        return self.client.post(
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "sk-x", "transfer_consent": True},
+            format="json",
+        )
+
+    def test_saving_a_key_lists_its_models(self):
+        with patch(self.LIST, return_value=ANTHROPIC_MODELS) as listing:
+            r = self._post()
+        self.assertEqual(r.status_code, 201, r.data)
+        listing.assert_called_once()
+        self.assertEqual(r.data["model_count"], len(ANTHROPIC_MODELS))
+        self.assertTrue(r.data["models_checked_at"])
+        row = LLMConfig.objects.get(user=self.alice)
+        self.assertEqual(row.models, ANTHROPIC_MODELS)
+
+    def test_a_provider_that_doesnt_answer_never_blocks_the_key(self):
+        with (
+            patch(self.LIST, side_effect=LLMTransportError("provider down")),
+            self.assertLogs("llm_connector.serializers", "WARNING"),
+        ):
+            r = self._post()
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertTrue(r.data["has_api_key"])
+        self.assertEqual(r.data["model_count"], 0)
+        self.assertIsNone(r.data["models_checked_at"])
+
+    def test_a_new_key_drops_the_old_keys_list(self):
+        """Another account at the same provider may reach other models."""
+        row = keyed_row(self.alice, models=ANTHROPIC_MODELS)
+        with (
+            patch(self.LIST, side_effect=LLMTransportError("provider down")),
+            self.assertLogs("llm_connector.serializers", "WARNING"),
+        ):
+            r = self.client.patch(
+                f"{CONFIGS_URL}{row.pk}/", {"api_key": "sk-new"}, format="json"
+            )
+        self.assertEqual(r.status_code, 200, r.data)
+        row.refresh_from_db()
+        self.assertEqual((row.models, row.models_checked_at), ([], None))
+
+    def test_a_save_without_a_key_keeps_the_list_and_asks_nobody(self):
+        row = keyed_row(self.alice, models=ANTHROPIC_MODELS)
+        with patch(self.LIST) as listing:
+            r = self.client.patch(
+                f"{CONFIGS_URL}{row.pk}/", {"default": True}, format="json"
+            )
+        self.assertEqual(r.status_code, 200, r.data)
+        listing.assert_not_called()
+        self.assertEqual(r.data["model_count"], len(ANTHROPIC_MODELS))
+
+
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class PrewarmApiTests(APITestCase):
     URL = "/api/llm/prewarm/"
@@ -241,7 +324,15 @@ class PrewarmApiTests(APITestCase):
         prewarm.assert_called_once()
 
     def test_someone_on_their_own_key_never_touches_the_tower(self):
-        fake_row(self.user, "anthropic", default=True)
+        keyed_row(self.user, default=True, models=ANTHROPIC_MODELS)
+        self.client.force_login(self.user)
+        with patch(self.REQUEST) as prewarm:
+            r = self.client.post(self.URL)
+        self.assertEqual(r.status_code, 204)
+        prewarm.assert_not_called()
+
+    def test_a_default_key_without_a_model_list_still_isnt_the_tower(self):
+        keyed_row(self.user, default=True)
         self.client.force_login(self.user)
         with patch(self.REQUEST) as prewarm:
             r = self.client.post(self.URL)
@@ -287,14 +378,35 @@ class ExecutorListApiTests(APITestCase):
     def test_hirschai_reports_offline(self):
         self.assertFalse(self._rows(reachable=False)[HIRSCHAI_PROVIDER]["reachable"])
 
-    def test_commercial_rows_cover_the_catalog(self):
+    def test_unconfigured_providers_offer_no_models(self):
         rows = self._rows()
-        for provider in CATALOG:
+        for provider in COMMERCIAL_PROVIDERS:
             row = rows[provider]
             self.assertFalse(row["configured"])  # nothing configured yet
             self.assertFalse(row["default"])
-            self.assertEqual(row["models"], models_for(provider))
+            self.assertEqual(row["models"], [])
             self.assertEqual(row["modes"], ["standard", "high"])
+
+    def test_a_configured_key_serves_its_stored_list(self):
+        keyed_row(self.alice, models=ANTHROPIC_MODELS)
+        models = self._rows()["anthropic"]["models"]
+        self.assertEqual([m["id"] for m in models], [m["id"] for m in ANTHROPIC_MODELS])
+        self.assertEqual([m["id"] for m in models if m.get("default")], ["claude-sonnet-5"])
+        self.assertEqual(models[0]["label"], "Claude Opus 4.8")
+        for model in models:
+            with self.subTest(model["id"]):
+                self.assertNotIn("thinking", model)  # the adapter's, not the SPA's
+
+    def test_the_list_is_read_never_fetched(self):
+        """The SPA polls this every 30 s: it must never cost a provider call."""
+        keyed_row(self.alice, models=ANTHROPIC_MODELS)
+        with patch.object(AnthropicAdapter, "list_models") as listing:
+            self._rows()
+        listing.assert_not_called()
+
+    def test_a_key_without_consent_offers_no_models(self):
+        keyed_row(self.alice, consent=False, models=ANTHROPIC_MODELS)
+        self.assertEqual(self._rows()["anthropic"]["models"], [])
 
     def test_configured_default_marks_the_row_and_unmarks_hirschai(self):
         keyed_row(self.alice, default=True)
@@ -335,15 +447,20 @@ class LLMConfigCheckActionTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.alice)
+        FakeAdapter.instances.clear()
 
     def _check(self, pk):
         return self.client.post(f"{CONFIGS_URL}{pk}/check/")
 
-    def test_success_returns_ok_and_latency(self):
+    def test_success_returns_ok_latency_and_the_model_count(self):
         r = self._check(self.row.pk)
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.data["ok"])
         self.assertIn("latency_ms", r.data)
+        self.assertEqual(r.data["models"], 1)
+        row = LLMConfig.objects.get(pk=self.row.pk)
+        self.assertEqual([m["id"] for m in row.models], ["fake-1"])
+        self.assertIsNotNone(row.models_checked_at)
 
     def test_failure_is_a_result_not_an_http_error(self):
         with patch(
@@ -353,6 +470,34 @@ class LLMConfigCheckActionTests(APITestCase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.data["ok"])
         self.assertIn("boom", r.data["error"])
+        self.assertEqual(r.data["models"], 1)  # the listing before it went through
+
+    def test_a_listing_that_fails_keeps_the_last_list(self):
+        row = fake_row(self.alice, provider="fakesearch")
+        row.models = [{"id": "fs-old", "label": "Old", "knobs": {}}]
+        row.save()
+        with patch.object(
+            FakeAdapter, "list_models", side_effect=RuntimeError("listing down")
+        ):
+            r = self._check(row.pk)
+        self.assertFalse(r.data["ok"])
+        self.assertIn("listing down", r.data["error"])
+        self.assertEqual(r.data["models"], 1)
+        row.refresh_from_db()
+        self.assertEqual([m["id"] for m in row.models], ["fs-old"])
+
+    def test_a_commercial_key_pongs_on_the_default_pick_of_its_fresh_list(self):
+        row = keyed_row(self.alice)
+        with (
+            patch.object(AnthropicAdapter, "list_models", return_value=ANTHROPIC_MODELS),
+            patch.object(
+                AnthropicAdapter, "complete", autospec=True, return_value="pong"
+            ) as pong,
+        ):
+            r = self._check(row.pk)
+        self.assertTrue(r.data["ok"], r.data)
+        self.assertEqual(r.data["models"], len(ANTHROPIC_MODELS))
+        self.assertEqual(pong.call_args.args[0]._model, "claude-sonnet-5")
 
     def test_other_users_config_is_404(self):
         self.client.force_login(self.bob)
@@ -364,6 +509,7 @@ class LLMConfigCheckActionTests(APITestCase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.data["ok"])
         self.assertIn("agree to the transfer", r.data["error"])
+        self.assertEqual(FakeAdapter.instances, [])  # not even listed
 
 
 class LLMRequestLogApiTests(APITestCase):
@@ -420,23 +566,33 @@ class LLMRequestLogApiTests(APITestCase):
 
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class ExecutorKnobAdvertisingTests(APITestCase):
-    """[fullstack]-model-knobs: the executors endpoint advertises each provider's
-    knob spec so the generate panel renders controls from data, never hardcoded."""
+    """[fullstack]-model-knobs: the executors endpoint advertises each MODEL's knob spec
+    (from the provider's capability data) so the generate panel renders controls from data,
+    never hardcoded. The row-level `knobs` field is gone."""
 
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user("alice", password="pw")
+        keyed_row(cls.user, models=ANTHROPIC_MODELS)
 
     def setUp(self):
         self.client.force_login(self.user)
 
-    def test_commercial_rows_carry_the_knob_spec_hirschai_none(self):
+    def test_knobs_ride_on_each_model_and_hirschai_has_none(self):
         with patch("llm_connector.views.hirschai_state", return_value=True):
-            rows = {r["provider"]: r for r in self.client.get("/api/llm/executors/").data}
-        self.assertEqual(rows["ollama"]["knobs"], {})
-        # Anthropic keeps both knobs; OpenAI is reasoning-only (effort, no temperature).
-        self.assertIn("effort", rows["anthropic"]["knobs"])
-        self.assertIn("choices", rows["anthropic"]["knobs"]["effort"])
-        self.assertIn("temperature", rows["anthropic"]["knobs"])
-        self.assertIn("effort", rows["openai"]["knobs"])
-        self.assertNotIn("temperature", rows["openai"]["knobs"])
+            rows = {r["provider"]: r for r in self.client.get(EXECUTORS_URL).data}
+        for row in rows.values():
+            with self.subTest(row["provider"]):
+                self.assertNotIn("knobs", row)
+        self.assertEqual(rows["ollama"]["models"], [])
+        knobs = {m["id"]: m["knobs"] for m in rows["anthropic"]["models"]}
+        self.assertEqual(
+            knobs["claude-opus-4-8"]["effort"]["choices"],
+            ["low", "medium", "high", "xhigh", "max"],
+        )
+        self.assertEqual(
+            knobs["claude-haiku-4-5-20251001"]["effort"]["choices"],
+            ["low", "medium", "high"],
+        )
+        for model_knobs in knobs.values():
+            self.assertNotIn("temperature", model_knobs)

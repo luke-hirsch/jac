@@ -18,9 +18,11 @@ class Provider(models.TextChoices):
 class LLMConfig(models.Model):
     """One row per (user, provider): the provider credential + the default flag.
 
-    The model is deliberately thin — WHICH model runs is a per-run pick from
-    `llm_connector.catalog`, never stored here. `url`/`max_tokens`/`extra` exist for the
-    system-owned HirschAI row (tower url, chat/embed model names, think flag) and are not
+    The model is deliberately thin — WHICH model runs is a per-run pick, never stored here.
+    What the row does store is what this key can reach: `models`, the provider's own list as
+    the last save or Check found it (`llm_connector.catalog.refresh_models`), because two
+    accounts at one provider don't see the same models. `url`/`max_tokens`/`extra` exist for
+    the system-owned HirschAI row (tower url, chat/embed model names, think flag) and are not
     exposed over the user API. Rows owned by the system user are the shared executors
     (today: HirschAI), same pattern as Domain/ApplicationLayout.
     """
@@ -49,6 +51,12 @@ class LLMConfig(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # When the provider last listed this key's models. None: never, or not since the key changed.
+    models_checked_at = models.DateTimeField(null=True, blank=True)
+    # What this key reaches, newest first: [{id, label, knobs, …}] as the adapter's `list_models`
+    # builds it. Last field on purpose: below this line `models` in the class body is this field,
+    # not django.db.models.
+    models = models.JSONField(default=list, blank=True)
 
     objects = SystemScopedManager()
 
