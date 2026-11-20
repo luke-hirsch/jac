@@ -71,34 +71,40 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in five guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in seven guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
-- `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` falls through to the SPA (200, HTML, no
-  `X-Release`). It's two nginx blocks, with the red test on disk, on the open branch of the same name;
+- `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` reaches Django now (merged, live). His curls
+  against the live names and the Results are left;
 - `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones folded in, the rollback drill rides
   on guide 02's deploy) and the watch list;
 - `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
   gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]);
-- `05_[fullstack]-live-model-catalog` and `06_[fullstack]-claude-skill`: coded by the AI at his request (2026-11-20),
-  summary guides, his to test and merge. 05: each key's live model list + the fix for effort on current Claude
-  models. 06: write applications with Claude on his own subscription, and have Claude review and improve the
-  career data, every batch of edits undoable ([[claude-skill]]).
+- `05` to `08`: coded by the AI at his request (2026-11-20), summary guides, all merged into `main`, his to test on
+  live and log:
+  - 05 `live-model-catalog`: each key's live model list + the fix for effort on current Claude models;
+  - 06 `claude-skill`: write applications with Claude on his own subscription, and have Claude review and improve
+    the career data, every batch of edits undoable ([[claude-skill]]);
+  - 07 `career-export`: the career and the applications as files, a download and an import each; an import fills
+    only an empty career or list ([[career-files]]);
+  - 08 `skill-file-mode`: the Claude app can't reach jac on his plan, so the skill works from files there (a static
+    zip, a career file per chat, Claude's results imported in jac). It supersedes 06's Claude-app half; the token
+    stays, for Claude Code only.
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
 ("the AI codes at his request, we're at a volatile stage") ran until launch.** Default-strict (below) applies again
 until Lukas says otherwise.
 
-- **Branches:** `main`'s code is what's live: the Postgres move, prewarm, the race fix, the legal pages and what they
+- **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
-  `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with SSL. Three
-  branches are open: `infra/health-every-host` (guide 02), `fullstack/live-model-catalog` (05) and
-  `fullstack/claude-skill` (06). 05 and 06 were merged together onto `main` in a trial: no conflicts, full suites
-  green.
+  `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
+  guides 02 and 05 to 08. Deploying 07 and 08 (merged 2026-11-20) needs no migration and no `.env` line.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
-  (2026-11-14); what the VPS's own logs keep is still open (guide 04). The visitor hash waits on the board. The DNS stays at Strato, so section 11 no longer names Cloudflare.
+  (2026-11-14); what the VPS's own logs keep is still open (guide 04). The visitor hash waits on the board. The DNS
+  stays at Strato, so section 11 no longer names Cloudflare. Guide 07's download makes §13's "a data export on
+  request by email" out of date: the sentence is his call (guide 07).
 - **Live isn't verified yet:** Lukas has given it a first glance, but the checklist hasn't run. Guide 03 is the logged
   run ([[implemented-is-not-verified]]).
 - **The lab:**
