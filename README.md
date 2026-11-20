@@ -15,13 +15,6 @@ that shows each visitor something different, depending on how they arrived.
 The model runs on a GPU machine that sleeps when idle. Your run says so while it waits, keeps its
 place in line, and you can leave the page: you get a mail when it's done.
 
-## The thesis
-
-Small self-hosted models are a viable alternative to a large hosted one: a 9B model on an 8 GB
-consumer GPU, with an embedding model as the ranking floor. Commercial models are an opt-in on the
-user's own key, never required. And every letter is audited: a grounding check flags claims your
-career database doesn't support.
-
 ## What's in it
 
 - **Selection:** [`jac/filter.py`](backend/jac/filter.py). Modes `manual`, `standard` (embedding
@@ -45,12 +38,12 @@ career database doesn't support.
 
 ## Stack
 
-| | |
-| --- | --- |
-| Backend | Django 6, DRF, Channels, Celery, allauth headless (MFA + passkeys) |
-| Frontend | React 19, Vite, TanStack Router / Query / Form, Tailwind v4, shadcn/ui, react-pdf |
-| Data | Postgres in dev, the test suite, CI and prod; Valkey for broker, channel layer and cache |
-| AI | Ollama behind a URL; Anthropic and OpenAI on the user's key |
+|          |                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------- |
+| Backend  | Django 6, DRF, Channels, Celery, allauth headless (MFA + passkeys)                       |
+| Frontend | React 19, Vite, TanStack Router / Query / Form, Tailwind v4, shadcn/ui, react-pdf        |
+| Data     | Postgres in dev, the test suite, CI and prod; Valkey for broker, channel layer and cache |
+| AI       | Ollama behind a URL; Anthropic and OpenAI on the user's key                              |
 
 ## Run it (dev)
 
@@ -81,13 +74,13 @@ Two things it leaves to you:
 `./dev stack` runs the production image on this machine instead, with its own Postgres and Valkey, at
 [jac.localhost:8000](http://jac.localhost:8000). `./dev stack down` stops it and deletes its data.
 
-| File | Read by | What it's for |
-| --- | --- | --- |
-| `backend/.env.local` | `manage.py` and the worker | `DEBUG=1`. `./dev` creates it. Without a `DEBUG` variable the app runs in production mode and refuses to start without its secrets, on purpose |
-| `.env` | Compose on a server | Everything production needs, from [`.env.example`](.env.example). A laptop doesn't need one |
-| `compose.yaml` | Any server | The stack, knowing nothing about where it runs |
-| `compose.laptop.yaml` | `./dev stack` | The image on a laptop, with its own database |
-| `deploy/compose.lab.yaml` | The lab | Copied there as `compose.override.yaml` |
+| File                      | Read by                    | What it's for                                                                                                                                  |
+| ------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/.env.local`      | `manage.py` and the worker | `DEBUG=1`. `./dev` creates it. Without a `DEBUG` variable the app runs in production mode and refuses to start without its secrets, on purpose |
+| `.env`                    | Compose on a server        | Everything production needs, from [`.env.example`](.env.example). A laptop doesn't need one                                                    |
+| `compose.yaml`            | Any server                 | The stack, knowing nothing about where it runs                                                                                                 |
+| `compose.laptop.yaml`     | `./dev stack`              | The image on a laptop, with its own database                                                                                                   |
+| `deploy/compose.lab.yaml` | The lab                    | Copied there as `compose.override.yaml`                                                                                                        |
 
 Optional: `VECTOR_STORE` turns on the RAG read path. A filesystem path runs Qdrant embedded (then the
 worker must be the only process touching it: `--pool=solo`), and an `http(s)://` URL targets a server.

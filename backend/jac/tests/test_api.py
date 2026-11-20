@@ -30,6 +30,7 @@ from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
     AccessToken,
     CareerChange,
+    Certification,
     DailyGenerationCount,
     Domain,
     Education,
@@ -1796,6 +1797,15 @@ class SkillTokenManagementTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
         self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 200)
 
+    def test_a_failed_bundle_leaves_no_token(self):
+        # The key only ever lives in the zip: a token minted for a zip that never went out is
+        # one nobody holds, and it counts toward the cap.
+        self.client.raise_request_exception = False
+        with patch("jac.views.skill_bundle", side_effect=ValueError("boom")):
+            r = self.client.post(f"{SKILL_URL}bundle/")
+        self.assertEqual(r.status_code, 500)
+        self.assertFalse(AccessToken.objects.filter(user=self.user).exists())
+
 
 class SkillCareerTests(_SkillCase):
     def test_entries_carry_ids_and_names_not_keys(self):
@@ -1812,6 +1822,19 @@ class SkillCareerTests(_SkillCase):
         data = self.client.get(f"{SKILL_URL}career/").data
         names = [s["name"] for s in data["entries"]["skills"]]
         self.assertEqual(names, ["Python"])
+
+    def test_educations_and_certifications_together(self):
+        # Both prefetch their domains; one mixed list was a ValueError, a 500 on the career
+        # and on the zip for anyone with both.
+        backend = Domain.objects.create(user=self.user, name="Backend")
+        self.master.domains.add(backend)
+        aws = Certification.objects.create(user=self.user, name="AWS SAA", issuer="AWS")
+        aws.domains.add(backend)
+        r = self.client.get(f"{SKILL_URL}career/")
+        self.assertEqual(r.status_code, 200)
+        entries = r.data["entries"]
+        self.assertEqual(entries["educations"][0]["domains"], ["Backend"])
+        self.assertEqual(entries["certifications"][0]["domains"], ["Backend"])
 
 
 class SkillApplicationTests(_SkillCase):

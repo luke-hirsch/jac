@@ -71,14 +71,18 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in three guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in five guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
 - `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` falls through to the SPA (200, HTML, no
   `X-Release`). It's two nginx blocks, with the red test on disk, on the open branch of the same name;
 - `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones folded in, the rollback drill rides
   on guide 02's deploy) and the watch list;
 - `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
-  gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]).
+  gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]);
+- `05_[fullstack]-live-model-catalog` and `06_[fullstack]-claude-skill`: coded by the AI at his request (2026-11-20),
+  summary guides, his to test and merge. 05: each key's live model list + the fix for effort on current Claude
+  models. 06: write applications with Claude on his own subscription, and have Claude review and improve the
+  career data, every batch of edits undoable ([[claude-skill]]).
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
@@ -87,8 +91,10 @@ until Lukas says otherwise.
 
 - **Branches:** `main`'s code is what's live: the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
-  `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with SSL. One
-  branch is open: `infra/health-every-host` (guide 02).
+  `./dev` serving the landing on plain `localhost` as the apex does live, and mail over Strato's 465 with SSL. Three
+  branches are open: `infra/health-every-host` (guide 02), `fullstack/live-model-catalog` (05) and
+  `fullstack/claude-skill` (06). 05 and 06 were merged together onto `main` in a trial: no conflicts, full suites
+  green.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
@@ -96,8 +102,11 @@ until Lukas says otherwise.
 - **Live isn't verified yet:** Lukas has given it a first glance, but the checklist hasn't run. Guide 03 is the logged
   run ([[implemented-is-not-verified]]).
 - **The lab:**
-  - labd, the tower's wake proxy, runs (server guide 18), and jac goes through it.
-  - Prewarming is built. It's live only if `HIRSCHAI_PREWARM_KEY` is in the mini's `.env` (guide 03, check 15).
+  - labd, the tower's wake proxy, runs (server guide 18), **but live jac doesn't go through it** (found 2026-11-16):
+    the mini's `HIRSCHAI_URL` points at the tower's Ollama directly, so nothing wakes the tower and a run waits its
+    15 minutes for someone to switch it on. The fix is that `.env` line (guide 03, check 4).
+  - Prewarming is built. It's live only if `HIRSCHAI_PREWARM_KEY` is in the mini's `.env`, and it isn't
+    (2026-11-16; guide 03, check 15).
   - There's no nightly backup yet, only the deploy dumps on the mini's disk. Planned: server guide 20, 90 days.
   - The public route for the four names (server guide 19: DNS at Strato, a certificate per name) is closed, green on
     the real machines since 2026-11-14. The deploy and the board's down-check reach `/health/` over the default
