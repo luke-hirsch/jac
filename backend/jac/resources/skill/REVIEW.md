@@ -80,10 +80,10 @@ and the public portfolio, which renders from the same entries.
   bullet. `**bold**` is stripped; nothing else is rendered. Two to five bullets suit a job. When
   a page runs full, jac drops the descriptions of the lowest-ranked entries first. So the first
   line matters most.
-- **What you may change:** the fields `career` shows (see the file format below). **You may create
-  skills, nothing else:** a new job, project, degree, certification or language is the user's to
-  add in jac. **You can't delete.** For a duplicate, move its links to the one that stays and tell
-  the user to delete the other in jac.
+- **What you may change:** the fields `career` shows, except the read-only ones (see the file
+  format below). **You may create skills, nothing else:** a new job, project, degree,
+  certification or language is the user's to add in jac. **You can't delete.** For a duplicate,
+  move its links to the one that stays and tell the user to delete the other in jac.
 - **Which links count.** These change CVs:
   - entry → skill: `skills` on jobs, projects, educations and certifications. They feed an
     entry's ranking against a posting and the skill's years of use;
@@ -131,7 +131,12 @@ Write the batch to a file, e.g. `career-changes.json`:
   - `degree_level` by name (`bachelor`, `master`, …);
   - `job_type` by code (`ft`, `pt`, `ct`, `fl`, `in`, `vl`);
   - a single link as an id or `null`: `"job": "job:3"` on a project, `"certification":
-    "certification:2"` on a skill or language.
+    "certification:2"` on a skill or language;
+  - read-only, so never in a change: `id`, `updated_at`, `location` (the user sets it in jac),
+    a job's `projects` (set `job` on the project instead), an education's `completed` (it
+    follows from `degree_level`) and a skill's `years` (jac counts them from `first_used` and
+    the entries that link the skill). The import refuses any other name, and its answer lists
+    the ones the entry takes.
 - **`add` / `remove`:** lists.
   - `skills`, `related_skills` and `builds_on` take skill ids, or `new:<ref>` for a skill this
     batch creates;

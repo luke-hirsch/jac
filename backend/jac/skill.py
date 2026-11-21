@@ -96,7 +96,8 @@ def _job(j) -> dict:
         "id": f"job:{j.pk}",
         "title": j.title,
         "company": j.company,
-        "type": j.job_type,
+        # By the name a change sets it with (`jac.career_changes.FIELDS`).
+        "job_type": j.job_type,
         "location": _place(j.location),
         "started": _iso(j.started),
         "ended": _iso(j.ended),
