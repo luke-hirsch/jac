@@ -1036,7 +1036,33 @@ class SkillCareerChangesSerializer(serializers.Serializer):
 
 
 class AccessTokenSerializer(serializers.ModelSerializer):
+    """A token is minted only on the user's "I agree": it sends the career to Anthropic through
+    their Claude account, the same transfer as an API key (`LLMConfigSerializer`)."""
+
+    transfer_consent = serializers.BooleanField(write_only=True, default=False)
+
     class Meta:
         model = AccessToken
-        fields = ["id", "name", "prefix", "created_at", "last_used_at"]
-        read_only_fields = ["id", "prefix", "created_at", "last_used_at"]
+        fields = [
+            "id",
+            "name",
+            "prefix",
+            "transfer_consent",
+            "transfer_consent_at",
+            "created_at",
+            "last_used_at",
+        ]
+        read_only_fields = [
+            "id",
+            "prefix",
+            "transfer_consent_at",
+            "created_at",
+            "last_used_at",
+        ]
+
+    def validate_transfer_consent(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Agree to the transfer before creating a token."
+            )
+        return value

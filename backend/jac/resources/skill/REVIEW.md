@@ -35,14 +35,14 @@ and the public portfolio, which renders from the same entries.
 5. **Apply only after the user says yes to that batch.**
    - **In file mode**, `apply FILE` checks the batch against the career file (ids, `seen`, links,
      the batch size) and hands the file over; fix what it refuses and run it again. Tell the user:
-     in jac, Account → Claude → Import changes, pick the file. jac shows the batch there with
+     in jac, Account → LLM → Claude → Import changes, pick the file. jac shows the batch there with
      before and after, and it can be undone in the same place.
    - **With the connector, and online**, first check the batch (`apply_career_changes` with
      `dry_run: true`, or `apply FILE --check`); fix what it refuses; then apply it
      (`apply_career_changes`, or `apply FILE`). The ids the check shows for new skills are
      placeholders: keep linking them as `new:<ref>` until the real apply answers with their ids.
      Tell the user what changed and that every batch can be undone, with `undo_career_changes`
-     (`undo ID`) here or in jac under Account → Claude.
+     (`undo ID`) here or in jac under Account → LLM → Claude.
 6. Go on with the next theme, or stop when the user has had enough.
 
 ## What to look for beyond the machine review
@@ -165,5 +165,5 @@ can't touch those entries, or link those skills, from the same career file:
 
 **Undo:** with the connector or online, `changes` (`list_career_changes`) lists the batches,
 and `undo ID` (`undo_career_changes`) puts that batch's entries back and deletes the skills it
-created. In file mode the same is in jac, Account → Claude → Career changes,
+created. In file mode the same is in jac, Account → LLM → Claude → Career changes,
 Undo on the batch. Either way it's refused once an entry in the batch has been edited again since.

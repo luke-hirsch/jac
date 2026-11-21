@@ -71,7 +71,7 @@ class SkillScriptFileModeTests(APITestCase):
         self.addCleanup(env.stop)
         for key in ("JAC_URL", "JAC_TOKEN", "JAC_CAREER_FILE"):
             os.environ.pop(key, None)
-        # The file exactly as Account → Claude → Download career for Claude serves it. The app
+        # The file exactly as Account → LLM → Claude → Download career for Claude serves it. The app
         # may rename an upload: the script goes by the file's marker, not its name.
         self.career = json.loads(self.client.get(f"{SKILL_URL}career/file/").content)
         (self.uploads / "career (1).json").write_text(json.dumps(self.career))
@@ -229,7 +229,7 @@ class SkillScriptFileModeTests(APITestCase):
         result = json.loads(out)
         self.assertEqual(result["changes"], 2)
         self.assertIn("Import changes", result["import"])
-        # Account → Claude → Import changes posts the file's changes.
+        # Account → LLM → Claude → Import changes posts the file's changes.
         handed = json.loads(Path(result["file"]).read_text())
         r = self.client.post(
             f"{SKILL_URL}career/changes/", {"changes": handed["changes"]}, format="json"

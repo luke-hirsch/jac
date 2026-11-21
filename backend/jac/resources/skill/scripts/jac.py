@@ -4,11 +4,11 @@
 Two modes, chosen by the environment:
 
 - **File mode** (the Claude app, whose sandbox can't reach jac): the career comes from the career
-  file the user attached to the chat (jac: Account → Claude → Download career for Claude).
+  file the user attached to the chat (jac: Account → LLM → Claude → Download career for Claude).
   `save` and `apply` check the file Claude wrote against it and hand it over for the user to
   import in jac.
-- **Online mode** (Claude Code): JAC_URL and JAC_TOKEN are set (jac: Account → Claude → Claude
-  Code), and every command talks to jac.
+- **Online mode** (Claude Code): JAC_URL and JAC_TOKEN are set (jac: Account → LLM → Claude),
+  and every command talks to jac.
 
     python3 scripts/jac.py career              the career DB as JSON
     python3 scripts/jac.py review              the machine review of the career, as JSON
@@ -168,7 +168,7 @@ def call(method: str, path: str, body: dict | None = None):
         if err.code == 401:
             raise Refused(
                 "jac doesn't accept the token (revoked or wrong). Create a new one in jac: "
-                "Account → Claude → Claude Code."
+                "Account → LLM → Claude."
             ) from err
         raise Refused(
             f"jac answered {err.code}: {json.dumps(detail, ensure_ascii=False)}"
@@ -204,7 +204,7 @@ def find_career_file() -> Path:
         if not is_career_file(path):
             raise Refused(
                 f"JAC_CAREER_FILE names {path}, which isn't a career file from jac "
-                "(Account → Claude → Download career for Claude)."
+                "(Account → LLM → Claude → Download career for Claude)."
             )
         return path
     found: list[Path] = []
@@ -458,7 +458,7 @@ def cmd_apply(args) -> int:
         out = {"checked_only": check, "changes": len(data["changes"])}
         if not check:
             out["file"] = str(hand_over(path))
-            out["import"] = "jac: Account → Claude → Import changes"
+            out["import"] = "jac: Account → LLM → Claude → Import changes"
         show(out)
         return 0
     body = {"changes": data.get("changes", []), "dry_run": check}
@@ -511,7 +511,7 @@ def cmd_show(args) -> int:
     return 0
 
 
-@online_only("Account → Claude → Career changes lists the batches")
+@online_only("Account → LLM → Claude → Career changes lists the batches")
 def cmd_changes(_args) -> int:
     batches = call("GET", "career/changes/")
     show(
@@ -531,7 +531,7 @@ def cmd_changes(_args) -> int:
     return 0
 
 
-@online_only("Account → Claude → Career changes, Undo on the batch")
+@online_only("Account → LLM → Claude → Career changes, Undo on the batch")
 def cmd_undo(args) -> int:
     if len(args) != 1 or not args[0].isdigit():
         raise Refused("Usage: jac.py undo ID")

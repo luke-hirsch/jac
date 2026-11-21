@@ -138,11 +138,14 @@
   </li>
   <li>
     <strong>Anmeldung:</strong> Daten für die Zwei-Faktor-Anmeldung und Passkeys, eigene
-    API-Schlüssel (verschlüsselt)
+    API-Schlüssel (verschlüsselt), Tokens für Claude (nur als Prüfsumme, mit Zeitpunkt deiner
+    Einwilligung und letzter Nutzung)
   </li>
   <li>
     <strong>Werdegang:</strong> Stellen, Projekte, Ausbildung mit Noten, Zertifikate, Fähigkeiten,
-    Sprachen, dazu Anhänge wie Zeugnisse
+    Sprachen, dazu Anhänge wie Zeugnisse. Änderungen, die Claude vornimmt oder die du importierst,
+    protokollieren wir mit dem vorherigen Stand, damit du sie rückgängig machen kannst; wir behalten
+    die letzten 50.
   </li>
   <li>
     <strong>Bewerbungen:</strong> Stellenausschreibungen samt darin genannter Kontaktdaten des
@@ -215,6 +218,27 @@
   Einfluss.
 </p>
 <p>
+  <strong>Claude</strong>, die KI von Anthropic, kann mit deinem eigenen Claude-Konto Bewerbungen für
+  dich schreiben und deinen Werdegang überarbeiten. Dafür legst du unter Account → LLM → Claude einen
+  Token an und gibst ihn Claude, als Connector in der Claude-App oder in Claude Code. Mit dem Token
+  liest Claude deinen Werdegang, deine Kontaktangaben, deine Antworten aus dem Persönlichkeitsfragebogen
+  samt Schreibprobe und deine Bewerbungen, und es speichert Bewerbungen und Änderungen am Werdegang bei
+  uns. Dein Konto, deine Anmeldedaten und deine API-Schlüssel erreicht der Token nicht. Die Daten gehen
+  unter deinem Claude-Konto an Anthropic und verlassen damit ebenfalls die EU, mit denselben Risiken
+  wie oben.
+</p>
+<p>
+  Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO. Die Übermittlung stützt sich auf deine ausdrückliche
+  Einwilligung, die du beim Anlegen des Tokens gibst (Art. 49 Abs. 1 lit. a DSGVO). Du kannst sie
+  jederzeit widerrufen, indem du den Token löschst; das gilt für alles, was danach käme. Was Anthropic
+  mit den Daten macht, regeln die Bedingungen und die Datenschutzeinstellungen deines Claude-Kontos
+  (<a href="https://www.anthropic.com/legal/consumer-terms">Verbraucherbedingungen</a>,
+  <a href="https://www.anthropic.com/legal/commercial-terms">Geschäftsbedingungen</a>,
+  <a href="https://www.anthropic.com/legal/privacy">Datenschutzerklärung</a>). Darauf haben wir keinen
+  Einfluss. Lädst du deinen Werdegang stattdessen als Datei herunter und gibst sie Claude selbst,
+  übermittelst du die Daten selbst; von uns geht dabei nichts an Anthropic.
+</p>
+<p>
   <strong>Kurze KI-Aufträge</strong> (eine Textstelle umschreiben oder kürzen, ein Dossier erstellen)
   speichern wir, bis sie enden. Die Eingabe wird dann gelöscht. Spätestens nach zwei Tagen ist auch
   das Ergebnis weg.
@@ -248,7 +272,7 @@
 <h2>11. Empfänger und Drittländer</h2>
 <p>
   Daten gehen nur an unsere Hosting- und E-Mail-Dienstleister in der EU und, wenn du das wählst, an
-  Anthropic oder OpenAI (Abschnitt 8). Darüber hinaus geben wir keine Daten weiter, außer wir sind
+  Anthropic oder OpenAI, an Anthropic auch über dein Claude-Konto (Abschnitt 8). Darüber hinaus geben wir keine Daten weiter, außer wir sind
   gesetzlich dazu verpflichtet.
 </p>
 

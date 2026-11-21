@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { QueryError } from "@/components/query-error";
+import { TransferConsent } from "@/components/transfer-consent";
 import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
 import { Lines } from "@/components/toast-lines";
 import { Badge } from "@/components/ui/badge";
@@ -38,11 +39,27 @@ import {
   type NewAccessToken,
 } from "@/lib/queries/skill";
 
-export const Route = createFileRoute("/_authenticated/account/claude")({
+export const Route = createFileRoute("/_authenticated/account/llm_/claude")({
   component: ClaudePage,
 });
 
+/** Where Anthropic says what it does with the data of a Claude account. */
+const CLAUDE_TERMS = [
+  {
+    label: "Consumer Terms",
+    href: "https://www.anthropic.com/legal/consumer-terms",
+  },
+  {
+    label: "Commercial Terms",
+    href: "https://www.anthropic.com/legal/commercial-terms",
+  },
+  { label: "Privacy Policy", href: "https://www.anthropic.com/legal/privacy" },
+];
+
 function ClaudePage() {
+  // Consent is stamped on each token as it's created; this only unlocks creating one for this
+  // visit, as the API key's card does on the LLM providers page.
+  const [agreed, setAgreed] = useState(false);
   return (
     <div className="space-y-8">
       <section className="space-y-4">
@@ -56,8 +73,9 @@ function ClaudePage() {
             and your applications, never your account or your API keys.
           </p>
         </div>
+        {!agreed && <ClaudeConsent onAgree={() => setAgreed(true)} />}
         <ConnectorSteps />
-        <CreateToken />
+        <CreateToken agreed={agreed} />
       </section>
       <Separator />
       <FileMode />
@@ -66,6 +84,45 @@ function ClaudePage() {
       <Separator />
       <TokenList />
     </div>
+  );
+}
+
+/** The consent card for a token: the data goes to Anthropic through the user's Claude account,
+ *  the same transfer as an API key. The server stamps it on the token; revoking withdraws it. */
+function ClaudeConsent({ onAgree }: { onAgree: () => void }) {
+  return (
+    <TransferConsent
+      consent="I agree that the data above goes to Anthropic through every token I create, also outside the EU. I can withdraw by revoking the token."
+      onAgree={onAgree}
+    >
+      <p>
+        With a token, Claude reads your career, your contact details, your
+        personality answers and writing sample, and your applications from jac,
+        and saves applications and career changes here. That data goes to
+        Anthropic, under your Claude account. Anthropic may process it in the
+        USA, where data protection can be weaker than in the EU and authorities
+        may be able to access it.
+      </p>
+      <p>
+        What Anthropic does with it is set by your Claude account's terms and
+        privacy settings (
+        {CLAUDE_TERMS.map((t, i) => (
+          <span key={t.href}>
+            {i > 0 && ", "}
+            <a
+              href={t.href}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              {t.label}
+            </a>
+          </span>
+        ))}
+        ), and we have no influence on that. A career file you download and give
+        Claude yourself is your own transfer: jac sends nothing then.
+      </p>
+    </TransferConsent>
   );
 }
 
@@ -426,22 +483,26 @@ function FieldText({
   );
 }
 
-/** One token for the connector or Claude Code: the box shows it in the shapes each one takes. */
-function CreateToken() {
+/** One token for the connector or Claude Code: the box shows it in the shapes each one takes.
+ *  Locked until the user agreed to the transfer in the card above. */
+function CreateToken({ agreed }: { agreed: boolean }) {
   const create = useCreateAccessToken();
   const [name, setName] = useState("");
   // Held for this visit only: dismissing the box forgets the key.
   const [minted, setMinted] = useState<NewAccessToken | null>(null);
 
   function onCreate() {
-    create.mutate(name.trim(), {
-      onSuccess: (token) => {
-        setMinted(token);
-        setName("");
+    create.mutate(
+      { name: name.trim(), transferConsent: agreed },
+      {
+        onSuccess: (token) => {
+          setMinted(token);
+          setName("");
+        },
+        onError: (e) =>
+          toast.error(errorLines(e, "Could not create the token.")[0]),
       },
-      onError: (e) =>
-        toast.error(errorLines(e, "Could not create the token.")[0]),
-    });
+    );
   }
 
   return minted ? (
@@ -454,11 +515,15 @@ function CreateToken() {
           id="token-name"
           value={name}
           maxLength={60}
-          placeholder="e.g. Claude connector"
+          disabled={!agreed}
+          placeholder={agreed ? "e.g. Claude connector" : "Agree above first"}
           onChange={(e) => setName(e.target.value)}
         />
       </div>
-      <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
+      <Button
+        onClick={onCreate}
+        disabled={!agreed || create.isPending || !name.trim()}
+      >
         {create.isPending ? "Creating…" : "Create token"}
       </Button>
     </div>

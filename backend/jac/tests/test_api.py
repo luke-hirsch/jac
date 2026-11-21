@@ -2093,7 +2093,7 @@ class SkillTokenAuthTests(_SkillCase):
 
 
 class SkillTokenManagementTests(APITestCase):
-    """Minting, listing and revoking happen on the session, in Account → Claude."""
+    """Minting, listing and revoking happen on the session, in Account → LLM → Claude."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2104,8 +2104,31 @@ class SkillTokenManagementTests(APITestCase):
         cache.clear()
         self.client.force_login(self.user)
 
+    def _create(self, **body):
+        return self.client.post(
+            f"{SKILL_URL}tokens/", {"transfer_consent": True, **body}, format="json"
+        )
+
+    def test_no_token_without_consent(self):
+        """A token hands the career to Claude, and so to Anthropic, also outside the EU: the
+        same Art. 49 consent as an API key, before the token exists."""
+        for body in ({"name": "laptop"}, {"name": "laptop", "transfer_consent": False}):
+            with self.subTest(body=body):
+                r = self.client.post(f"{SKILL_URL}tokens/", body, format="json")
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("transfer_consent", r.data)
+        self.assertFalse(AccessToken.objects.filter(user=self.user).exists())
+
+    def test_the_consent_is_stamped_on_the_token(self):
+        before = timezone.now()
+        r = self._create(name="laptop")
+        self.assertEqual(r.status_code, 201, r.data)
+        token = AccessToken.objects.get(pk=r.data["id"])
+        self.assertGreaterEqual(token.transfer_consent_at, before)
+        self.assertIsNotNone(r.data["transfer_consent_at"])
+
     def test_the_key_comes_back_once(self):
-        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "laptop"}, format="json")
+        r = self._create(name="laptop")
         self.assertEqual(r.status_code, 201, r.data)
         self.assertTrue(r.data["key"].startswith("jac_"))
         listed = self.client.get(f"{SKILL_URL}tokens/").data["results"]
@@ -2129,14 +2152,14 @@ class SkillTokenManagementTests(APITestCase):
     def test_the_number_of_tokens_is_capped(self):
         for _ in range(AccessToken.MAX_PER_USER):
             mint_token(self.user)
-        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "one more"}, format="json")
+        r = self._create(name="one more")
         self.assertEqual(r.status_code, 400)
         # The zip mints nothing, so the cap doesn't stand in its way.
         self.assertEqual(self.client.get(f"{SKILL_URL}bundle/").status_code, 200)
 
 
 class SkillDownloadTests(APITestCase):
-    """Account → Claude's two downloads, on the session: the skill once, the career per chat
+    """Account → LLM → Claude's two downloads, on the session: the skill once, the career per chat
     (the Claude app's sandbox can't reach jac, so the career travels as a file)."""
 
     @classmethod

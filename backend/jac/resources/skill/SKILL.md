@@ -20,7 +20,7 @@ You reach jac in one of three ways. Use the first one this conversation has:
   (`get_career`, `save_application`, …). They talk to jac directly. Use them, never the script and
   never files, and don't ask for a career file.
 - **File mode**, in the Claude app without the connector. Its sandbox can't reach jac, so the
-  career comes from a file the user attaches to the chat (in jac: Account → Claude → Download
+  career comes from a file the user attaches to the chat (in jac: Account → LLM → Claude → Download
   career for Claude), and what you write goes back as a file the user imports in jac.
 - **Online mode**, in Claude Code, when `JAC_URL` and `JAC_TOKEN` are set: the script talks to
   jac directly, and saving saves.
@@ -47,7 +47,7 @@ same JSON. Where this file says `career`, `save` and so on, use the tool.
 2. **Read the career.** Run `career` once per conversation, before you suggest anything
    (with the connector: `get_career`).
    - In file mode it names the file and the date it was taken. If it finds no career file, ask
-     the user to attach one (in jac: Account → Claude → Download career for Claude) and wait for
+     the user to attach one (in jac: Account → LLM → Claude → Download career for Claude) and wait for
      it; never work from memory or invent a career. If the file is a few days old, ask once
      whether they've changed their career in jac since; if so, ask for a fresh one.
    - If the user attached the file and `career` still finds none, look for it among the chat's
@@ -175,5 +175,5 @@ change what the conversation changed, and save it with its `id`.
 jac can't be reached at `JAC_URL`.
 
 **Online, if jac doesn't accept the token**, it was revoked: the user creates a new one in jac
-(Account → Claude) and sets `JAC_TOKEN` to it. With the connector, a refused token means the same:
+(Account → LLM → Claude) and sets `JAC_TOKEN` to it. With the connector, a refused token means the same:
 a new token, and the connector added again with it (Customize → Connectors).

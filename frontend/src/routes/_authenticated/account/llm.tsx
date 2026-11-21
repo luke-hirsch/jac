@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { TransferConsent } from "@/components/transfer-consent";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -91,7 +92,7 @@ function LLMConfigPage() {
       {executors.isLoading && <p className="text-sm">loading…</p>}
 
       {consentMissing && !agreed && (
-        <TransferConsent
+        <ProviderConsent
           providers={commercial}
           onAgree={() => setAgreed(true)}
         />
@@ -112,9 +113,9 @@ function LLMConfigPage() {
   );
 }
 
-/** Consent before any key goes in (Art. 49(1)(a) DSGVO): an "I agree", not a notice to wave
- *  away. The server stamps it on the key that's saved next; deleting the key withdraws it. */
-function TransferConsent({
+/** The consent card for an API key: the server stamps it on the key that's saved next, and
+ *  deleting the key withdraws it. */
+function ProviderConsent({
   providers,
   onAgree,
 }: {
@@ -122,44 +123,35 @@ function TransferConsent({
   onAgree: () => void;
 }) {
   return (
-    <Card className="border border-destructive/50">
-      <CardHeader>
-        <CardTitle className="text-base">Your data leaves the EU</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm">
-        <p>
-          With your own key, the data of a run (career entries, the job posting,
-          dossiers) goes to that provider, under your account and your contract
-          with them. They may process it in the USA, where data protection can
-          be weaker than in the EU and authorities may be able to access it.
-        </p>
-        <p>
-          What the provider does with it is set by its own terms (
-          {providers.map((p, i) => (
-            <span key={p.provider}>
-              {i > 0 && ", "}
-              <a
-                href={PROVIDER_TERMS[p.provider]}
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                {p.label}
-              </a>
-            </span>
-          ))}
-          ), and we have no influence on that. Without a key, everything stays
-          on HirschAI.
-        </p>
-        <p>
-          I agree that the data of my runs goes to the provider whose key I
-          enter, also outside the EU. I can withdraw by deleting the key.
-        </p>
-        <Button size="sm" onClick={onAgree}>
-          I agree
-        </Button>
-      </CardContent>
-    </Card>
+    <TransferConsent
+      consent="I agree that the data of my runs goes to the provider whose key I enter, also outside the EU. I can withdraw by deleting the key."
+      onAgree={onAgree}
+    >
+      <p>
+        With your own key, the data of a run (career entries, the job posting,
+        dossiers) goes to that provider, under your account and your contract
+        with them. They may process it in the USA, where data protection can be
+        weaker than in the EU and authorities may be able to access it.
+      </p>
+      <p>
+        What the provider does with it is set by its own terms (
+        {providers.map((p, i) => (
+          <span key={p.provider}>
+            {i > 0 && ", "}
+            <a
+              href={PROVIDER_TERMS[p.provider]}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              {p.label}
+            </a>
+          </span>
+        ))}
+        ), and we have no influence on that. Without a key, everything stays on
+        HirschAI.
+      </p>
+    </TransferConsent>
   );
 }
 
