@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from lukehirsch.managers import SystemScopedManager
 
@@ -182,3 +183,48 @@ class AiJob(models.Model):
 
     def __str__(self):
         return f"AiJob {self.kind} ({self.status})"
+
+
+class TransferConsent(models.Model):
+    """The user's "I agree" to their data leaving the EU (Art. 49(1)(a) DSGVO), given once per
+    kind of transfer and kept, like a cookie choice: `providers` for their own API keys
+    (Account → LLM providers), `claude` for Claude tokens (Account → LLM → Claude). `given_at`
+    is the proof Art. 7(1) asks for; each key and token also carries the time it was saved on it.
+    Withdrawing deletes the row and what it covered (`ConsentView`), so nothing goes out on a
+    consent that's gone."""
+
+    class Scope(models.TextChoices):
+        providers = "providers", "Own API keys"
+        claude = "claude", "Claude tokens"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="transfer_consents",
+    )
+    scope = models.CharField(max_length=16, choices=Scope.choices)
+    given_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "scope"], name="one_transfer_consent_per_scope"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user} / {self.scope} {self.given_at:%Y-%m-%d}"
+
+    @classmethod
+    def given(cls, user, scope: str):
+        """When the user agreed, or None."""
+        return (
+            cls.objects.filter(user=user, scope=scope)
+            .values_list("given_at", flat=True)
+            .first()
+        )
+
+    @classmethod
+    def give(cls, user, scope: str) -> tuple["TransferConsent", bool]:
+        """Record the consent; a second click keeps the first time."""
+        return cls.objects.get_or_create(user=user, scope=scope)

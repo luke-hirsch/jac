@@ -2,7 +2,13 @@ import { useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { QueryError } from "@/components/query-error";
-import { TransferConsent } from "@/components/transfer-consent";
+import { ConsentKept, TransferConsent } from "@/components/transfer-consent";
+import {
+  consentGiven,
+  useConsent,
+  useGiveConsent,
+  useWithdrawConsent,
+} from "@/lib/queries/consent";
 import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
 import { Lines } from "@/components/toast-lines";
 import { Badge } from "@/components/ui/badge";
@@ -57,9 +63,17 @@ const CLAUDE_TERMS = [
 ];
 
 function ClaudePage() {
-  // Consent is stamped on each token as it's created; this only unlocks creating one for this
-  // visit, as the API key's card does on the LLM providers page.
-  const [agreed, setAgreed] = useState(false);
+  // The consent is kept, like a cookie choice: asked once, and never again once given or once a
+  // token exists (each one was created on an "I agree").
+  const consent = useConsent("claude");
+  const tokens = useAccessTokens();
+  const give = useGiveConsent("claude");
+  const withdraw = useWithdrawConsent("claude");
+  const agreed = consentGiven(
+    consent.data?.given_at,
+    (tokens.data ?? []).map((t) => t.transfer_consent_at),
+  );
+  const consentUnknown = consent.isLoading || tokens.isLoading;
   return (
     <div className="space-y-8">
       <section className="space-y-4">
@@ -73,7 +87,31 @@ function ClaudePage() {
             and your applications, never your account or your API keys.
           </p>
         </div>
-        {!agreed && <ClaudeConsent onAgree={() => setAgreed(true)} />}
+        {!consentUnknown && !agreed && (
+          <ClaudeConsent
+            pending={give.isPending}
+            onAgree={() =>
+              give.mutate(undefined, {
+                onError: () =>
+                  toast.error("Couldn't save your consent. Try again."),
+              })
+            }
+          />
+        )}
+        {agreed && (
+          <ConsentKept
+            givenAt={consent.data?.given_at ?? null}
+            pending={withdraw.isPending}
+            withdrawWarning="Withdraw your consent? Every token is revoked: the connector and Claude Code stop, and creating a new token asks again."
+            onWithdraw={() =>
+              withdraw.mutate(undefined, {
+                onSuccess: () =>
+                  toast.success("Consent withdrawn, tokens revoked"),
+                onError: () => toast.error("Couldn't withdraw. Try again."),
+              })
+            }
+          />
+        )}
         <ConnectorSteps />
         <CreateToken agreed={agreed} />
       </section>
@@ -87,13 +125,20 @@ function ClaudePage() {
   );
 }
 
-/** The consent card for a token: the data goes to Anthropic through the user's Claude account,
- *  the same transfer as an API key. The server stamps it on the token; revoking withdraws it. */
-function ClaudeConsent({ onAgree }: { onAgree: () => void }) {
+/** The consent card for tokens: the data goes to Anthropic through the user's Claude account,
+ *  the same transfer as an API key. Shown until the user agrees once; the server keeps it. */
+function ClaudeConsent({
+  onAgree,
+  pending,
+}: {
+  onAgree: () => void;
+  pending: boolean;
+}) {
   return (
     <TransferConsent
-      consent="I agree that the data above goes to Anthropic through every token I create, also outside the EU. I can withdraw by revoking the token."
+      consent="I agree that the data above goes to Anthropic through every token I create, also outside the EU. I can withdraw here at any time, which revokes my tokens."
       onAgree={onAgree}
+      pending={pending}
     >
       <p>
         With a token, Claude reads your career, your contact details, your
@@ -484,7 +529,7 @@ function FieldText({
 }
 
 /** One token for the connector or Claude Code: the box shows it in the shapes each one takes.
- *  Locked until the user agreed to the transfer in the card above. */
+ *  Locked until the user agreed to the transfer (the card above, once). */
 function CreateToken({ agreed }: { agreed: boolean }) {
   const create = useCreateAccessToken();
   const [name, setName] = useState("");

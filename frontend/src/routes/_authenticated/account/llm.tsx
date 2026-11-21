@@ -19,7 +19,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TransferConsent } from "@/components/transfer-consent";
+import { ConsentKept, TransferConsent } from "@/components/transfer-consent";
+import {
+  consentGiven,
+  useConsent,
+  useGiveConsent,
+  useWithdrawConsent,
+} from "@/lib/queries/consent";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -56,11 +62,16 @@ function LLMConfigPage() {
   const commercial = rows.filter((r) => !r.self_hosted);
   const configFor = (provider: string) =>
     configs.find((c) => c.provider === provider) ?? null;
-  // Consent is stored per key when it's saved; this only unlocks the inputs for this visit.
-  const [agreed, setAgreed] = useState(false);
-  const consentMissing = commercial.some(
-    (r) => !configFor(r.provider)?.transfer_consent_at,
+  // The consent is kept, like a cookie choice: asked once, and never again once given or once a
+  // key is stored on it (a stored key means the card was answered).
+  const consent = useConsent("providers");
+  const give = useGiveConsent("providers");
+  const withdraw = useWithdrawConsent("providers");
+  const agreed = consentGiven(
+    consent.data?.given_at,
+    configs.map((c) => c.transfer_consent_at),
   );
+  const consentUnknown = consent.isLoading || configsQ.isLoading;
 
   return (
     <div className="space-y-5">
@@ -91,10 +102,29 @@ function LLMConfigPage() {
 
       {executors.isLoading && <p className="text-sm">loading…</p>}
 
-      {consentMissing && !agreed && (
+      {!consentUnknown && !agreed && commercial.length > 0 && (
         <ProviderConsent
           providers={commercial}
-          onAgree={() => setAgreed(true)}
+          pending={give.isPending}
+          onAgree={() =>
+            give.mutate(undefined, {
+              onError: () =>
+                toast.error("Couldn't save your consent. Try again."),
+            })
+          }
+        />
+      )}
+      {agreed && (
+        <ConsentKept
+          givenAt={consent.data?.given_at ?? null}
+          pending={withdraw.isPending}
+          withdrawWarning="Withdraw your consent? Your API keys are deleted, and saving a new one asks again."
+          onWithdraw={() =>
+            withdraw.mutate(undefined, {
+              onSuccess: () => toast.success("Consent withdrawn, keys deleted"),
+              onError: () => toast.error("Couldn't withdraw. Try again."),
+            })
+          }
         />
       )}
 
@@ -105,7 +135,6 @@ function LLMConfigPage() {
             row={row}
             config={configFor(row.provider)}
             agreed={agreed}
-            onDeleted={() => setAgreed(false)}
           />
         ))}
       </div>
@@ -113,19 +142,22 @@ function LLMConfigPage() {
   );
 }
 
-/** The consent card for an API key: the server stamps it on the key that's saved next, and
- *  deleting the key withdraws it. */
+/** The consent card for API keys, shown until the user agrees once: the server keeps it, and
+ *  stamps it on every key saved on it. */
 function ProviderConsent({
   providers,
   onAgree,
+  pending,
 }: {
   providers: ExecutorRow[];
   onAgree: () => void;
+  pending: boolean;
 }) {
   return (
     <TransferConsent
-      consent="I agree that the data of my runs goes to the provider whose key I enter, also outside the EU. I can withdraw by deleting the key."
+      consent="I agree that the data of my runs goes to the provider whose key I enter, also outside the EU. I can withdraw here at any time, which deletes my keys."
       onAgree={onAgree}
+      pending={pending}
     >
       <p>
         With your own key, the data of a run (career entries, the job posting,
@@ -159,12 +191,10 @@ function ProviderCard({
   row,
   config,
   agreed,
-  onDeleted,
 }: {
   row: ExecutorRow;
   config: LLMConfigRow | null;
   agreed: boolean;
-  onDeleted: () => void;
 }) {
   const create = useCreateConfig();
   const update = useUpdateConfig();
@@ -224,8 +254,6 @@ function ProviderCard({
     del.mutate(config.id, {
       onSuccess: () => {
         toast.success(`${row.label} key removed`);
-        // Deleting withdrew the consent, so the next key asks again.
-        onDeleted();
       },
       onError: () => toast.error("Delete failed"),
     });

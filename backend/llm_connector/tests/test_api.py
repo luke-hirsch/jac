@@ -15,12 +15,13 @@ from rest_framework.test import APITestCase
 from llm_connector.base import LLMTransportError
 from llm_connector.catalog import COMMERCIAL_PROVIDERS
 from llm_connector.conf import HIRSCHAI_PROVIDER, hirschai_row
-from llm_connector.models import LLMConfig, LLMRequestLog
+from llm_connector.models import LLMConfig, LLMRequestLog, TransferConsent
 from llm_connector.providers.anthropic import AnthropicAdapter
 
 from ._helpers import ANTHROPIC_MODELS, TEST_HIRSCHAI, FakeAdapter, fake_row, keyed_row
 
 CONFIGS_URL = "/api/llm/configs/"
+CONSENT_URL = "/api/llm/consent/"
 EXECUTORS_URL = "/api/llm/executors/"
 
 
@@ -212,10 +213,12 @@ class TransferConsentTests(APITestCase):
         r = self.client.patch(f"{CONFIGS_URL}{pk}/", {"default": True}, format="json")
         self.assertEqual(r.status_code, 200, r.data)
 
-    def test_deleting_the_key_withdraws_the_consent(self):
+    def test_deleting_a_key_keeps_the_consent(self):
+        """The consent is kept like a cookie choice (Lukas, 2026-11-21: "I have to click it every
+        time"): a deleted key sends nothing, and the next key needs no second click."""
         pk = self._post(transfer_consent=True).data["id"]
         self.client.delete(f"{CONFIGS_URL}{pk}/")
-        self.assertEqual(self._post().status_code, 400)
+        self.assertEqual(self._post().status_code, 201)
 
     def test_consent_does_not_move_to_another_provider(self):
         """Consent names one provider. Switching the row would send the data elsewhere unasked."""
@@ -596,3 +599,77 @@ class ExecutorKnobAdvertisingTests(APITestCase):
         )
         for model_knobs in knobs.values():
             self.assertNotIn("temperature", model_knobs)
+
+
+class KeptConsentTests(APITestCase):
+    """The consent to the transfer is given once and kept with its time (Art. 7(1)), like a cookie
+    choice. Withdrawing is as easy, and deletes the keys it covered: nothing may go out on a
+    consent that's gone."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(username="alice", password="pw")
+        cls.bob = User.objects.create_user(username="bob", password="pw")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+        _no_listing(self)
+
+    def _key(self, **body):
+        return self.client.post(
+            CONFIGS_URL,
+            {"provider": "anthropic", "api_key": "sk-x", **body},
+            format="json",
+        )
+
+    def test_there_is_none_to_begin_with(self):
+        r = self.client.get(CONSENT_URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.data["given_at"])
+
+    def test_agreeing_once_is_kept(self):
+        r = self.client.post(CONSENT_URL)
+        self.assertEqual(r.status_code, 201, r.data)
+        given = r.data["given_at"]
+        self.assertTrue(given)
+        self.assertEqual(self.client.get(CONSENT_URL).data["given_at"], given)
+        again = self.client.post(CONSENT_URL)
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(
+            again.data["given_at"], given, "a second click keeps the first time"
+        )
+
+    def test_a_key_needs_no_flag_once_agreed(self):
+        self.client.post(CONSENT_URL)
+        r = self._key()
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIsNotNone(LLMConfig.objects.get(user=self.alice).transfer_consent_at)
+
+    def test_the_flag_on_a_key_records_the_consent(self):
+        self.assertEqual(self._key(transfer_consent=True).status_code, 201)
+        self.assertIsNotNone(self.client.get(CONSENT_URL).data["given_at"])
+
+    def test_withdrawing_deletes_the_keys_and_asks_again(self):
+        self._key(transfer_consent=True)
+        r = self.client.delete(CONSENT_URL)
+        self.assertEqual(r.status_code, 204)
+        self.assertFalse(LLMConfig.objects.filter(user=self.alice).exists())
+        self.assertIsNone(self.client.get(CONSENT_URL).data["given_at"])
+        self.assertEqual(self._key().status_code, 400)
+
+    def test_withdrawing_touches_no_one_else(self):
+        TransferConsent.give(self.bob, TransferConsent.Scope.providers)
+        LLMConfig.objects.create(user=self.bob, provider="anthropic")
+        self.client.post(CONSENT_URL)
+        self.client.delete(CONSENT_URL)
+        self.assertTrue(LLMConfig.objects.filter(user=self.bob).exists())
+        self.assertIsNotNone(
+            TransferConsent.given(self.bob, TransferConsent.Scope.providers)
+        )
+
+    def test_it_is_the_sessions(self):
+        self.client.logout()
+        for method in ("get", "post", "delete"):
+            with self.subTest(method=method):
+                r = getattr(self.client, method)(CONSENT_URL)
+                self.assertIn(r.status_code, (401, 403))

@@ -2,9 +2,10 @@
 
 import time
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -14,7 +15,13 @@ from rest_framework.views import APIView
 from llm_connector.catalog import COMMERCIAL_PROVIDERS, picker_models, refresh_models
 from llm_connector.client import LLMClient
 from llm_connector.conf import HIRSCHAI_PROVIDER, ExecutorError, default_executor
-from llm_connector.models import AiJob, LLMConfig, LLMRequestLog, Provider
+from llm_connector.models import (
+    AiJob,
+    LLMConfig,
+    LLMRequestLog,
+    Provider,
+    TransferConsent,
+)
 from llm_connector.probe import hirschai_state
 from llm_connector.serializers import (
     AiJobSerializer,
@@ -23,6 +30,51 @@ from llm_connector.serializers import (
 )
 from llm_connector.tasks import request_prewarm
 from lukehirsch.permissions import IsOwner
+
+
+class ConsentView(APIView):
+    """The kept "I agree" to one kind of transfer out of the EU (`TransferConsent`): GET when it
+    was given (null: not yet), POST gives it (a second click keeps the first time), DELETE
+    withdraws it and deletes what it covered, so the next key or token asks again. Session only:
+    the token a consent covers can't give or withdraw it."""
+
+    permission_classes = [IsAuthenticated]
+    scope = TransferConsent.Scope.providers
+
+    def covered(self, user):
+        """What may send data out on this consent, deleted when it's withdrawn."""
+        return LLMConfig.objects.filter(user=user)
+
+    def _answer(self, given_at, code=status.HTTP_200_OK):
+        return Response(
+            {
+                "scope": self.scope,
+                "given_at": given_at.isoformat() if given_at else None,
+            },
+            status=code,
+        )
+
+    @extend_schema(
+        request=None, responses=OpenApiResponse(description="{scope, given_at}")
+    )
+    def get(self, request):
+        return self._answer(TransferConsent.given(request.user, self.scope))
+
+    @extend_schema(
+        request=None, responses=OpenApiResponse(description="{scope, given_at}")
+    )
+    def post(self, request):
+        consent, created = TransferConsent.give(request.user, self.scope)
+        return self._answer(
+            consent.given_at, status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request):
+        with transaction.atomic():
+            TransferConsent.objects.filter(user=request.user, scope=self.scope).delete()
+            self.covered(request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LLMConfigViewSet(viewsets.ModelViewSet):

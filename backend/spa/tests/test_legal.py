@@ -124,8 +124,9 @@ class LegalPagesTests(TestCase):
         r = self.client.get("/legal/privacy/")
         for phrase in (
             "Account → LLM → Claude",
-            "beim Anlegen des Tokens",
-            "indem du den Token löschst",
+            "bevor du den ersten Token anlegst",
+            "dabei löschen wir deine Tokens",
+            "dabei löschen wir deine Schlüssel",
             "https://www.anthropic.com/legal/consumer-terms",
             "auch über dein Claude-Konto",
         ):

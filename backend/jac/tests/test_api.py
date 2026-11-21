@@ -2127,6 +2127,39 @@ class SkillTokenManagementTests(APITestCase):
         self.assertGreaterEqual(token.transfer_consent_at, before)
         self.assertIsNotNone(r.data["transfer_consent_at"])
 
+    def test_a_token_needs_no_flag_once_agreed(self):
+        """Agreed once on the Claude page, kept: the next token asks nothing."""
+        r = self.client.post(f"{SKILL_URL}consent/")
+        self.assertEqual(r.status_code, 201, r.data)
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "laptop"}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+
+    def test_the_flag_records_the_consent(self):
+        self._create(name="laptop")
+        self.assertIsNotNone(self.client.get(f"{SKILL_URL}consent/").data["given_at"])
+
+    def test_withdrawing_revokes_every_token(self):
+        _, key = mint_token(self.user)
+        self._create(name="laptop")
+        r = self.client.delete(f"{SKILL_URL}consent/")
+        self.assertEqual(r.status_code, 204)
+        self.assertFalse(AccessToken.objects.filter(user=self.user).exists())
+        self.assertIsNone(self.client.get(f"{SKILL_URL}consent/").data["given_at"])
+        r = self.client.post(f"{SKILL_URL}tokens/", {"name": "x"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+
+    def test_a_token_cannot_give_or_withdraw_the_consent(self):
+        _, key = mint_token(self.user)
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        for method in ("post", "delete"):
+            with self.subTest(method=method):
+                r = getattr(self.client, method)(f"{SKILL_URL}consent/")
+                self.assertIn(r.status_code, (401, 403))
+
     def test_the_key_comes_back_once(self):
         r = self._create(name="laptop")
         self.assertEqual(r.status_code, 201, r.data)

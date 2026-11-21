@@ -10,6 +10,7 @@ from rest_framework.routers import DefaultRouter
 
 from llm_connector.views import (
     AiJobView,
+    ConsentView,
     ExecutorListView,
     LLMConfigViewSet,
     LLMRequestLogViewSet,
@@ -22,6 +23,7 @@ router.register("request-logs", LLMRequestLogViewSet, basename="llmrequestlog")
 
 urlpatterns = [
     path("executors/", ExecutorListView.as_view(), name="llmexecutor-list"),
+    path("consent/", ConsentView.as_view(), name="llm-consent"),
     path("jobs/<uuid:pk>/", AiJobView.as_view(), name="ai-job"),
     path("prewarm/", PrewarmView.as_view(), name="llm-prewarm"),
     *router.urls,
