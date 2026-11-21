@@ -71,7 +71,7 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in eight guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in nine guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
 - `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` reaches Django now (merged, live). His curls
   against the live names and the Results are left;
@@ -79,8 +79,8 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
   on guide 02's deploy) and the watch list;
 - `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
   gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]);
-- `05` to `09`: coded by the AI at his request (2026-11-20, 09 on 2026-11-21), summary guides, all merged into `main`
-  and live, his to test on live and log:
+- `05` to `10`: coded by the AI at his request (2026-11-20, 09 and 10 on 2026-11-21), summary guides, all merged into
+  `main` and live, his to test on live and log:
   - 05 `live-model-catalog`: each key's live model list + the fix for effort on current Claude models;
   - 06 `claude-skill`: write applications with Claude on his own subscription, and have Claude review and improve
     the career data, every batch of edits undoable ([[claude-skill]]);
@@ -92,6 +92,10 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
   - 09 `career-change-field-names` (deployed by the AI at his request): the changes import 500d on a name `career`
     showed but the import doesn't take (`type` for `job_type`); names are checked first now, as a 400. The skill
     zip in the Claude app predates it: re-upload, then his live test.
+  - 10 `claude-connector` (deployed by the AI at his request): the Claude app, phone included, reaches jac through a
+    custom MCP connector at `jac.<domain>/api/jac/mcp/` (Anthropic's servers call it, not the sandbox), on the skill's
+    token; `get_career` hands over SKILL.md as the rules. File mode stays as the fallback. His steps: a token, the
+    connector in Claude's settings, the couch test ([[claude-skill]]).
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
@@ -101,7 +105,7 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  guides 02 and 05 to 09, all deployed (2026-11-21).
+  guides 02 and 05 to 10, all deployed (2026-11-21).
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
