@@ -187,18 +187,12 @@ def _domains(user) -> dict[str, int]:
 def _data(
     etype: str, change: dict, obj, refs: dict[str, int], domains: dict[str, int]
 ) -> tuple[dict, dict]:
-    """The serializer's input for one change, and what's wrong with it, by field. Lists become
-    the whole new list: what the entry links now, minus `remove`, plus `add`."""
+    """The serializer's input for one change, and what's wrong with it, by field. Its names are
+    checked already (`_name_errors`). Lists become the whole new list: what the entry links now,
+    minus `remove`, plus `add`."""
     data, errors = {}, {}
     for field, value in (change.get("set") or {}).items():
         try:
-            if field in LISTS[etype]:
-                raise ValueError("is a list: change it with add / remove.")
-            if field not in FIELDS[etype]:
-                raise ValueError(
-                    f"can't be changed here; a {etype} takes "
-                    f"{', '.join(sorted(FIELDS[etype]))}."
-                )
             if field in LINKS:
                 value = None if value is None else _pk(value, LINKS[field], refs)
             elif field == "degree_level" and isinstance(value, str):
@@ -212,12 +206,9 @@ def _data(
             errors[field] = [str(err)]
     add, remove = change.get("add") or {}, change.get("remove") or {}
     for field in sorted({*add, *remove}):
-        kind = LISTS[etype].get(field)
+        kind = LISTS[etype][field]
         plus, minus = add.get(field, []), remove.get(field, [])
         try:
-            if kind is None:
-                has = ", ".join(sorted(LISTS[etype])) or "none"
-                raise ValueError(f"isn't a list a {etype} has (it has: {has}).")
             if not (isinstance(plus, list) and isinstance(minus, list)) or not all(
                 isinstance(v, str) for v in (*plus, *minus)
             ):
@@ -259,6 +250,26 @@ def _shape_errors(change) -> dict:
         errors["why"] = ["One sentence: why this change."]
     if not errors and not _touched(change):
         errors["non_field_errors"] = ["Changes nothing: give set, add or remove."]
+    return errors
+
+
+def _name_errors(etype: str, change: dict) -> dict:
+    """What a change names that an `etype` doesn't take, by field. Checked before the snapshot
+    reads the entry: a name the model lacks (`type`, which `career` once showed for
+    `job_type`) was an AttributeError there, a 500 with nothing to read."""
+    fields, lists = FIELDS[etype], LISTS[etype]
+    errors = {}
+    for field in change.get("set") or {}:
+        if field in lists:
+            errors[field] = ["is a list: change it with add / remove."]
+        elif field not in fields:
+            errors[field] = [
+                f"can't be changed here; a {etype} takes {', '.join(sorted(fields))}."
+            ]
+    for field in sorted({*(change.get("add") or {}), *(change.get("remove") or {})}):
+        if field not in lists:
+            has = ", ".join(sorted(lists)) or "none"
+            errors[field] = [f"isn't a list a {etype} has (it has: {has})."]
     return errors
 
 
@@ -343,6 +354,8 @@ def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], dict[str
                 errors[str(i)] = {
                     "ref": ["A name, unique in this batch, that 'new:<ref>' links by."]
                 }
+            elif names := _name_errors("skill", change):
+                errors[str(i)] = names
             else:
                 refs_declared.add(ref)
                 targets[i] = ("skill", None)
@@ -356,6 +369,9 @@ def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], dict[str
             continue
         ids.add(cid)
         etype, pk = cid.split(":")
+        if names := _name_errors(etype, change):
+            errors[str(i)] = names
+            continue
         obj = (
             ENTRY_MODELS[etype]
             .objects.select_for_update()

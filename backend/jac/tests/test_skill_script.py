@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from rest_framework.test import APITestCase
 
+from jac.career_changes import FIELDS, LISTS
 from jac.models import Education, Job, Skill
 from jac.skill import SKILL_DIR
 
@@ -258,6 +259,23 @@ class SkillScriptFileModeTests(APITestCase):
         self.assertIn("kubernetes", err)
         self.assertIn("skill:99999", err)
         self.assertIn("a second change", err)
+
+    def test_apply_refuses_a_name_the_import_doesnt_take(self):
+        batch = self._batch(set={"type": "ft"}, add={"tools": ["new:docker"]})
+        batch["changes"][1]["set"]["years"] = 3
+        code, _, err = self._run("apply", str(self._write("c.json", batch)))
+        self.assertEqual(code, 1)
+        self.assertIn("type", err)
+        self.assertIn("job_type", err)  # what a job does take
+        self.assertIn("tools", err)
+        self.assertIn("years", err)
+
+    def test_the_script_knows_the_names_the_import_takes(self):
+        # A copy, since the script can't import jac: this keeps the two in step.
+        self.assertEqual(self.script.SET_FIELDS, FIELDS)
+        self.assertEqual(
+            self.script.LIST_FIELDS, {t: set(v) for t, v in LISTS.items()}
+        )
 
     # ---- what needs jac -------------------------------------------------------------------
 

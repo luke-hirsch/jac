@@ -50,10 +50,65 @@ USER_DATA = Path("/mnt/user-data")
 OUTPUTS = USER_DATA / "outputs"
 MAX_SCAN_BYTES = 20 * 1024 * 1024
 
-# jac's own rules, checked here before the user imports: the letter band and the batch size.
+# jac's own rules, checked here before the user imports: the letter band, the batch size and the
+# names a change may use.
 LETTER_WORDS = (170, 230)
 MAX_CHANGES = 100
 SECTIONS = ("jobs", "educations", "projects", "skills", "certifications", "languages")
+# Per type, the fields `set` takes and the lists `add` / `remove` take. The rest of what `career`
+# shows is read-only.
+SET_FIELDS = {
+    "job": {
+        "title",
+        "company",
+        "job_type",
+        "started",
+        "ended",
+        "url",
+        "description",
+        "favourite",
+    },
+    "project": {"name", "started", "ended", "url", "description", "favourite", "job"},
+    "education": {
+        "institution",
+        "field_of_study",
+        "started",
+        "ended",
+        "degree",
+        "degree_level",
+        "grade",
+        "description",
+        "favourite",
+    },
+    "certification": {
+        "name",
+        "issuer",
+        "issued_on",
+        "expires_on",
+        "credential_id",
+        "url",
+        "description",
+        "favourite",
+    },
+    "skill": {
+        "name",
+        "proficiency",
+        "category",
+        "first_used",
+        "description",
+        "favourite",
+        "certification",
+    },
+    "language": {"name", "fluency", "description", "favourite", "certification"},
+}
+LIST_FIELDS = {
+    "job": {"skills", "domains"},
+    "project": {"skills", "domains"},
+    "education": {"skills", "domains"},
+    "certification": {"skills", "domains"},
+    "skill": {"domains", "related_skills", "builds_on"},
+    "language": set(),
+}
 
 
 class NotHere(Exception):
@@ -238,6 +293,29 @@ def check_application(data, career: dict) -> tuple[list[str], list[str]]:
     return problems, warnings
 
 
+def name_problems(where: str, etype: str, change: dict) -> list[str]:
+    """The names in a change the import doesn't take for its type: a read-only one `career`
+    shows (`years`, `completed`), or one that isn't jac's at all."""
+    fields, lists = SET_FIELDS.get(etype, set()), LIST_FIELDS.get(etype, set())
+    problems = []
+    for field in change.get("set") or {}:
+        if field in lists:
+            problems.append(f"{where}: {field} is a list: change it with add / remove.")
+        elif field not in fields:
+            problems.append(
+                f"{where}: a {etype} can't set {field}; it sets "
+                f"{', '.join(sorted(fields))}."
+            )
+    for verb in ("add", "remove"):
+        for field in change.get(verb) or {}:
+            if field not in lists:
+                problems.append(
+                    f"{where}: a {etype} has no list {field} to {verb} (its lists: "
+                    f"{', '.join(sorted(lists)) or 'none'})."
+                )
+    return problems
+
+
 def check_changes(data, career: dict) -> list[str]:
     """What jac's import would refuse, checked against the career file the batch was made from."""
     if not isinstance(data, dict) or not isinstance(data.get("changes"), list):
@@ -259,6 +337,7 @@ def check_changes(data, career: dict) -> list[str]:
                 problems.append(f"{where}: only skills can be created.")
             if not change.get("ref"):
                 problems.append(f"{where}: a new skill needs a ref.")
+            etype = "skill"
         else:
             entry_id = change.get("id")
             if entry_id not in known:
@@ -272,6 +351,8 @@ def check_changes(data, career: dict) -> list[str]:
                     f"{where}: seen must be {entry_id}'s updated_at as the career file "
                     f"shows it ({known[entry_id].get('updated_at')})."
                 )
+            etype = entry_id.split(":")[0]
+        problems += name_problems(where, etype, change)
         for field in ("job", "certification"):  # a single link, by id or null
             value = (change.get("set") or {}).get(field)
             if value is not None and value not in known:

@@ -26,6 +26,7 @@ from kombu.exceptions import OperationalError
 from rest_framework.test import APIClient, APITestCase
 
 from jac import views as jac_views
+from jac.career_changes import FIELDS, LISTS
 from jac.career_export import export_career
 from jac.career_import import (
     ENTRY_MODELS,
@@ -2484,6 +2485,59 @@ class SkillCareerChangeTests(_SkillCase):
             }
         )
         self.assertEqual(r.status_code, 201, r.data)
+
+    def test_the_job_type_round_trips_by_the_name_career_shows(self):
+        # Live, 2026-11-21: career showed it as `type`, Claude set `type`, and the import 500d.
+        job = self.client.get(f"{SKILL_URL}career/").data["entries"]["jobs"][0]
+        self.assertNotIn("type", job)
+        self.assertEqual(job["job_type"], "ft")
+        r = self._apply(
+            {"id": job["id"], "seen": job["updated_at"], "set": {"job_type": "ct"}}
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["changes"][0]["before"], {"job_type": "ft"})
+        self.assertEqual(r.data["changes"][0]["after"], {"job_type": "ct"})
+
+    def test_every_name_career_shows_is_settable_or_read_only(self):
+        # What a change can't set: jac works it out, or the user edits it elsewhere in jac.
+        read_only = {"id", "updated_at", "location", "projects", "completed", "years"}
+        cert = Certification.objects.create(user=self.user, name="AWS SAA", issuer="AWS")
+        Project.objects.create(user=self.user, name="Billing", job=self.job)
+        Language.objects.create(user=self.user, name="Deutsch", certification=cert)
+        entries = self.client.get(f"{SKILL_URL}career/").data["entries"]
+        for section, rows in entries.items():
+            with self.subTest(section):
+                self.assertTrue(rows)
+                etype = rows[0]["id"].split(":")[0]
+                takes = FIELDS[etype] | set(LISTS[etype]) | read_only
+                self.assertEqual(set(rows[0]) - takes, set())
+
+    def test_a_name_the_import_doesnt_take_is_a_400_not_a_500(self):
+        # The snapshot reads every touched field before anything else looked at the names: one
+        # the model lacks was an AttributeError, and the SPA could only say "try again".
+        jid, seen = f"job:{self.job.pk}", self._seen(self.job)
+        bad = {
+            "type": {"id": jid, "seen": seen, "set": {"type": "ft"}},
+            "tools": {"id": jid, "seen": seen, "add": {"tools": ["skill:1"]}},
+            "years": {
+                "id": f"skill:{self.python.pk}",
+                "seen": self._seen(self.python),
+                "set": {"years": 3},
+            },
+            "completed": {
+                "id": f"education:{self.master.pk}",
+                "seen": self._seen(self.master),
+                "set": {"completed": False},
+            },
+        }
+        for field, change in bad.items():
+            with self.subTest(field):
+                r = self._apply(change)
+                self.assertEqual(r.status_code, 400, r.data)
+                self.assertIn(field, r.data["changes"]["0"])
+        r = self._apply(bad["type"])
+        self.assertIn("job_type", r.data["changes"]["0"]["type"][0])
+        self.assertFalse(CareerChange.objects.exists())
 
     def test_a_dry_run_answers_and_changes_nothing(self):
         r = self._apply(self._describe(), dry_run=True)
