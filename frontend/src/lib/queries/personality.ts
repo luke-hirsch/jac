@@ -22,6 +22,11 @@ export type PersonalityRow = {
   dossier_built_at: string | null;
   letter_tone: LetterTone;
   letter_focus: LetterFocus;
+  /** One rule per line: every letter writer follows them, jac's own and Claude's. */
+  style_rules: string;
+  /** jac's own checks behind the rules: a slip comes back as a warning. */
+  style_no_dashes: boolean;
+  style_no_antithesis: boolean;
   writing_sample: string;
   style_dossier: string;
   sample_updated_at: string | null;
@@ -47,6 +52,8 @@ const KEY = ["personality"];
 export const MAX_ANSWER_LEN = 280;
 /** Mirrors the CRUD serializer's validate_prompt (spa/serializers.py). */
 export const MAX_QUESTION_LEN = 280;
+/** Mirrors PersonalityProfile.style_rules' max_length (spa/models.py). */
+export const MAX_STYLE_RULES_LEN = 2000;
 
 /** Add-a-question input validation — mirror of the serializer. Error string or null. */
 export function validateQuestionPrompt(prompt: string): string | null {
@@ -164,14 +171,20 @@ export function useUpdateAnswers() {
   });
 }
 
+export type LetterSettings = Pick<
+  PersonalityRow,
+  | "letter_tone"
+  | "letter_focus"
+  | "style_rules"
+  | "style_no_dashes"
+  | "style_no_antithesis"
+  | "writing_sample"
+>;
+
 export function useUpdateLetterSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (
-      patch: Partial<
-        Pick<PersonalityRow, "letter_tone" | "letter_focus" | "writing_sample">
-      >,
-    ) =>
+    mutationFn: (patch: Partial<LetterSettings>) =>
       api<PersonalityRow>(URL, {
         method: "PATCH",
         body: JSON.stringify(patch),

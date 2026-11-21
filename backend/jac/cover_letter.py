@@ -19,6 +19,7 @@ from jac.llm_prompts import (
 )
 from jac.models import Mode
 from jac.register import register_leaks, resolve_address_form
+from jac.style import style_checks, style_rules, style_warnings
 from llm_connector.executor import Executor
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,7 @@ class CoverLetter:
         )
         tone = self.tone or (profile.letter_tone if profile else "") or DEFAULT_TONE
         focus = self.focus or (profile.letter_focus if profile else "") or DEFAULT_FOCUS
+        rules = style_rules(profile)
         cv_facts = self._cv_facts()
 
         # Company research is capability-driven, not mode-gated: any web-search-capable executor
@@ -248,6 +250,7 @@ class CoverLetter:
             company_dossier=research["dossier"],
             mode=self.mode,
             posting_text=self._posting_text(),
+            style_rules=rules,
         ).write()
 
         weave_failed = not body
@@ -268,9 +271,16 @@ class CoverLetter:
             personality,
             style,
             research["dossier"],
+            rules,
         )
         # Audit the shipped body (post-repair), before the English company stub is appended.
         leaks = [] if weave_failed else register_leaks(body, language, address_form)
+        # jac's own frame is never overridden here, so the body is all the style checks read.
+        style_flags = (
+            []
+            if weave_failed
+            else style_warnings({"body": body}, style_checks(profile))
+        )
 
         # Soft company-hook stub — appended AFTER repair (so the audit/rewrite don't touch it) when
         # there are no company specifics to weave in. The frontend strips it from exports; a real
@@ -290,6 +300,8 @@ class CoverLetter:
             "tone": tone,
             "focus": focus,
             "register": {"form": address_form, "leaks": leaks},
+            # The user's writing rules the body breaks, as save_application words them.
+            "style_warnings": style_flags,
             "grounding": grounding,
             "sources": research["sources"],
             "is_stub": weave_failed,
@@ -408,6 +420,7 @@ class CoverLetter:
         personality,
         style,
         company_dossier,
+        rules,
     ):
         """ONE combined repair pass, never a loop: the grounding audit's unsupported claims feed a
         single rewrite, which is then re-audited (safety stays honest about the shipped body).
@@ -430,6 +443,7 @@ class CoverLetter:
             mode=self.mode,
             posting_text=self._posting_text(),
             unsupported_claims=claims,
+            style_rules=rules,
         ).write()
         if not rewritten:
             return body, {**grounding, "repaired": False}

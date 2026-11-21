@@ -472,6 +472,7 @@ class CoverLetterWriter:
         posting_text: str = "",
         unsupported_claims: list[str] | None = None,
         target_words: tuple[int, int] | None = None,
+        style_rules: list[str] | None = None,
     ):
         self.executor = executor
         self.candidate_name = candidate_name
@@ -488,6 +489,8 @@ class CoverLetterWriter:
         self.posting_text = posting_text
         self.unsupported_claims = unsupported_claims or []
         self.target_words = target_words or self._TARGET_WORDS
+        # The user's own writing rules (jac.style.style_rules), one per entry.
+        self.style_rules = style_rules or []
 
         self._TONE = {
             "personal": (
@@ -547,6 +550,13 @@ class CoverLetterWriter:
         common = self._COMMON.format(
             language=_language_name(self.language), lo=lo, hi=hi
         )
+        rules = (
+            "WRITING RULES (the candidate's own; the letter follows every one):\n"
+            + "\n".join(f"- {rule}" for rule in self.style_rules)
+            + "\n\n"
+            if self.style_rules
+            else ""
+        )
 
         style = (
             f"STYLE (imitate this voice; it carries NO facts):\n{self.style_dossier}\n\n"
@@ -579,7 +589,7 @@ class CoverLetterWriter:
                 f"claims the CV FACTS actually state:\n{claims}\n\n"
             )
         return (
-            f"{tone} {focus}\n{address}{common}\n\n"
+            f"{tone} {focus}\n{address}{common}\n\n{rules}"
             f"CANDIDATE: {self.candidate_name}\nROLE: {self.title}\n\n"
             f"{style}{personality}{research}{posting}{repair}"
             f"CV FACTS (the only source of facts about the candidate):\n{self.cv_facts}\n\n"

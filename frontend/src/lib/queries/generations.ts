@@ -45,6 +45,9 @@ export type CoverLetterResult = {
   focus: string;
   /** Absent on runs made before the register existed. */
   register?: Register;
+  /** The user's style rules the body breaks, one warning each (jac/style.py). Absent on
+   *  runs made before the checks existed. */
+  style_warnings?: string[];
   grounding: Grounding;
   /** Company-research source URLs (commercial web-search runs); [] otherwise. */
   sources: string[];
@@ -271,6 +274,13 @@ export function groundingBadge(g: Grounding): Badge {
     tone: "amber",
     label: `${g.count} claim${g.count === 1 ? "" : "s"}${suffix}`,
   };
+}
+
+/** null = nothing to say: no broken rule, or a run from before the checks. */
+export function styleBadge(warnings: string[] | undefined): Badge | null {
+  if (!warnings?.length) return null;
+  const n = warnings.length;
+  return { tone: "amber", label: `${n} style warning${n === 1 ? "" : "s"}` };
 }
 
 /** null = nothing to say: an English letter, or a run from before the register. */

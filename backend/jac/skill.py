@@ -38,6 +38,7 @@ from jac.models import (
     JobPosting,
 )
 from jac.register import register_leaks, resolve_address_form
+from jac.style import style_checks, style_rules, style_warnings
 from spa.models import PersonalityProfile, PersonalityQuestion
 
 SKILL_DIR = Path(__file__).resolve().parent / "resources" / "skill"
@@ -235,6 +236,8 @@ def career_payload(user) -> dict:
             "tone": personality.letter_tone if personality else "neutral",
             "focus": personality.letter_focus if personality else "balanced",
             "words": list(LETTER_WORDS),
+            # The user's own writing rules, one per line: every letter follows them.
+            "style_rules": style_rules(personality),
         },
         "personality": [
             {"question": labels.get(slug, slug), "answer": text}
@@ -352,7 +355,11 @@ def _letter_meta(user, posting: JobPosting, letter: dict) -> dict:
     }
 
 
-def _letter_warnings(body: str, meta: dict) -> list[str]:
+# The frame the skill may override: its own text then, so the style checks read it too.
+_LETTER_OVERRIDES = ("subject", "salutation", "closing")
+
+
+def _letter_warnings(body: str, meta: dict, letter: dict, checks) -> list[str]:
     warnings = []
     words = len(body.split())
     lo, hi = LETTER_WORDS
@@ -374,6 +381,8 @@ def _letter_warnings(body: str, meta: dict) -> list[str]:
             f"The letter addresses the reader as '{meta['address_form']}', "
             f"but also uses: {', '.join(leaks)}."
         )
+    overrides = {part: letter[part] for part in _LETTER_OVERRIDES if letter.get(part)}
+    warnings += style_warnings({"body": body, **overrides}, checks)
     return warnings
 
 
@@ -426,7 +435,12 @@ def save_application(
         if "body" in letter:
             application.cover_letter = letter["body"].strip()
         application.letter_meta = _letter_meta(user, posting, letter)
-        warnings += _letter_warnings(application.cover_letter, application.letter_meta)
+        warnings += _letter_warnings(
+            application.cover_letter,
+            application.letter_meta,
+            letter,
+            style_checks(PersonalityProfile.objects.filter(user=user).first()),
+        )
     if "notes" in data:
         application.notes = data["notes"]
     application.save()

@@ -161,6 +161,9 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
             "dossier_built_at",
             "letter_tone",
             "letter_focus",
+            "style_rules",
+            "style_no_dashes",
+            "style_no_antithesis",
             "writing_sample",
             "style_dossier",
             "sample_updated_at",
@@ -221,6 +224,12 @@ class PersonalityProfileSerializer(serializers.ModelSerializer):
                 )
             cleaned[key] = text
         return cleaned
+
+    def validate_style_rules(self, value):
+        """One rule per line, as the writers read them: trimmed, blank lines dropped."""
+        return "\n".join(
+            line.strip() for line in (value or "").splitlines() if line.strip()
+        )
 
     def update(self, instance, validated_data):
         from django.utils import timezone

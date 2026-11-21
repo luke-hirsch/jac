@@ -115,10 +115,20 @@ class UserProfile(models.Model):
         return f"Profile({self.user})"
 
 
+# The writing rules every account starts with; the migration that added them gave existing
+# accounts the same two.
+DEFAULT_STYLE_RULES = (
+    "No em or en dashes as punctuation. Use commas, colons, full stops or parentheses.\n"
+    "No 'not X but Y' antithesis constructions (DE: 'nicht nur … sondern', "
+    "'kein … sondern'), and no other recognisable AI writing tics."
+)
+MAX_STYLE_RULES_LEN = 2000  # they land in every letter prompt
+
+
 class PersonalityProfile(models.Model):
     """Per-user personality questionnaire + cached LLM-distilled dossier, the letter tone×focus
-    default, and a cached writing-style dossier distilled from a pasted sample. All three feed the
-    JAC cover-letter writer (and, later, the portfolio)."""
+    default, the user's writing rules, and a cached writing-style dossier distilled from a pasted
+    sample. All of it feeds the JAC cover-letter writer (and, later, the portfolio)."""
 
     class Tone(models.TextChoices):
         personal = "personal", _("Personal")
@@ -145,6 +155,13 @@ class PersonalityProfile(models.Model):
     letter_focus = models.CharField(
         max_length=16, choices=Focus.choices, default=Focus.balanced
     )
+    # Writing rules, one per line: every letter writer follows them (jac's own and Claude's).
+    # The two toggles turn jac's own checks on (jac/style.py), which flag a slip as a warning.
+    style_rules = models.TextField(
+        blank=True, default=DEFAULT_STYLE_RULES, max_length=MAX_STYLE_RULES_LEN
+    )
+    style_no_dashes = models.BooleanField(default=True)
+    style_no_antithesis = models.BooleanField(default=True)
     # writing style probe
     writing_sample = models.TextField(blank=True)
     style_dossier = models.TextField(blank=True)  # ai destill

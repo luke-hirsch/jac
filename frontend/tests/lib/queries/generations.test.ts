@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { registerBadge } from "@/lib/queries/generations";
+import { registerBadge, styleBadge } from "@/lib/queries/generations";
 
 /**
  * [fullstack]-letter-register-de: the German form-of-address flag next to the
@@ -26,5 +26,20 @@ describe("registerBadge", () => {
       tone: "amber",
       label: 'wrong "you": Sie, Ihnen',
     });
+  });
+});
+
+describe("styleBadge", () => {
+  it("says nothing without a broken rule, or for runs before the checks", () => {
+    expect(styleBadge(undefined)).toBeNull();
+    expect(styleBadge([])).toBeNull();
+  });
+
+  it("counts the warnings in amber", () => {
+    expect(styleBadge(["a"])).toEqual({
+      tone: "amber",
+      label: "1 style warning",
+    });
+    expect(styleBadge(["a", "b"])?.label).toBe("2 style warnings");
   });
 });

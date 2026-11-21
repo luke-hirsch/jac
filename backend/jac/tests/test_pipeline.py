@@ -55,6 +55,14 @@ from jac.models import (
 )
 from jac.register import detect_address_form, register_leaks, resolve_address_form
 from jac.render import CvRender
+from jac.style import (
+    CHECKS,
+    NO_ANTITHESIS,
+    NO_DASHES,
+    antithesis_fragments,
+    dash_fragments,
+    style_warnings,
+)
 from jac.tasks import (
     MAX_RUN_ATTEMPTS,
     REAP_MARGIN_S,
@@ -782,6 +790,141 @@ class RegisterLeakTests(TestCase):
         )
 
 
+class DashCheckTests(SimpleTestCase):
+    """`no_dashes`: a dash as punctuation is flagged, a dash inside a range or a compound is
+    not."""
+
+    def test_every_em_dash_is_flagged(self):
+        for text in (
+            "Ich bringe drei Jahre Erfahrung mit — und das mit Freude.",
+            "I bring three years of experience—and curiosity.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(len(dash_fragments(text)), 1)
+
+    def test_a_spaced_en_dash_between_clauses_is_flagged(self):
+        self.assertEqual(
+            dash_fragments("Ich bringe Erfahrung mit – und Neugier."),
+            ["…bringe Erfahrung mit – und Neugier."],
+        )
+        self.assertTrue(dash_fragments("I build backends – and I enjoy it."))
+
+    def test_a_spaced_hyphen_between_clauses_is_flagged(self):
+        self.assertTrue(dash_fragments("Ich mag Python - und Rust."))
+        self.assertTrue(dash_fragments("I bring experience - and curiosity."))
+
+    def test_ranges_are_not_punctuation(self):
+        for text in (
+            "Von 2020–2023 war ich dort.",
+            "Siehe S. 4–6.",
+            "From 2020 – 2023 and 10 - 12 every day.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(dash_fragments(text), [])
+
+    def test_compounds_are_not_punctuation(self):
+        for text in (
+            "Ich habe eine Django-App gebaut.",
+            "Fünf Jahre im E-Commerce.",
+            "Front- und Backend aus einer Hand.",
+            "A well-tested, open-source tool.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(dash_fragments(text), [])
+
+    def test_the_quote_shows_the_dash_in_its_words(self):
+        (quote,) = dash_fragments(
+            "Ich bringe drei Jahre Erfahrung mit — und das mit Freude."
+        )
+        self.assertIn("Erfahrung mit — und das", quote)
+
+
+class AntithesisCheckTests(SimpleTestCase):
+    """`no_antithesis`: "not X but Y" within one sentence, across its clauses."""
+
+    def test_german_antitheses_are_flagged(self):
+        for text, quote in (
+            (
+                "Ich schreibe nicht nur Code, sondern auch Dokumentation.",
+                "nicht nur Code, sondern auch",
+            ),
+            ("Das ist keine Aufgabe, sondern eine Berufung.", "keine Aufgabe, sondern"),
+            ("Ich suche keinen Job, sondern eine Mission.", "keinen Job, sondern"),
+            ("Es geht nicht um Tempo, sondern um Qualität.", "nicht um Tempo, sondern"),
+            (
+                "NICHT NUR schnell, SONDERN AUCH sauber.",
+                "NICHT NUR schnell, SONDERN AUCH",
+            ),
+        ):
+            with self.subTest(text=text):
+                (found,) = antithesis_fragments(text)
+                self.assertIn(quote, found)
+
+    def test_english_antitheses_are_flagged(self):
+        for text, quote in (
+            (
+                "I do not just write code, I ship it, but I also run it.",
+                "not just write",
+            ),
+            (
+                "Not only did I build it, but I also ran it.",
+                "Not only did I build it, but",
+            ),
+            ("This isn't a job for me, it's a calling.", "isn't a job for me, it's"),
+            ("This isn’t a job, it’s a calling.", "isn’t a job, it’s"),
+            ("It is not a job but a mission.", "not a job but a"),
+        ):
+            with self.subTest(text=text):
+                (found,) = antithesis_fragments(text)
+                self.assertIn(quote, found)
+
+    def test_sondern_without_a_negation_is_not_flagged(self):
+        for text in (
+            "Sondern auch das Team profitiert davon.",
+            "Besonders reizt mich die Aufgabe.",
+            "Wir wollen uns nicht absondern.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(antithesis_fragments(text), [])
+
+    def test_a_negation_in_another_sentence_doesnt_count(self):
+        self.assertEqual(
+            antithesis_fragments(
+                "Ich habe die Daten nicht gelöscht. Sondern archiviert."
+            ),
+            [],
+        )
+        self.assertEqual(
+            antithesis_fragments("I am not a fan of meetings. But I run good ones."), []
+        )
+
+    def test_one_quote_per_sentence(self):
+        text = "Nicht nur Code, sondern auch Teams. Keine Phrase, sondern Substanz."
+        self.assertEqual(len(antithesis_fragments(text)), 2)
+
+
+class StyleWarningTests(SimpleTestCase):
+    def test_a_warning_names_the_part_the_rule_and_the_fragment(self):
+        (warning,) = style_warnings({"body": "Erfahrung — und Neugier."}, CHECKS)
+        self.assertIn("The body", warning)
+        self.assertIn(NO_DASHES, warning)
+        self.assertIn('"Erfahrung — und Neugier."', warning)
+
+    def test_overridden_parts_are_checked_too(self):
+        warnings = style_warnings(
+            {"body": "Clean.", "salutation": "Hallo – Team,"}, CHECKS
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("The salutation", warnings[0])
+
+    def test_a_check_that_is_off_stays_quiet(self):
+        body = "Erfahrung — und nicht nur Code, sondern auch Teams."
+        warnings = style_warnings({"body": body}, [NO_ANTITHESIS])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(NO_ANTITHESIS, warnings[0])
+        self.assertEqual(style_warnings({"body": body}, []), [])
+
+
 class LetterFurnitureTests(TestCase):
     def test_every_german_tone_gets_its_own_greeting_and_closing(self):
         greetings = {
@@ -825,6 +968,12 @@ class WriterRegisterAndRefusalTests(TestCase):
 
     def test_the_sie_clause_reaches_the_prompt(self):
         self.assertIn("Sie", self._writer(address_form="sie")._prompt())
+
+    def test_the_style_rules_reach_the_prompt(self):
+        rules = ["No exclamation marks.", "Never say passionate."]
+        prompt = self._writer(style_rules=rules)._prompt()
+        self.assertIn("- No exclamation marks.\n- Never say passionate.", prompt)
+        self.assertNotIn("WRITING RULES", self._writer()._prompt())
 
     def test_english_letters_get_no_address_clause(self):
         prompt = CoverLetterWriter(
@@ -945,6 +1094,18 @@ class CoverLetterRegisterBuildTests(TestCase):
         result, _ = self._build("personal", body="")
         self.assertTrue(result["is_stub"])
         self.assertEqual(result["register"]["leaks"], [])
+
+    def test_the_users_rules_reach_the_writer_and_slips_come_back(self):
+        body = "Ich bringe Erfahrung mit — und Neugier. " + " ".join(["Wort"] * 200)
+        result, kwargs = self._build("formal", body=body)
+        self.assertIn("No em or en dashes", kwargs["style_rules"][0])
+        (warning,) = result["style_warnings"]
+        self.assertIn(NO_DASHES, warning)
+        self.assertIn("Erfahrung mit — und", warning)
+
+    def test_a_stub_letter_reports_no_style_warnings(self):
+        result, _ = self._build("formal", body="")
+        self.assertEqual(result["style_warnings"], [])
 
     def test_english_has_no_register(self):
         posting = SimpleNamespace(

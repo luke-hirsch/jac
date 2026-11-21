@@ -3013,6 +3013,18 @@ class McpToolTests(_McpCase):
             data["career"]["highest_degree"], f"education:{self.master.pk}"
         )
 
+    def test_get_career_carries_the_style_rules(self):
+        self.user.personality.style_rules = (
+            "No exclamation marks.\nNever say passionate."
+        )
+        self.user.personality.save()
+        data, _ = self._call("get_career")
+        self.assertEqual(
+            data["career"]["letter_defaults"]["style_rules"],
+            ["No exclamation marks.", "Never say passionate."],
+        )
+        self.assertIn("letter_defaults.style_rules", data["rules"])
+
     def test_get_career_review_hands_over_its_rules(self):
         data, is_error = self._call("get_career_review")
         self.assertFalse(is_error)
@@ -3028,6 +3040,25 @@ class McpToolTests(_McpCase):
         self.assertTrue(data["url"].endswith(f"/applications/{app.pk}"))
         self.assertIn("warnings", data)
         self.assertEqual(app.posting.title, "Backend-Entwickler:in")
+
+    def test_save_application_warns_about_broken_style_rules(self):
+        body = (
+            "Ich bringe Erfahrung mit — und Neugier. "
+            "Ich schreibe nicht nur Code, sondern auch Tests. " + _letter(180)
+        )
+        payload = self._payload(
+            letter={"body": body, "tone": "formal", "closing": "Beste Grüße – Alice"}
+        )
+        data, is_error = self._call("save_application", payload)
+        self.assertFalse(is_error, data)
+        style = [w for w in data["warnings"] if "rule (" in w]
+        self.assertEqual(len(style), 3, data["warnings"])
+        body_dash, body_antithesis, closing_dash = style
+        self.assertIn("no_dashes", body_dash)
+        self.assertIn("Erfahrung mit — und Neugier.", body_dash)
+        self.assertIn("no_antithesis", body_antithesis)
+        self.assertIn("nicht nur Code, sondern auch Tests", body_antithesis)
+        self.assertIn("The closing", closing_dash)
 
     def test_save_application_with_an_id_updates_it(self):
         created, _ = self._call("save_application", self._payload())
