@@ -25,10 +25,15 @@ def hash_key(key: str) -> str:
 
 
 def mint_token(user, name: str = "") -> tuple[AccessToken, str]:
-    """A new token row and its key. The key exists only in this return value."""
+    """A new token row and its key. The key exists only in this return value. Call it only once
+    the user agreed to the transfer (`AccessTokenSerializer` checks): the row records it."""
     key = KEY_PREFIX + secrets.token_urlsafe(32)
     token = AccessToken.objects.create(
-        user=user, name=name, prefix=key[:12], key_hash=hash_key(key)
+        user=user,
+        name=name,
+        prefix=key[:12],
+        key_hash=hash_key(key),
+        transfer_consent_at=timezone.now(),
     )
     return token, key
 

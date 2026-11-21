@@ -10,6 +10,7 @@ export type AccessTokenRow = {
   id: number;
   name: string;
   prefix: string; // the key's first 12 characters, to tell tokens apart
+  transfer_consent_at: string; // the "I agree" it was created on
   created_at: string;
   last_used_at: string | null;
 };
@@ -265,10 +266,17 @@ export function useAccessTokens() {
 export function useCreateAccessToken() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) =>
+    /** Only after the user agreed to the transfer: the server refuses a token without it. */
+    mutationFn: ({
+      name,
+      transferConsent,
+    }: {
+      name: string;
+      transferConsent: boolean;
+    }) =>
       api<NewAccessToken>(`${SKILL_API}tokens/`, {
         method: "POST",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, transfer_consent: transferConsent }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   });

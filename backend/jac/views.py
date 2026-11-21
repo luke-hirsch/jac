@@ -1441,7 +1441,7 @@ class SkillBundleView(APIView):
 class SkillCareerFileView(APIView):
     """GET: the career file for a chat in the Claude app (`jac.skill.career_file`): the career
     and its machine review, with the ids and stamps the files Claude writes back point at.
-    Session only: the download button in Account → Claude."""
+    Session only: the download button in Account → LLM → Claude."""
 
     permission_classes = [IsAuthenticated]
 

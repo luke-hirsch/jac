@@ -267,7 +267,7 @@ function ImportFromClaude() {
   const navigate = useNavigate();
   const importApp = useImportApplication();
   const importChanges = useImportChangesFile(
-    "Account → Claude lists them, and can undo them.",
+    "Account → LLM → Claude lists them, and can undo them.",
   );
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = importApp.isPending || importChanges.isPending;

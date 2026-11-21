@@ -793,6 +793,10 @@ class AccessToken(models.Model):
     # The key's first characters, so a list of tokens can tell them apart.
     prefix = models.CharField(max_length=12)
     key_hash = models.CharField(max_length=64, unique=True)
+    # The user's "I agree" (Art. 49(1)(a) DSGVO), as for an API key: a token hands the career to
+    # Claude, and so to Anthropic, also outside the EU. Revoking the token withdraws it. No token
+    # exists without one: the serializer refuses, and the migration revoked the older tokens.
+    transfer_consent_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
 

@@ -117,6 +117,21 @@ class LegalPagesTests(TestCase):
             for target in PAGES:
                 self.assertContains(r, f'href="/legal/{target}/"', msg_prefix=page)
 
+    def test_the_privacy_page_covers_claude_like_an_api_key(self):
+        """A token sends the career to Anthropic through the user's Claude account: what goes,
+        on which consent, and how to withdraw it, as for an API key (section 8), and Anthropic
+        as a recipient (section 11)."""
+        r = self.client.get("/legal/privacy/")
+        for phrase in (
+            "Account → LLM → Claude",
+            "beim Anlegen des Tokens",
+            "indem du den Token löschst",
+            "https://www.anthropic.com/legal/consumer-terms",
+            "auch über dein Claude-Konto",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertContains(r, phrase)
+
     def test_the_legal_pages_name_no_infrastructure(self):
         """They say what data goes where and why. What it runs on is nobody's business."""
         for page in PAGES:
