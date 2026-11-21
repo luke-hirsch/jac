@@ -7,7 +7,8 @@ and the public portfolio, which renders from the same entries.
 
 ## The flow
 
-1. **Read both:** `career` and `review`. `review` is jac's machine pass: each finding has `ids`
+1. **Read both:** `career` and `review` (with the connector: `get_career` and
+   `get_career_review`). `review` is jac's machine pass: each finding has `ids`
    (the entries it's about, empty for the career as a whole), a `check`, a `level` (`fix`, then
    `improve`, then `consider`) and one sentence. Treat it as a checklist, not the verdict. Check
    each finding against the career, drop the ones that don't hold (a skill name matched by
@@ -36,10 +37,12 @@ and the public portfolio, which renders from the same entries.
      the batch size) and hands the file over; fix what it refuses and run it again. Tell the user:
      in jac, Account → Claude → Import changes, pick the file. jac shows the batch there with
      before and after, and it can be undone in the same place.
-   - **Online**, first `apply FILE --check`; fix what it refuses; then `apply FILE`. The ids
-     `--check` shows for new skills are placeholders: keep linking them as `new:<ref>` until the
-     real `apply` answers with their ids. Tell the user what changed and that every batch can be
-     undone, with `undo ID` here or in jac under Account → Claude.
+   - **With the connector, and online**, first check the batch (`apply_career_changes` with
+     `dry_run: true`, or `apply FILE --check`); fix what it refuses; then apply it
+     (`apply_career_changes`, or `apply FILE`). The ids the check shows for new skills are
+     placeholders: keep linking them as `new:<ref>` until the real apply answers with their ids.
+     Tell the user what changed and that every batch can be undone, with `undo_career_changes`
+     (`undo ID`) here or in jac under Account → Claude.
 6. Go on with the next theme, or stop when the user has had enough.
 
 ## What to look for beyond the machine review
@@ -96,7 +99,8 @@ and the public portfolio, which renders from the same entries.
 
 ## The changes file
 
-Write the batch to a file, e.g. `career-changes.json`:
+With the connector, pass the batch to `apply_career_changes` as `changes`. Otherwise write it
+to a file, e.g. `career-changes.json`:
 
 ```json
 {
@@ -159,6 +163,7 @@ can't touch those entries, or link those skills, from the same career file:
   batch: that's the `seen` check doing its job. A fresh career file, and the changes redone from
   its text, fix it.
 
-**Undo:** online, `changes` lists the batches, and `undo ID` puts that batch's entries back and
-deletes the skills it created. In file mode the same is in jac, Account → Claude → Career changes,
+**Undo:** with the connector or online, `changes` (`list_career_changes`) lists the batches,
+and `undo ID` (`undo_career_changes`) puts that batch's entries back and deletes the skills it
+created. In file mode the same is in jac, Account → Claude → Career changes,
 Undo on the batch. Either way it's refused once an entry in the batch has been edited again since.

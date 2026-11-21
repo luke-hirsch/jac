@@ -7,7 +7,7 @@ a class-level `queryset`, so the router can't infer it.
 Mounted by the project at the prefix defined in `lukehirsch/urls.py`.
 """
 
-from django.urls import path
+from django.urls import path, re_path
 from rest_framework.routers import DefaultRouter
 
 from jac.views import (
@@ -34,6 +34,7 @@ from jac.views import (
     SkillCareerChangeUndoView,
     SkillCareerFileView,
     SkillCareerView,
+    SkillMcpView,
     SkillReviewView,
     SkillViewSet,
 )
@@ -83,4 +84,13 @@ urlpatterns = router.urls + [
     ),
     path("skill/bundle/", SkillBundleView.as_view(), name="skill-bundle"),
     path("skill/career/file/", SkillCareerFileView.as_view(), name="skill-career-file"),
+    # Claude's custom connector (jac/mcp.py): the token in the header, or in the URL for a
+    # connector dialog without request headers. The slash is optional: a POST can't follow
+    # APPEND_SLASH's redirect.
+    re_path(r"^mcp/?$", SkillMcpView.as_view(), name="skill-mcp"),
+    re_path(
+        r"^mcp/(?P<key>jac_[A-Za-z0-9_-]+)/?$",
+        SkillMcpView.as_view(),
+        name="skill-mcp-key",
+    ),
 ]

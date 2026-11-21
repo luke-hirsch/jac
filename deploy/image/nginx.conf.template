@@ -123,6 +123,13 @@ http {
             proxy_read_timeout 300s;
             # The chat's stream is also marked X-Accel-Buffering: no.
         }
+
+        # Nothing lives here. Without it the SPA's try_files answers 200 text/html, and Claude's
+        # connector reads /.well-known/oauth-* as an OAuth setup it can't parse (jac/mcp.py: the
+        # connector authenticates by token, no OAuth).
+        location ^~ /.well-known/ {
+            return 404;
+        }
         location /_allauth/ {
             proxy_pass http://app;
             include /app/proxy_params;

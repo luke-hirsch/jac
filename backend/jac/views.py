@@ -27,7 +27,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models.functions import Coalesce, Least
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
@@ -42,6 +42,7 @@ from rest_framework.settings import api_settings as drf_api_settings
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from jac import mcp
 from jac.application_transfer import (
     ApplicationImportError,
     ApplicationsNotEmpty,
@@ -125,7 +126,11 @@ from jac.skill import (
     skill_bundle,
 )
 from jac.tasks import generate_run, notify_when_drained, publish_event
-from jac.tokens import AccessTokenAuthentication, mint_token
+from jac.tokens import (
+    AccessTokenAuthentication,
+    PathTokenAuthentication,
+    mint_token,
+)
 from llm_connector.base import LLMWarmingUp
 from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from llm_connector.jobs import start_ai_job
@@ -741,9 +746,7 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
         try:
-            executor = resolve_executor(
-                request.user, data["provider"], data["model"]
-            )
+            executor = resolve_executor(request.user, data["provider"], data["model"])
         except ExecutorError as exc:
             return Response(
                 {"provider": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
@@ -886,7 +889,9 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             payload={
                 "body": data["body"],
                 "target_words": data["target_words"],
-                "language": data.get("language") or application.posting.language or "en",
+                "language": data.get("language")
+                or application.posting.language
+                or "en",
                 "address_form": data.get("address_form", ""),
                 "provider": data.get("provider", ""),
                 "model": data.get("model", ""),
@@ -1353,6 +1358,29 @@ class SkillCareerChangeUndoView(_SkillView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+
+
+@extend_schema(exclude=True)
+class SkillMcpView(APIView):
+    """Claude's custom connector (`jac.mcp`): MCP over Streamable HTTP, stateless, one POST per
+    message, plain JSON back. The same token as the skill, in the Authorization header or as
+    the URL's last segment; never the session (Anthropic's servers call it, not a browser)."""
+
+    authentication_classes = [AccessTokenAuthentication, PathTokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [_LiveScopedRateThrottle]
+    throttle_scope = "skill"
+
+    def post(self, request, key=None):
+        status_code, body = mcp.respond(request, request.body)
+        if body is None:
+            return HttpResponse(status=status.HTTP_202_ACCEPTED)
+        return JsonResponse(
+            body,
+            status=status_code,
+            safe=False,
+            json_dumps_params={"ensure_ascii": False},
+        )
 
 
 class AccessTokenViewSet(

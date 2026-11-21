@@ -43,7 +43,9 @@ class AccessTokenAuthentication(BaseAuthentication):
             return None
         if len(parts) != 2:
             raise AuthenticationFailed("Expected 'Authorization: Bearer <token>'.")
-        key = parts[1].decode(errors="replace")
+        return self.authenticate_key(parts[1].decode(errors="replace"))
+
+    def authenticate_key(self, key: str):
         token = (
             AccessToken.objects.select_related("user")
             .filter(key_hash=hash_key(key))
@@ -60,3 +62,15 @@ class AccessTokenAuthentication(BaseAuthentication):
 
     def authenticate_header(self, request):
         return 'Bearer realm="jac"'
+
+
+class PathTokenAuthentication(AccessTokenAuthentication):
+    """The key as the connector URL's last segment (`/api/jac/mcp/jac_…/`), for a Claude whose
+    connector dialog offers no request headers. Second choice: a URL can land in a proxy's
+    access log where a header doesn't (jac's own nginx and daphne log no paths, the lab's Caddy
+    may), so the header goes first and wins."""
+
+    def authenticate(self, request):
+        kwargs = (getattr(request, "parser_context", None) or {}).get("kwargs") or {}
+        key = kwargs.get("key")
+        return self.authenticate_key(key) if key else None

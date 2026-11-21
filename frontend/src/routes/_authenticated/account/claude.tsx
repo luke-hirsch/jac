@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/table";
 import {
   changeRows,
+  connectorHeader,
+  connectorUrl,
   envLines,
   errorLines,
   parseImportFile,
@@ -47,26 +49,81 @@ function ClaudePage() {
         <div>
           <h2 className="text-lg font-medium">Claude</h2>
           <p className="text-sm text-muted-foreground">
-            Write applications with Claude, on your own subscription: attach
-            your career to a chat, paste a posting, talk the CV and letter
-            through, and import what Claude writes here. The Claude app can't
-            reach jac, so everything goes by file: Claude never sees your
-            account, your API keys or anything you don't hand it.
+            Write applications with Claude, on your own subscription: paste a
+            posting into a chat, talk the CV and the letter through, and Claude
+            saves them here, where you check the layout and export the PDF.
+            jac's own AI isn't used for any of it. Claude reaches your career
+            and your applications, never your account or your API keys.
           </p>
         </div>
-        <SetupSteps />
-        <div className="space-y-3">
-          <DownloadSkill />
-          <DownloadCareerFile />
-        </div>
+        <ConnectorSteps />
+        <CreateToken />
       </section>
+      <Separator />
+      <FileMode />
       <Separator />
       <CareerChanges />
       <Separator />
-      <ClaudeCode />
-      <Separator />
       <TokenList />
     </div>
+  );
+}
+
+/** The jac connector: Claude's servers call jac's MCP endpoint, so the app on the web, the
+ *  desktop and the phone reaches jac even though its code sandbox can't. */
+function ConnectorSteps() {
+  const url = connectorUrl(window.location.origin);
+  return (
+    <div className="space-y-2">
+      <h3 className="font-medium">In the Claude app: the jac connector</h3>
+      <ol className="list-decimal space-y-1 pl-5 text-sm">
+        <li>
+          Create a token below, e.g. <q>Claude connector</q>.
+        </li>
+        <li>
+          In Claude: Customize → Connectors → + Add → Add custom connector. Name{" "}
+          <code>jac</code>, URL <code className="break-all">{url}</code>,
+          authentication <q>No sign in</q>, and under Request headers{" "}
+          <code>authorization</code> with the value shown with your token.
+        </li>
+        <li>
+          No Request headers in that dialog? Use the URL with your token in it
+          instead, and no header.
+        </li>
+        <li>
+          In a chat, switch jac on (+ → Connectors) and paste a job posting.
+          Claude reads your career, saves when you say so, and its link opens
+          the application here.
+        </li>
+      </ol>
+      <p className="text-sm text-muted-foreground">
+        Claude Code takes the same token, as <code>JAC_URL</code> and{" "}
+        <code>JAC_TOKEN</code> in the shell you start it from, with the skill
+        from the zip below.
+      </p>
+    </div>
+  );
+}
+
+/** Without the connector, the Claude app can't reach jac: the career and the results go by
+ *  file. */
+function FileMode() {
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="font-medium">Without the connector: by file</h3>
+        <p className="text-sm text-muted-foreground">
+          The skill alone can't reach jac from the Claude app, so the career
+          goes into the chat as a file and Claude's results come back as files
+          you import.
+        </p>
+      </div>
+      <SetupSteps />
+      <div className="space-y-3">
+        <DownloadSkill />
+        <DownloadCareerFile />
+      </div>
+    </section>
   );
 }
 
@@ -369,8 +426,8 @@ function FieldText({
   );
 }
 
-/** Claude Code reads the address and the token from the shell, so this mints a bare token. */
-function ClaudeCode() {
+/** One token for the connector or Claude Code: the box shows it in the shapes each one takes. */
+function CreateToken() {
   const create = useCreateAccessToken();
   const [name, setName] = useState("");
   // Held for this visit only: dismissing the box forgets the key.
@@ -387,39 +444,24 @@ function ClaudeCode() {
     });
   }
 
-  return (
-    <section className="space-y-3">
-      <div>
-        <h3 className="font-medium">Claude Code</h3>
-        <p className="text-sm text-muted-foreground">
-          The same skill works in Claude Code, which can reach jac: with a
-          token, Claude reads your career and saves applications here directly,
-          no files in between.
-        </p>
+  return minted ? (
+    <NewTokenBox token={minted} onDismiss={() => setMinted(null)} />
+  ) : (
+    <div className="flex items-end gap-2">
+      <div className="flex-1 space-y-1">
+        <Label htmlFor="token-name">Token name</Label>
+        <Input
+          id="token-name"
+          value={name}
+          maxLength={60}
+          placeholder="e.g. Claude connector"
+          onChange={(e) => setName(e.target.value)}
+        />
       </div>
-      {minted ? (
-        <NewTokenBox token={minted} onDismiss={() => setMinted(null)} />
-      ) : (
-        <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-1">
-            <Label htmlFor="token-name">Token name</Label>
-            <Input
-              id="token-name"
-              value={name}
-              maxLength={60}
-              placeholder="e.g. Claude Code, laptop"
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <Button
-            onClick={onCreate}
-            disabled={create.isPending || !name.trim()}
-          >
-            {create.isPending ? "Creating…" : "Create token"}
-          </Button>
-        </div>
-      )}
-    </section>
+      <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
+        {create.isPending ? "Creating…" : "Create token"}
+      </Button>
+    </div>
   );
 }
 
@@ -430,34 +472,50 @@ function NewTokenBox({
   token: NewAccessToken;
   onDismiss: () => void;
 }) {
-  const lines = envLines(window.location.origin, token.key);
+  const origin = window.location.origin;
   return (
-    <div className="space-y-2 rounded-md border px-4 py-3">
+    <div className="space-y-3 rounded-md border px-4 py-3">
       <p className="text-sm font-medium">
         Copy it now: the key isn't shown again.
       </p>
-      <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-        {lines}
-      </pre>
-      <p className="text-xs text-muted-foreground">
-        Put these lines in your shell profile, and the skill folder from the zip
-        in <code>~/.claude/skills/jac/</code>.
-      </p>
-      <div className="flex gap-2">
+      <CopyBlock
+        label="Connector: the authorization header's value"
+        text={connectorHeader(token.key)}
+      />
+      <CopyBlock
+        label="Connector without request headers: this URL instead"
+        text={connectorUrl(origin, token.key)}
+      />
+      <CopyBlock
+        label="Claude Code: in the shell you start it from"
+        text={envLines(origin, token.key)}
+      />
+      <Button size="sm" variant="ghost" onClick={onDismiss}>
+        Done
+      </Button>
+    </div>
+  );
+}
+
+function CopyBlock({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="flex items-start gap-2">
+        <pre className="min-w-0 flex-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">
+          {text}
+        </pre>
         <Button
           size="sm"
           variant="outline"
           onClick={() =>
-            navigator.clipboard.writeText(lines).then(
+            navigator.clipboard.writeText(text).then(
               () => toast.success("Copied"),
-              () => toast.error("Copy failed: select the lines instead."),
+              () => toast.error("Copy failed: select the text instead."),
             )
           }
         >
           Copy
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          Done
         </Button>
       </div>
     </div>
@@ -541,7 +599,7 @@ function TokenList() {
         <p className="text-sm text-muted-foreground">
           {tokens.isLoading
             ? "Loading…"
-            : "No tokens yet. Only Claude Code uses one."}
+            : "No tokens yet. The connector and Claude Code each use one."}
         </p>
       )}
     </section>
