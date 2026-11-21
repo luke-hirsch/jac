@@ -33,6 +33,7 @@ from jac.queues import runs_ahead
 from jac.register import ADDRESS_FORMS
 from llm_connector.catalog import validate_params
 from llm_connector.conf import ExecutorError, executor_knobs, resolve_executor
+from llm_connector.models import TransferConsent
 from lukehirsch.mixin import ScopeRelatedToUserMixin
 from lukehirsch.private_media import PrivateFileField
 from spa.models import PersonalityProfile
@@ -1037,7 +1038,8 @@ class SkillCareerChangesSerializer(serializers.Serializer):
 
 class AccessTokenSerializer(serializers.ModelSerializer):
     """A token is minted only on the user's "I agree": it sends the career to Anthropic through
-    their Claude account, the same transfer as an API key (`LLMConfigSerializer`)."""
+    their Claude account, the same transfer as an API key (`LLMConfigSerializer`). The consent is
+    kept (`TransferConsent`, scope `claude`): ticked with this create, or given before."""
 
     transfer_consent = serializers.BooleanField(write_only=True, default=False)
 
@@ -1060,9 +1062,12 @@ class AccessTokenSerializer(serializers.ModelSerializer):
             "last_used_at",
         ]
 
-    def validate_transfer_consent(self, value):
-        if not value:
+    def validate(self, attrs):
+        user = self.context["request"].user
+        if attrs.get("transfer_consent"):
+            TransferConsent.give(user, TransferConsent.Scope.claude)
+        elif not TransferConsent.given(user, TransferConsent.Scope.claude):
             raise serializers.ValidationError(
-                "Agree to the transfer before creating a token."
+                {"transfer_consent": "Agree to the transfer before creating a token."}
             )
-        return value
+        return attrs

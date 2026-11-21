@@ -6,7 +6,13 @@ from rest_framework import serializers
 from llm_connector.catalog import refresh_models
 from llm_connector.conf import HIRSCHAI_PROVIDER
 from llm_connector.jobs import jobs_ahead
-from llm_connector.models import AiJob, LLMConfig, LLMRequestLog, Provider
+from llm_connector.models import (
+    AiJob,
+    LLMConfig,
+    LLMRequestLog,
+    Provider,
+    TransferConsent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,19 +91,36 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        consented = self.instance is not None and self.instance.transfer_consent_at
-        if attrs.get("api_key") and not consented and not attrs.get("transfer_consent"):
+        """A key needs the consent: on the row already, ticked with this save, or kept from the
+        user's earlier "I agree" (`TransferConsent`)."""
+        consented = (
+            (self.instance is not None and self.instance.transfer_consent_at)
+            or attrs.get("transfer_consent")
+            or TransferConsent.given(
+                self.context["request"].user, TransferConsent.Scope.providers
+            )
+        )
+        if attrs.get("api_key") and not consented:
             raise serializers.ValidationError(
                 {"transfer_consent": "Agree to the transfer before saving a key."}
             )
         return attrs
+
+    def _consent(self, user, ticked: bool) -> bool:
+        """Whether a key saved now is covered; a tick records the kept consent too."""
+        if ticked:
+            TransferConsent.give(user, TransferConsent.Scope.providers)
+            return True
+        return TransferConsent.given(user, TransferConsent.Scope.providers) is not None
 
     def get_model_count(self, obj) -> int:
         return len(obj.models or [])
 
     def create(self, validated_data):
         api_key = validated_data.pop("api_key", "")
-        consent = validated_data.pop("transfer_consent", False)
+        consent = self._consent(
+            validated_data["user"], validated_data.pop("transfer_consent", False)
+        )
         instance = LLMConfig(**validated_data)
         if api_key:
             instance.api_key = api_key
@@ -110,7 +133,9 @@ class LLMConfigSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         api_key = validated_data.pop("api_key", None)
-        consent = validated_data.pop("transfer_consent", False)
+        consent = self._consent(
+            instance.user, validated_data.pop("transfer_consent", False)
+        )
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if api_key:

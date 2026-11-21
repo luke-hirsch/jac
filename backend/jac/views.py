@@ -134,7 +134,9 @@ from jac.tokens import (
 from llm_connector.base import LLMWarmingUp
 from llm_connector.conf import ExecutorError, default_executor, resolve_executor
 from llm_connector.jobs import start_ai_job
+from llm_connector.models import TransferConsent
 from llm_connector.serializers import AiJobSerializer
+from llm_connector.views import ConsentView
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from lukehirsch.private_media import private_file_response
 from lukehirsch.throttling import ChatDailyThrottle, UploadThrottle
@@ -1381,6 +1383,16 @@ class SkillMcpView(APIView):
             safe=False,
             json_dumps_params={"ensure_ascii": False},
         )
+
+
+class ClaudeConsentView(ConsentView):
+    """The kept consent for Claude tokens (Account → LLM → Claude). Withdrawing revokes every
+    token: the connector and Claude Code stop, and the next token asks again."""
+
+    scope = TransferConsent.Scope.claude
+
+    def covered(self, user):
+        return AccessToken.objects.filter(user=user)
 
 
 class AccessTokenViewSet(

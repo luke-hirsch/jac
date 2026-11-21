@@ -16,6 +16,7 @@ from jac.views import (
     CareerExportView,
     CareerImportView,
     CertificationViewSet,
+    ClaudeConsentView,
     CvAttachmentViewSet,
     CVEntryListView,
     DomainViewSet,
@@ -83,6 +84,7 @@ urlpatterns = router.urls + [
         name="skill-career-change-undo",
     ),
     path("skill/bundle/", SkillBundleView.as_view(), name="skill-bundle"),
+    path("skill/consent/", ClaudeConsentView.as_view(), name="skill-consent"),
     path("skill/career/file/", SkillCareerFileView.as_view(), name="skill-career-file"),
     # Claude's custom connector (jac/mcp.py): the token in the header, or in the URL for a
     # connector dialog without request headers. The slash is optional: a POST can't follow
