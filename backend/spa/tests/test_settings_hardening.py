@@ -768,6 +768,15 @@ class DeployFilesTests(SimpleTestCase):
                     body, r"location[^{]*/health/queues", "the queue report is the lab network's"
                 )
 
+    def test_jac_answers_well_known_with_a_404_not_the_spa(self):
+        """Claude's connector probes /.well-known/oauth-protected-resource; the SPA's try_files
+        answered it 200 text/html, which reads as a broken OAuth setup."""
+        template = (REPO_ROOT / "deploy" / "image" / "nginx.conf.template").read_text()
+        jac = next(b for n, b in _server_blocks(template).items() if n.startswith("jac."))
+        well_known = re.search(r"location \^~ /\.well-known/ \{([^}]*)\}", jac)
+        self.assertIsNotNone(well_known, "/.well-known/ falls through to the SPA's index.html")
+        self.assertIn("return 404;", well_known.group(1))
+
     def test_a_checkout_merges_no_compose_override_on_its_own(self):
         """Compose picks up compose.override.yaml by name. The laptop's (DEBUG on, a laptop's
         database) would land on any box that clones the repo."""

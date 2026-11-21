@@ -71,6 +71,18 @@ export type ChangeRow =
 
 /* ---------- pure helpers (unit-tested) ---------- */
 
+/** Where Claude's custom connector talks to jac (the backend's `jac/mcp.py`). With the key,
+ *  the URL carries the token itself: for a connector dialog that has no request headers. */
+export function connectorUrl(origin: string, key?: string): string {
+  return `${origin}/api/jac/mcp/${key ? `${key}/` : ""}`;
+}
+
+/** The connector's `authorization` header. Claude sends the value verbatim, so the scheme is
+ *  part of it. */
+export function connectorHeader(key: string): string {
+  return `Bearer ${key}`;
+}
+
 /** The shell lines Claude Code reads the skill's address and token from. */
 export function envLines(origin: string, key: string): string {
   return `export JAC_URL=${origin}\nexport JAC_TOKEN=${key}`;

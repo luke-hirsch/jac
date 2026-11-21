@@ -14,28 +14,38 @@ You can also review the career itself and, once the user agrees, improve the ent
 the user wants their career data checked or improved, read `REVIEW.md` in this folder first**
 and follow it; the rest of this file is about applications.
 
-Everything goes through `scripts/jac.py` in this skill's folder (Python 3, standard library only).
-It works in one of two modes, and picks it itself:
+You reach jac in one of three ways. Use the first one this conversation has:
 
-- **File mode**, in the Claude app. Its sandbox can't reach jac, so the career comes from a file
-  the user attaches to the chat (in jac: Account → Claude → Download career for Claude), and what
-  you write goes back as a file the user imports in jac.
+- **The connector**, in the Claude app (web, desktop, phone): you have jac's tools
+  (`get_career`, `save_application`, …). They talk to jac directly. Use them, never the script and
+  never files, and don't ask for a career file.
+- **File mode**, in the Claude app without the connector. Its sandbox can't reach jac, so the
+  career comes from a file the user attaches to the chat (in jac: Account → Claude → Download
+  career for Claude), and what you write goes back as a file the user imports in jac.
 - **Online mode**, in Claude Code, when `JAC_URL` and `JAC_TOKEN` are set: the script talks to
   jac directly, and saving saves.
 
-| command | file mode | online mode |
-|---|---|---|
-| `python3 scripts/jac.py career` | the career from the attached file | the career from jac |
-| `python3 scripts/jac.py review` | jac's machine review, from the same file (see `REVIEW.md`) | the review from jac |
-| `python3 scripts/jac.py save FILE` | checks the application in FILE the way jac's import will, and hands it to the user | saves it; once FILE carries an `"id"` (written on the first save), saving again updates that application |
-| `python3 scripts/jac.py apply FILE [--check]` | checks the career changes in FILE against the career file, and hands them over (see `REVIEW.md`) | applies them; `--check` only validates |
-| `applications`, `show ID`, `changes`, `undo ID` | not available: they need jac itself | the latest applications, one application in the shape `save` takes, the batches of career changes, undoing a batch |
+Without the connector, everything goes through `scripts/jac.py` in this skill's folder (Python 3,
+standard library only), which picks file or online mode itself. Each command has a tool of the
+same job:
+
+| script command | tool | file mode | online mode |
+|---|---|---|---|
+| `python3 scripts/jac.py career` | `get_career` | the career from the attached file | the career from jac |
+| `python3 scripts/jac.py review` | `get_career_review` | jac's machine review, from the same file (see `REVIEW.md`) | the review from jac |
+| `python3 scripts/jac.py save FILE` | `save_application` | checks the application in FILE the way jac's import will, and hands it to the user | saves it; once FILE carries an `"id"` (written on the first save), saving again updates that application |
+| `python3 scripts/jac.py apply FILE [--check]` | `apply_career_changes` (`dry_run` for `--check`) | checks the career changes in FILE against the career file, and hands them over (see `REVIEW.md`) | applies them; `--check` only validates |
+| `applications`, `show ID`, `changes`, `undo ID` | `list_applications`, `get_application`, `list_career_changes`, `undo_career_changes` | not available: they need jac itself | the latest applications, one application in the shape `save` takes, the batches of career changes, undoing a batch |
+
+With the connector, the tool takes what the script would read from FILE as its arguments: the
+same JSON. Where this file says `career`, `save` and so on, use the tool.
 
 ## The flow
 
 1. **Get the posting.** Pasted text, or a link you fetch. Keep the full text: it is stored with
    the application.
-2. **Read the career.** Run `career` once per conversation, before you suggest anything.
+2. **Read the career.** Run `career` once per conversation, before you suggest anything
+   (with the connector: `get_career`).
    - In file mode it names the file and the date it was taken. If it finds no career file, ask
      the user to attach one (in jac: Account → Claude → Download career for Claude) and wait for
      it; never work from memory or invent a career. If the file is a few days old, ask once
@@ -53,8 +63,8 @@ It works in one of two modes, and picks it itself:
    don't paper over a gap with wording. Suggest what to lead with. Keep every correction the user
    makes for the rest of the conversation.
 6. **Save** when the user says so (see Saving). In file mode, hand them the file and tell them
-   where to import it; online, give them the link. Either way they review and export the PDF in
-   jac.
+   where to import it; with the connector or online, give them the link. Either way they review
+   and export the PDF in jac.
 
 ## Picking the CV entries
 
@@ -107,7 +117,8 @@ It works in one of two modes, and picks it itself:
 
 ## Saving
 
-Write the application to a JSON file, e.g. `application.json`, and run
+With the connector, call `save_application` with the application below as its arguments.
+Otherwise write it to a JSON file, e.g. `application.json`, and run
 `python3 scripts/jac.py save application.json`:
 
 ```json
@@ -151,14 +162,18 @@ application and shows its own warnings, such as a salutation inside the body or 
 form. Every import creates a new application, so for a correction after the user has imported,
 tell them to edit it in jac, or write a fresh file for a fresh import.
 
-**Online**, the answer gives the application's `url` and any `warnings` (length, a salutation
-inside the body, a slipped German form, the highest degree added). Fix what's worth fixing, then
-save the same file again: it updates the application. To continue with an existing application:
-`applications`, then `show ID` into a file, edit it, keep its `"id"`, and `save` it.
+**With the connector, and online**, the answer gives the application's `id`, its `url` and any
+`warnings` (length, a salutation inside the body, a slipped German form, the highest degree
+added). Fix what's worth fixing, then save again with that `id`: it updates the application
+instead of creating a second one, and only what you send changes. Give the user the `url`: it
+opens the application in jac, where they check the layout and export the PDF. To continue with an
+existing application: `applications` (`list_applications`), then `show ID` (`get_application`),
+change what the conversation changed, and save it with its `id`.
 
 **If a command answers `NOT HERE`**, it needs jac itself: in file mode that's `applications`,
 `show`, `changes` and `undo`, and the message says where the same thing is in jac. Online, it means
 jac can't be reached at `JAC_URL`.
 
 **Online, if jac doesn't accept the token**, it was revoked: the user creates a new one in jac
-(Account → Claude → Claude Code) and sets `JAC_TOKEN` to it.
+(Account → Claude) and sets `JAC_TOKEN` to it. With the connector, a refused token means the same:
+a new token, and the connector added again with it (Customize → Connectors).

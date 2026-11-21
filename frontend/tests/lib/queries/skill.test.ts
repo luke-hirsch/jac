@@ -3,6 +3,8 @@ import { ApiError } from "@/lib/api";
 import {
   careerFileName,
   changeRows,
+  connectorHeader,
+  connectorUrl,
   envLines,
   errorLines,
   fetchSkillBundle,
@@ -26,6 +28,26 @@ describe("envLines", () => {
     expect(envLines("https://jac.example.org", "jac_AbCdEfGh123")).toBe(
       "export JAC_URL=https://jac.example.org\nexport JAC_TOKEN=jac_AbCdEfGh123",
     );
+  });
+});
+
+describe("connectorUrl", () => {
+  it("is the API's MCP endpoint, with a trailing slash", () => {
+    expect(connectorUrl("https://jac.example.org")).toBe(
+      "https://jac.example.org/api/jac/mcp/",
+    );
+  });
+
+  it("carries the key as its last segment when given one", () => {
+    expect(connectorUrl("https://jac.example.org", "jac_AbC-d_1")).toBe(
+      "https://jac.example.org/api/jac/mcp/jac_AbC-d_1/",
+    );
+  });
+});
+
+describe("connectorHeader", () => {
+  it("includes the scheme: Claude sends the value as it is", () => {
+    expect(connectorHeader("jac_AbC")).toBe("Bearer jac_AbC");
   });
 });
 
