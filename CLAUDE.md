@@ -95,8 +95,9 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
   - 10 `claude-connector` (deployed by the AI at his request): the Claude app, phone included, reaches jac through a
     custom MCP connector at `jac.<domain>/api/jac/mcp/` (Anthropic's servers call it, not the sandbox), on the skill's
     token; `get_career` hands over SKILL.md as the rules. File mode stays as the fallback. Its second round put Claude
-    under Account → LLM → Claude behind the same consent card as an API key (stamped per token, revoking withdraws;
-    the privacy page's §8 and §11 and the terms' §6 cover it). His steps: a token, the connector in Claude's
+    under Account → LLM → Claude behind the same consent card as an API key; the third round keeps that consent per
+    user like a cookie choice (`TransferConsent`: asked once, withdrawing deletes the keys or tokens; privacy §6, §8
+    and §11 and terms §6 cover it). His steps: a token, the connector in Claude's
     settings, the couch test ([[claude-skill]]).
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
