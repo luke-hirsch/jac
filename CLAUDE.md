@@ -51,6 +51,9 @@ Don't keep a deep file tree here: it drifts. Open the dir.
   The owner comes from the URL path (`/api/spa/public/<handle>/…`), never the Host header. Don't bring back per-user
   subdomains: Lukas dropped them because the wildcard's tail on the lab (DNS-01, Caddy's Cloudflare module) wasn't
   worth it ([[portfolio-multiuser]]).
+- **deploys keep connections:** jac is live, so no migration deletes or invalidates what a user holds (tokens,
+  API keys, sessions). A new requirement is checked when they're used, or backfilled honestly
+  ([[deploys-keep-connections]]). Guide 10's second round broke this once (`jac` 0004 deleted every token).
 
 # run it
 
