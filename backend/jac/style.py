@@ -7,8 +7,6 @@ the check that catches a slip has to be cheaper and more reliable than the model
 
 A finding is a warning, never a rewrite: every hit is quoted, so the user (or Claude) decides.
 
-Standard library only: the skill zip ships this file as `scripts/jac_style.py`, so the skill's
-script runs the same checks in file mode, in a sandbox without jac (`jac.skill.skill_bundle`).
 The letter editor runs a mirror, frontend/src/lib/style.ts: keep the two in step (their tests
 share their cases).
 """
@@ -16,6 +14,8 @@ share their cases).
 from __future__ import annotations
 
 import re
+
+from spa.models import DEFAULT_STYLE_RULES
 
 NO_DASHES = "no_dashes"
 NO_ANTITHESIS = "no_antithesis"
@@ -104,12 +104,7 @@ def rule_lines(text: str) -> list[str]:
 
 def style_rules(profile) -> list[str]:
     """The user's rules, one per line. Without a profile, the ones every account starts with."""
-    if profile is not None:
-        return rule_lines(profile.style_rules)
-    # Imported here: this file also runs without Django, in the skill's sandbox.
-    from spa.models import DEFAULT_STYLE_RULES
-
-    return rule_lines(DEFAULT_STYLE_RULES)
+    return rule_lines(DEFAULT_STYLE_RULES if profile is None else profile.style_rules)
 
 
 def style_checks(profile) -> list[str]:

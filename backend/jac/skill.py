@@ -1,11 +1,11 @@
-"""The Claude skill's side of jac: what it reads and what it writes back.
+"""What the jac connector (`jac.mcp`) reads and writes back.
 
-The skill (jac/resources/skill/) does the thinking on the user's own Claude subscription: it reads
-the career DB, picks the CV entries, writes the letter and talks it through. jac never calls a
-model here. What comes back is an ordinary application, shaped exactly like a generated one
-(`cv_content` per section, the letter body + `letter_meta`), so the editor, the fit and the
-export treat it the same. The highest completed degree is added if the skill left it out: the
-same domain rule the pipeline force-keeps (`CV.highest_degree_id`).
+Claude does the thinking on the user's own subscription: it reads the career DB, picks the CV
+entries, writes the letter and talks it through, following the rules in jac/resources/rules/. jac
+never calls a model here. What comes back is an ordinary application, shaped exactly like a
+generated one (`cv_content` per section, the letter body + `letter_meta`), so the editor, the fit
+and the export treat it the same. The highest completed degree is added if Claude left it out:
+the same domain rule the pipeline force-keeps (`CV.highest_degree_id`).
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from django.db import transaction
 from django.db.models import prefetch_related_objects
 from django.utils import timezone
 
-from jac.career_review import review_career
 from jac.cover_letter import (
     letter_closing,
     letter_salutation,
@@ -41,15 +40,13 @@ from jac.register import register_leaks, resolve_address_form
 from jac.style import style_checks, style_rules, style_warnings
 from spa.models import PersonalityProfile, PersonalityQuestion
 
-SKILL_DIR = Path(__file__).resolve().parent / "resources" / "skill"
-# jac's style checks, shipped beside the script so file mode runs the same ones: jac/style.py is
-# standard library only for that.
-STYLE_MODULE = Path(__file__).resolve().parent / "style.py"
-STYLE_MODULE_IN_BUNDLE = "scripts/jac_style.py"
+RESOURCES = Path(__file__).resolve().parent / "resources"
+# What `get_career` and `get_career_review` hand over: the rules live here, on the server.
+RULES_DIR = RESOURCES / "rules"
+# The skill the user uploads to Claude: one file that points at the connector, so it never goes
+# stale.
+SKILL_DIR = RESOURCES / "skill"
 SKILL_NAME = "jac"
-# Marks the career file, so the skill's script finds it among a chat's uploads whatever the user
-# (or the Claude app) named it.
-CAREER_FILE_FORMAT = "jac-career-for-claude"
 
 # The writer's band (`CoverLetterWriter._TARGET_WORDS`): one DIN page holds about 230 words.
 LETTER_WORDS = (170, 230)
@@ -217,7 +214,7 @@ _ENTRY_SHAPES = {
 
 
 def career_payload(user) -> dict:
-    """Everything the skill reads, in one document: who the candidate is, how they like their
+    """Everything Claude reads, in one document: who the candidate is, how they like their
     letters, and every career entry with its `type:pk` id. Names instead of foreign keys, so
     Claude reads it without a second lookup."""
     cv = CV(user.pk)
@@ -241,7 +238,7 @@ def career_payload(user) -> dict:
             "focus": personality.letter_focus if personality else "balanced",
             "words": list(LETTER_WORDS),
             # The user's own writing rules, one per line: every letter follows them. jac checks
-            # the ones in style_checks on save, and so does the script in file mode.
+            # the ones in style_checks on save.
             "style_rules": style_rules(personality),
             "style_checks": style_checks(personality),
         },
@@ -281,7 +278,7 @@ def application_summary(application: JobApplication) -> dict:
 
 
 def application_payload(application: JobApplication) -> dict:
-    """An application in the shape the skill saves it, so reading one back and saving it again
+    """An application in the shape `save_application` takes, so reading one back and saving it again
     round-trips."""
     posting = application.posting
     meta = application.letter_meta or {}
@@ -342,7 +339,7 @@ def _cv_content(
 
 def _letter_meta(user, posting: JobPosting, letter: dict) -> dict:
     """The frame around the body, built like a generated letter's (`cover_letter.letter_meta`).
-    The skill may override subject, salutation and closing; the rest comes from the profile and
+    Claude may override subject, salutation and closing; the rest comes from the profile and
     the posting."""
     profile = PersonalityProfile.objects.filter(user=user).first()
     tone = letter.get("tone") or (profile.letter_tone if profile else "") or "neutral"
@@ -361,7 +358,7 @@ def _letter_meta(user, posting: JobPosting, letter: dict) -> dict:
     }
 
 
-# The frame the skill may override: its own text then, so the style checks read it too.
+# The frame Claude may override: its own text then, so the style checks read it too.
 _LETTER_OVERRIDES = ("subject", "salutation", "closing")
 
 
@@ -396,7 +393,7 @@ def _letter_warnings(body: str, meta: dict, letter: dict, checks) -> list[str]:
 def save_application(
     user, data: dict, application: JobApplication | None = None
 ) -> tuple[JobApplication, list[str]]:
-    """Create (`application` None) or update an application from the skill's validated payload
+    """Create (`application` None) or update an application from Claude's validated payload
     (`SkillApplicationSerializer`). On update only what's sent changes; the letter's frame is
     rebuilt whenever a letter is sent. Returns the application and warnings worth showing."""
     warnings: list[str] = []
@@ -453,27 +450,13 @@ def save_application(
     return application, warnings
 
 
-def career_file(user) -> dict:
-    """The career for one chat in the Claude app, whose sandbox can't reach jac (Pro and Max
-    plans can't allow a custom domain): what `career` and `review` answer online, in one file the
-    user attaches. The files Claude writes back point at its ids and `updated_at` stamps, so a
-    fresh one per chat keeps the imports from going stale."""
-    return {
-        "format": CAREER_FILE_FORMAT,
-        **career_payload(user),
-        "review": review_career(user),
-    }
-
-
 def skill_bundle() -> bytes:
-    """The skill as a zip Claude takes as an upload: the skill folder plus jac's style checks
-    (`STYLE_MODULE`), and nothing else. No token and no personal data, so it's the same for
-    everyone and uploaded once: the career comes per chat (`career_file`), and Claude Code reaches
-    jac with a token of its own (JAC_URL / JAC_TOKEN)."""
+    """The skill as a zip Claude takes as an upload: the skill folder and nothing else. No token,
+    no personal data and no rules (they come with the connector), so it's the same for everyone
+    and uploaded once."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(SKILL_DIR.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 z.write(path, f"{SKILL_NAME}/{path.relative_to(SKILL_DIR)}")
-        z.write(STYLE_MODULE, f"{SKILL_NAME}/{STYLE_MODULE_IN_BUNDLE}")
     return buf.getvalue()

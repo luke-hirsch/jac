@@ -123,7 +123,7 @@ class LegalPagesTests(TestCase):
         as a recipient (section 11)."""
         r = self.client.get("/legal/privacy/")
         for phrase in (
-            "Account → LLM → Claude",
+            "Account → LLM bei den Connectors",
             "bevor du den ersten Token anlegst",
             "dabei löschen wir deine Tokens",
             "dabei löschen wir deine Schlüssel",

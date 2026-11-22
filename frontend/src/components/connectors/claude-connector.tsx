@@ -1,5 +1,4 @@
-import { useRef, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useState } from "react";
 import { toast } from "sonner";
 import { QueryError } from "@/components/query-error";
 import { ConsentKept, TransferConsent } from "@/components/transfer-consent";
@@ -9,13 +8,11 @@ import {
   useGiveConsent,
   useWithdrawConsent,
 } from "@/lib/queries/consent";
-import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
 import { Lines } from "@/components/toast-lines";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -28,14 +25,11 @@ import {
   changeRows,
   connectorHeader,
   connectorUrl,
-  envLines,
   errorLines,
-  parseImportFile,
   staleLines,
   useAccessTokens,
   useCareerChanges,
   useCreateAccessToken,
-  useDownloadCareerFile,
   useDownloadSkill,
   useRevokeAccessToken,
   useUndoCareerChange,
@@ -44,10 +38,6 @@ import {
   type CareerChangeBatch,
   type NewAccessToken,
 } from "@/lib/queries/skill";
-
-export const Route = createFileRoute("/_authenticated/account/llm_/claude")({
-  component: ClaudePage,
-});
 
 /** Where Anthropic says what it does with the data of a Claude account. */
 const CLAUDE_TERMS = [
@@ -62,7 +52,10 @@ const CLAUDE_TERMS = [
   { label: "Privacy Policy", href: "https://www.anthropic.com/legal/privacy" },
 ];
 
-function ClaudePage() {
+/** Claude's connector, in Account → LLM under Connectors: the consent, the steps, the skill,
+ *  the tokens and the career edits Claude made. The connector is the only way Claude reaches
+ *  jac; the rules travel with it, so the skill never needs updating. */
+export function ClaudeConnector() {
   // The consent is kept, like a cookie choice: asked once, and never again once given or once a
   // token exists (each one was created on an "I agree").
   const consent = useConsent("claude");
@@ -75,10 +68,10 @@ function ClaudePage() {
   );
   const consentUnknown = consent.isLoading || tokens.isLoading;
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <section className="space-y-4">
         <div>
-          <h2 className="text-lg font-medium">Claude</h2>
+          <h3 className="font-medium">Claude</h3>
           <p className="text-sm text-muted-foreground">
             Write applications with Claude, on your own subscription: paste a
             posting into a chat, talk the CV and the letter through, and Claude
@@ -102,7 +95,7 @@ function ClaudePage() {
           <ConsentKept
             givenAt={consent.data?.given_at ?? null}
             pending={withdraw.isPending}
-            withdrawWarning="Withdraw your consent? Every token is revoked: the connector and Claude Code stop, and creating a new token asks again."
+            withdrawWarning="Withdraw your consent? Every token is revoked: the connector stops, and creating a new token asks again."
             onWithdraw={() =>
               withdraw.mutate(undefined, {
                 onSuccess: () =>
@@ -114,13 +107,10 @@ function ClaudePage() {
         )}
         <ConnectorSteps />
         <CreateToken agreed={agreed} />
+        <DownloadSkill />
       </section>
-      <Separator />
-      <FileMode />
-      <Separator />
-      <CareerChanges />
-      <Separator />
       <TokenList />
+      <CareerChanges />
     </div>
   );
 }
@@ -164,8 +154,7 @@ function ClaudeConsent({
             </a>
           </span>
         ))}
-        ), and we have no influence on that. A career file you download and give
-        Claude yourself is your own transfer: jac sends nothing then.
+        ), and we have no influence on that.
       </p>
     </TransferConsent>
   );
@@ -177,10 +166,9 @@ function ConnectorSteps() {
   const url = connectorUrl(window.location.origin);
   return (
     <div className="space-y-2">
-      <h3 className="font-medium">In the Claude app: the jac connector</h3>
       <ol className="list-decimal space-y-1 pl-5 text-sm">
         <li>
-          Create a token below, e.g. <q>Claude connector</q>.
+          Create a token below, e.g. <q>Claude</q>.
         </li>
         <li>
           In Claude: Customize → Connectors → + Add → Add custom connector. Name{" "}
@@ -193,39 +181,21 @@ function ConnectorSteps() {
           instead, and no header.
         </li>
         <li>
+          Download the skill below and upload <code>jac-skill.zip</code> in
+          Claude, under Settings → Capabilities → Skills. It only points Claude
+          at the connector, so it never needs updating.
+        </li>
+        <li>
           In a chat, switch jac on (+ → Connectors) and paste a job posting.
           Claude reads your career, saves when you say so, and its link opens
           the application here.
         </li>
       </ol>
       <p className="text-sm text-muted-foreground">
-        Claude Code takes the same token, as <code>JAC_URL</code> and{" "}
-        <code>JAC_TOKEN</code> in the shell you start it from, with the skill
-        from the zip below.
+        Claude Code, signed in with the same Claude account, picks up both the
+        connector and the skill.
       </p>
     </div>
-  );
-}
-
-/** Without the connector, the Claude app can't reach jac: the career and the results go by
- *  file. */
-function FileMode() {
-  return (
-    <section className="space-y-4">
-      <div>
-        <h3 className="font-medium">Without the connector: by file</h3>
-        <p className="text-sm text-muted-foreground">
-          The skill alone can't reach jac from the Claude app, so the career
-          goes into the chat as a file and Claude's results come back as files
-          you import.
-        </p>
-      </div>
-      <SetupSteps />
-      <div className="space-y-3">
-        <DownloadSkill />
-        <DownloadCareerFile />
-      </div>
-    </section>
   );
 }
 
@@ -244,56 +214,10 @@ function DownloadSkill() {
         {download.isPending ? "Preparing…" : "Download skill (.zip)"}
       </Button>
       <p className="max-w-sm text-xs text-muted-foreground">
-        Once: the skill alone, nothing about you in it. Upload it again only
-        when jac's skill changes.
+        Once: one file that points Claude at the connector, nothing about you in
+        it.
       </p>
     </div>
-  );
-}
-
-function DownloadCareerFile() {
-  const download = useDownloadCareerFile();
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <Button
-        variant="outline"
-        disabled={download.isPending}
-        onClick={() =>
-          download.mutate(undefined, {
-            onError: (e) => toast.error(errorLines(e, "Download failed.")[0]),
-          })
-        }
-      >
-        {download.isPending ? "Preparing…" : "Download career for Claude"}
-      </Button>
-      <p className="max-w-sm text-xs text-muted-foreground">
-        For each chat: your career and its review as of now, with your contact
-        details for the letter. Download a fresh one after you change your
-        career here.
-      </p>
-    </div>
-  );
-}
-
-function SetupSteps() {
-  return (
-    <ol className="list-decimal space-y-1 pl-5 text-sm">
-      <li>
-        Once: download the skill and upload <code>jac-skill.zip</code> in
-        Claude, under Settings → Capabilities → Skills.
-      </li>
-      <li>
-        For each chat: download your career for Claude, attach the file, and
-        paste a job posting (or its link).
-      </li>
-      <li>
-        Claude hands you a file to import: an application under{" "}
-        <Link to="/applications" className="underline">
-          Applications → Import from Claude
-        </Link>
-        , career changes under Import changes, below.
-      </li>
-    </ol>
   );
 }
 
@@ -304,23 +228,20 @@ function when(iso: string): string {
   });
 }
 
-/** The batches of career edits Claude applied or the user imported, newest first, each one
- *  undoable. */
+/** The batches of career edits Claude applied, newest first, each one undoable. */
 function CareerChanges() {
   const batches = useCareerChanges();
   const rows = batches.data ?? [];
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="font-medium">Career changes</h3>
+        <h4 className="text-sm font-medium">Career changes</h4>
         <p className="text-sm text-muted-foreground">
           Claude can review your career and, once you agree, edit entries:
           descriptions, the skills a job used, skills that are missing. Every
-          batch of changes is listed here and can be undone. If Claude handed
-          you a <code>career-changes.json</code>, import it here.
+          batch of changes is listed here and can be undone.
         </p>
       </div>
-      <ImportChanges />
       {rows.length ? (
         <ul className="divide-y">
           {rows.map((batch) => (
@@ -340,50 +261,6 @@ function CareerChanges() {
         </p>
       )}
     </section>
-  );
-}
-
-/** Import the changes Claude wrote as a file, when its sandbox couldn't reach jac. */
-function ImportChanges() {
-  const importChanges = useImportChangesFile();
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  async function onFile(file: File) {
-    let parsed;
-    try {
-      parsed = parseImportFile(await file.text());
-    } catch (e) {
-      toast.error((e as Error).message);
-      return;
-    }
-    if (parsed.kind === "application")
-      toast.error(
-        "That's an application: import it under Applications → Import from Claude.",
-      );
-    else await importChanges.apply(parsed.changes);
-  }
-
-  return (
-    <>
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".json,application/json"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = ""; // the same file again is a new pick
-          if (file) onFile(file);
-        }}
-      />
-      <Button
-        variant="outline"
-        disabled={importChanges.isPending}
-        onClick={() => fileRef.current?.click()}
-      >
-        {importChanges.isPending ? "Importing…" : "Import changes"}
-      </Button>
-    </>
   );
 }
 
@@ -528,7 +405,7 @@ function FieldText({
   );
 }
 
-/** One token for the connector or Claude Code: the box shows it in the shapes each one takes.
+/** One token for the connector: the box shows it in the two shapes Claude's dialog takes.
  *  Locked until the user agreed to the transfer (the card above, once). */
 function CreateToken({ agreed }: { agreed: boolean }) {
   const create = useCreateAccessToken();
@@ -561,7 +438,7 @@ function CreateToken({ agreed }: { agreed: boolean }) {
           value={name}
           maxLength={60}
           disabled={!agreed}
-          placeholder={agreed ? "e.g. Claude connector" : "Agree above first"}
+          placeholder={agreed ? "e.g. Claude" : "Agree above first"}
           onChange={(e) => setName(e.target.value)}
         />
       </div>
@@ -595,10 +472,6 @@ function NewTokenBox({
       <CopyBlock
         label="Connector without request headers: this URL instead"
         text={connectorUrl(origin, token.key)}
-      />
-      <CopyBlock
-        label="Claude Code: in the shell you start it from"
-        text={envLines(origin, token.key)}
       />
       <Button size="sm" variant="ghost" onClick={onDismiss}>
         Done
@@ -652,7 +525,7 @@ function TokenList() {
 
   return (
     <section className="space-y-3">
-      <h3 className="font-medium">Tokens</h3>
+      <h4 className="text-sm font-medium">Tokens</h4>
       {rows.length ? (
         <Table>
           <TableHeader>
@@ -709,7 +582,7 @@ function TokenList() {
         <p className="text-sm text-muted-foreground">
           {tokens.isLoading
             ? "Loading…"
-            : "No tokens yet. The connector and Claude Code each use one."}
+            : "No tokens yet. The connector uses one."}
         </p>
       )}
     </section>

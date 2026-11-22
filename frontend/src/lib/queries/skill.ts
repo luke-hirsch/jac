@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
-import { downloadBlob, downloadText } from "@/lib/export";
+import { downloadBlob } from "@/lib/export";
 import type { Page } from "./paginated";
 
 /* ---------- types ---------- */
@@ -17,14 +17,6 @@ export type AccessTokenRow = {
 
 /** What minting a token answers: the row plus its key, in this one response only. */
 export type NewAccessToken = AccessTokenRow & { key: string };
-
-/** What saving an application the skill wrote answers (the skill's shape, plus warnings). */
-export type ImportedApplication = {
-  id: number;
-  title: string;
-  url: string;
-  warnings: string[];
-};
 
 /** A field's value in a career change. A string[] is a relation list: skill ids ("skill:12")
  *  or domain names. */
@@ -43,21 +35,11 @@ export type CareerChange = {
 export type CareerChangeBatch = {
   id: number;
   created_at: string;
-  source: "claude" | "import"; // applied by the skill's token, or imported here from a file
+  source: "claude" | "import"; // applied over the connector; "import": from a file, before file mode went
   undone_at: string | null;
   changes: CareerChange[];
   labels: Record<string, string>; // names for the ids inside before/after values
 };
-
-/** What importing changes answers: the batch, plus the ids of the entries it created. */
-export type AppliedCareerChanges = CareerChangeBatch & {
-  created: Record<string, string>; // {"new:docker": "skill:44"}
-};
-
-/** A file the skill wrote, told apart by what it holds. */
-export type ImportFile =
-  | { kind: "application"; body: Record<string, unknown> }
-  | { kind: "changes"; changes: unknown[] };
 
 /** One field of a change as the list shows it. A relation list shows what was added and
  *  removed; any other value before and after, with null for empty. */
@@ -82,11 +64,6 @@ export function connectorUrl(origin: string, key?: string): string {
  *  part of it. */
 export function connectorHeader(key: string): string {
   return `Bearer ${key}`;
-}
-
-/** The shell lines Claude Code reads the skill's address and token from. */
-export function envLines(origin: string, key: string): string {
-  return `export JAC_URL=${origin}\nexport JAC_TOKEN=${key}`;
 }
 
 // DRF keys that name no field: their messages read on their own.
@@ -123,33 +100,6 @@ export function errorLines(error: unknown, fallback: string): string[] {
       ? validationLines(error.data)
       : [];
   return lines.length ? lines : [fallback];
-}
-
-// What only an application file carries.
-const APPLICATION_KEYS = ["posting", "entries", "letter"];
-
-/** The file the skill wrote, parsed: a list under `changes` makes it career changes (sent on
- *  their own: an `applied_as` beside them is the server's call), a posting, entries or letter
- *  an application. Throws with a message for the user when it's neither. */
-export function parseImportFile(text: string): ImportFile {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(
-      "That file isn't valid JSON. Pick the .json file Claude wrote.",
-    );
-  }
-  if (data && typeof data === "object" && !Array.isArray(data)) {
-    const file = data as Record<string, unknown>;
-    if (Array.isArray(file.changes))
-      return { kind: "changes", changes: file.changes };
-    if (APPLICATION_KEYS.some((key) => key in file))
-      return { kind: "application", body: file };
-  }
-  throw new Error(
-    "That file isn't an application or career changes from Claude.",
-  );
 }
 
 /** A value as the list shows it: ids by their label, null when there's nothing. */
@@ -202,8 +152,7 @@ export function changeRows(
 }
 
 /** A 409 with `stale` as lines: its detail, then each entry edited in jac since, by its name
- *  where `batch` knows it, else by id (an import has no batch yet, and the file carries no
- *  names). Any other failure reads as `errorLines`. */
+ *  where `batch` knows it, else by id. Any other failure reads as `errorLines`. */
 export function staleLines(
   error: unknown,
   fallback: string,
@@ -236,8 +185,8 @@ const SKILL_API = "/api/jac/skill/";
 const KEY = ["jac", "skill", "tokens"] as const;
 const CHANGES_KEY = ["jac", "skill", "career-changes"] as const;
 
-/** GET the skill as a zip: the skill alone, no token, no career. A raw fetch: `api()` reads
- *  the body as text. */
+/** GET the skill as a zip: one file that points at the connector, no token, no career. A raw
+ *  fetch: `api()` reads the body as text. */
 export async function fetchSkillBundle(): Promise<Blob> {
   const res = await fetch(`${SKILL_API}bundle/`, {
     credentials: "same-origin",
@@ -291,50 +240,11 @@ export function useRevokeAccessToken() {
   });
 }
 
-/** Download the skill as a zip, to upload to Claude once. */
+/** Download the skill as a zip, to upload to Claude once: it never changes with jac's rules. */
 export function useDownloadSkill() {
   return useMutation({
     mutationFn: async () =>
       downloadBlob(await fetchSkillBundle(), "jac-skill.zip"),
-  });
-}
-
-/** `jac-career-for-claude-YYYY-MM-DD.json` on the local date: `toISOString()` is UTC, still
- *  yesterday for the first hour or two after midnight in Berlin. The date says how fresh the
- *  copy is; the skill finds the file by its `format` marker, not by this name. */
-export function careerFileName(now = new Date()): string {
-  const day = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
-  return `jac-career-for-claude-${day}.json`;
-}
-
-/** Download the career for one chat in the Claude app, whose sandbox can't reach jac: the
- *  career and its machine review, with the ids the files Claude writes back point at. */
-export function useDownloadCareerFile() {
-  return useMutation({
-    mutationFn: async () =>
-      downloadText(
-        `${JSON.stringify(await api(`${SKILL_API}career/file/`), null, 1)}\n`,
-        careerFileName(),
-        "application/json",
-      ),
-  });
-}
-
-/** Save an application from the file the skill wrote, sent as it is: the server validates it. */
-export function useImportApplication() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) =>
-      api<ImportedApplication>(`${SKILL_API}applications/`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["jac", "applications"] }),
   });
 }
 
@@ -343,20 +253,6 @@ export function useCareerChanges() {
     queryKey: CHANGES_KEY,
     // The newest 20 batches, as a plain list: no pages.
     queryFn: () => api<CareerChangeBatch[]>(`${SKILL_API}career/changes/`),
-  });
-}
-
-/** Apply the changes from a file the skill wrote, sent as they are: the server validates them.
- *  They edit the career, so every `["jac"]` query refetches, this list among them. */
-export function useImportCareerChanges() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (changes: unknown[]) =>
-      api<AppliedCareerChanges>(`${SKILL_API}career/changes/`, {
-        method: "POST",
-        body: JSON.stringify({ changes }),
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["jac"] }),
   });
 }
 

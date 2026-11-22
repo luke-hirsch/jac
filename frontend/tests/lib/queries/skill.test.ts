@@ -1,35 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
-  careerFileName,
   changeRows,
   connectorHeader,
   connectorUrl,
-  envLines,
   errorLines,
   fetchSkillBundle,
-  parseImportFile,
   staleLines,
   validationLines,
   type CareerChange,
 } from "@/lib/queries/skill";
 
 /**
- * The Claude skill's SPA side (account → Claude, applications → Import from Claude): the
- * env lines for Claude Code, DRF errors as readable lines, the import file check (an
- * application or career changes), a career change as display rows, the 409's stale entries
- * by name, and the bundle's raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
+ * The connector's SPA side (Account → LLM, under Connectors): its URL and header, DRF errors
+ * as readable lines, a career change as display rows, the 409's stale entries by name, and the
+ * bundle's raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
  */
 
 afterEach(() => vi.unstubAllGlobals());
-
-describe("envLines", () => {
-  it("gives the address and the key as two export lines", () => {
-    expect(envLines("https://jac.example.org", "jac_AbCdEfGh123")).toBe(
-      "export JAC_URL=https://jac.example.org\nexport JAC_TOKEN=jac_AbCdEfGh123",
-    );
-  });
-});
 
 describe("connectorUrl", () => {
   it("is the API's MCP endpoint, with a trailing slash", () => {
@@ -109,44 +97,6 @@ describe("errorLines", () => {
     expect(errorLines(new TypeError("Failed to fetch"), "fallback")).toEqual([
       "fallback",
     ]);
-  });
-});
-
-describe("parseImportFile", () => {
-  it("returns an application file as it is", () => {
-    const file = { posting: { text: "Ad" }, entries: ["job:3"], letter: {} };
-    expect(parseImportFile(JSON.stringify(file))).toEqual({
-      kind: "application",
-      body: file,
-    });
-    // One of the three is enough: the server says what else is missing.
-    expect(parseImportFile('{"letter": {}}').kind).toBe("application");
-  });
-
-  it("tells a changes file by its list, and keeps only the list", () => {
-    const changes = [{ id: "job:3", why: "Clearer." }];
-    expect(parseImportFile(JSON.stringify({ changes, applied_as: 7 }))).toEqual(
-      { kind: "changes", changes },
-    );
-  });
-
-  it("says so when the file isn't JSON", () => {
-    expect(() => parseImportFile("{ not json")).toThrow(/isn't valid JSON/);
-  });
-
-  it("says so when the JSON is neither", () => {
-    for (const text of [
-      "[]",
-      "null",
-      "42",
-      '"text"',
-      "{}",
-      '{"name": "jac"}',
-      '{"changes": "job:3"}',
-    ])
-      expect(() => parseImportFile(text)).toThrow(
-        /isn't an application or career changes/,
-      );
   });
 });
 
@@ -369,19 +319,5 @@ describe("fetchSkillBundle", () => {
     const error = await fetchSkillBundle().catch((e: unknown) => e);
     expect((error as ApiError).status).toBe(502);
     expect((error as ApiError).data).toBeNull();
-  });
-});
-
-describe("careerFileName", () => {
-  it("dates the career file, zero-padded", () => {
-    expect(careerFileName(new Date(2026, 0, 5, 12))).toBe(
-      "jac-career-for-claude-2026-01-05.json",
-    );
-  });
-
-  it("uses the local day: just after midnight in Berlin, UTC is still yesterday", () => {
-    expect(careerFileName(new Date(2026, 10, 20, 0, 30))).toBe(
-      "jac-career-for-claude-2026-11-20.json",
-    );
   });
 });
