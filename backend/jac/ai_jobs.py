@@ -3,8 +3,10 @@ generation never holds them up, and no web thread hangs on the model server. Not
 on the application: the client splices the result into its draft."""
 
 from jac.llm_prompts import ParagraphRewrite, ShortenLetter
+from jac.style import style_rules
 from llm_connector.conf import resolve_executor
 from llm_connector.jobs import AiJobFailed, ai_job
+from spa.models import PersonalityProfile
 
 NOTHING_BACK = "The language model returned nothing — try again."
 
@@ -15,6 +17,12 @@ def _executor(job):
     )
 
 
+def _rules(job) -> list[str]:
+    """The user's writing rules, as they stand when the job runs: a rewrite follows them like
+    the first draft did."""
+    return style_rules(PersonalityProfile.objects.filter(user=job.user).first())
+
+
 @ai_job("letter_rewrite")
 def letter_rewrite(job) -> dict:
     p = job.payload
@@ -23,6 +31,7 @@ def letter_rewrite(job) -> dict:
         instruction=p.get("instruction", ""),
         language=p.get("language", "en"),
         address_form=p.get("address_form", ""),
+        style_rules=_rules(job),
         executor=_executor(job),
     ).rewrite()
     if not text:
@@ -39,6 +48,7 @@ def letter_shorten(job) -> dict:
         target_words=p["target_words"],
         language=p.get("language", "en"),
         address_form=p.get("address_form", ""),
+        style_rules=_rules(job),
     ).shorten()
     if not body:
         raise AiJobFailed(NOTHING_BACK)

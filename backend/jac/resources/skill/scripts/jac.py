@@ -33,6 +33,7 @@ possible here (file mode without jac, or jac unreachable).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -51,8 +52,11 @@ OUTPUTS = USER_DATA / "outputs"
 MAX_SCAN_BYTES = 20 * 1024 * 1024
 
 # jac's own rules, checked here before the user imports: the letter band, the batch size and the
-# names a change may use.
+# names a change may use. The style checks are jac's own code: the skill zip carries jac/style.py
+# as jac_style.py, next to this file.
 LETTER_WORDS = (170, 230)
+# The parts of the letter frame Claude may override; the style checks read them then.
+LETTER_OVERRIDES = ("subject", "salutation", "closing")
 MAX_CHANGES = 100
 SECTIONS = ("jobs", "educations", "projects", "skills", "certifications", "languages")
 # Per type, the fields `set` takes and the lists `add` / `remove` take. The rest of what `career`
@@ -281,6 +285,7 @@ def check_application(data, career: dict) -> tuple[list[str], list[str]]:
             warnings.append(
                 f"The letter body has {words} words; jac aims for {low}–{high}."
             )
+        warnings += style_warnings(letter, body, career)
     highest = career.get("highest_degree")
     if highest and highest not in entries:
         warnings.append(
@@ -291,6 +296,31 @@ def check_application(data, career: dict) -> tuple[list[str], list[str]]:
             'The file carries an "id": an import always creates a new application.'
         )
     return problems, warnings
+
+
+def style_warnings(letter: dict, body: str, career: dict) -> list[str]:
+    """jac's style checks on the body and any frame Claude overrides, the ones the user has on
+    (`letter_defaults.style_checks`), worded as jac's import words them."""
+    module = Path(__file__).resolve().with_name("jac_style.py")
+    if not module.is_file():
+        missing = (
+            "jac's style checks aren't beside this script (download the skill again in jac): "
+            "the import still runs them."
+        )
+        return [missing]
+    spec = importlib.util.spec_from_file_location("jac_style", module)
+    style = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(style)
+    parts = {"body": body}
+    parts.update(
+        {
+            part: str(letter[part])
+            for part in LETTER_OVERRIDES
+            if str(letter.get(part) or "").strip()
+        }
+    )
+    checks = (career.get("letter_defaults") or {}).get("style_checks") or []
+    return style.style_warnings(parts, checks)
 
 
 def name_problems(where: str, etype: str, change: dict) -> list[str]:

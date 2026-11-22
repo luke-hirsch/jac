@@ -61,12 +61,15 @@ from jac.queues import (
     runs_ahead,
 )
 from jac.serializers import MAX_POSTING_CHARS
+from jac.skill import STYLE_MODULE
+from jac.style import style_rules
 from jac.tokens import mint_token
 from llm_connector.catalog import default_model
 from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
+from spa.models import PersonalityProfile
 
 from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
 
@@ -953,6 +956,22 @@ class ParagraphRewriteViewTests(APITestCase):
         self.assertEqual(kwargs["language"], "de")
         self.assertEqual(kwargs["address_form"], "ihr")
 
+    def test_the_users_writing_rules_reach_the_prompt(self):
+        """Read when the job runs, not when it was queued: the rules as they stand."""
+        with queued_jobs():
+            r = self.client.post(self.url, {"text": "Alt."}, format="json")
+        self.user.personality.style_rules = "No exclamation marks."
+        self.user.personality.save()
+        with (
+            patch("jac.ai_jobs.resolve_executor", return_value=Executor("ollama")),
+            patch("jac.ai_jobs.ParagraphRewrite") as rewrite_cls,
+        ):
+            rewrite_cls.return_value.rewrite.return_value = "Neu."
+            run_ai_job(str(r.data["id"]))
+        self.assertEqual(
+            rewrite_cls.call_args.kwargs["style_rules"], ["No exclamation marks."]
+        )
+
     def test_an_unknown_form_is_a_400(self):
         # It lands in a prompt: validated, never passed through.
         with patch("jac.views.resolve_executor", return_value=Executor("ollama")):
@@ -1162,6 +1181,11 @@ class LetterChatStreamTests(APITestCase):
         kwargs = chat_cls.call_args.kwargs
         self.assertEqual(kwargs["language"], "de")
         self.assertEqual(kwargs["address_form"], "ihr")
+        # A drafted REVISED BODY follows the user's rules like the first draft did.
+        self.assertEqual(
+            kwargs["style_rules"],
+            style_rules(PersonalityProfile.objects.get(user=self.user)),
+        )
 
     def test_an_unknown_form_is_a_400(self):
         with patch(
@@ -1428,6 +1452,15 @@ class ShortenLetterViewTests(APITestCase):
         self._run(r.data["id"], "Tighter.\n\nStill two.")
         job = self.client.get(f"/api/llm/jobs/{r.data['id']}/").data
         self.assertEqual(job["result"], {"body": "Tighter.\n\nStill two."})
+
+    def test_the_users_writing_rules_reach_the_prompt(self):
+        with queued_jobs():
+            r = self._post()
+        cls = self._run(r.data["id"], "Tighter.\n\nStill two.")
+        self.assertEqual(
+            cls.call_args.kwargs["style_rules"],
+            style_rules(PersonalityProfile.objects.get(user=self.user)),
+        )
 
     def test_the_budget_is_required_and_sane(self):
         self.assertEqual(
@@ -2216,9 +2249,16 @@ class SkillDownloadTests(APITestCase):
         z = zipfile.ZipFile(io.BytesIO(r.content))
         self.assertEqual(
             sorted(z.namelist()),
-            ["jac/REVIEW.md", "jac/SKILL.md", "jac/scripts/jac.py"],
+            [
+                "jac/REVIEW.md",
+                "jac/SKILL.md",
+                "jac/scripts/jac.py",
+                "jac/scripts/jac_style.py",
+            ],
         )
         self.assertTrue(z.read("jac/SKILL.md").startswith(b"---\nname: jac\n"))
+        # jac's own checks, byte for byte: file mode warns as the import does.
+        self.assertEqual(z.read("jac/scripts/jac_style.py"), STYLE_MODULE.read_bytes())
         everything = b"".join(z.read(name) for name in z.namelist())
         self.assertNotIn(b"Quetzalcoatl", everything)  # nothing about the user
         self.assertFalse(AccessToken.objects.exists())  # and it mints no token
@@ -3024,6 +3064,19 @@ class McpToolTests(_McpCase):
             ["No exclamation marks.", "Never say passionate."],
         )
         self.assertIn("letter_defaults.style_rules", data["rules"])
+
+    def test_get_career_names_the_checks_jac_runs(self):
+        data, _ = self._call("get_career")
+        self.assertEqual(
+            data["career"]["letter_defaults"]["style_checks"],
+            ["no_dashes", "no_antithesis"],
+        )
+        self.user.personality.style_no_dashes = False
+        self.user.personality.save()
+        data, _ = self._call("get_career")
+        self.assertEqual(
+            data["career"]["letter_defaults"]["style_checks"], ["no_antithesis"]
+        )
 
     def test_get_career_review_hands_over_its_rules(self):
         data, is_error = self._call("get_career_review")

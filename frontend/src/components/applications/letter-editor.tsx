@@ -16,12 +16,14 @@ import {
   useShortenLetter,
   type RunSummary,
 } from "@/lib/queries/applications";
+import { usePersonality } from "@/lib/queries/personality";
 
 import { seedDiscussion, type ChatMessage } from "@/lib/letter-chat";
 import {
   countWords,
   hasStub,
   replaceRange,
+  stripSoftStub,
   type LetterMeta,
 } from "@/lib/letter-doc";
 import {
@@ -38,6 +40,7 @@ import {
 } from "@/lib/render/letter-fit";
 import type { LayoutSpec } from "@/lib/render/spec";
 import { LetterDocument, pdfPages } from "@/lib/render/templates";
+import { styleChecks, styleWarnings } from "@/lib/style";
 import { HighlightedTextarea } from "./highlighted-textarea";
 import { RefineChat } from "./refine-chat";
 import { caretOffset, RewritePopover } from "./rewrite-popover";
@@ -115,6 +118,7 @@ export function LetterEditor({
 }) {
   const rewrite = useRewriteParagraph();
   const shorten = useShortenLetter();
+  const personality = usePersonality();
   const bodyId = useId();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -289,6 +293,20 @@ export function LetterEditor({
   // every render, so hand edits and AI rewrites are covered alike. A flag, never a
   // rewrite — same rule as the server's check of the run's body.
   const leaks = registerLeaks(body, meta.language, meta.address_form);
+  // The user's style rules, the ones jac can check (Account → Personality): the body and the
+  // frame, re-checked like the register. jac's own placeholders are left out, and a failed
+  // letter has nothing to check.
+  const styleFlags = hasStub(body)
+    ? []
+    : styleWarnings(
+        {
+          body: stripSoftStub(body),
+          subject: meta.subject,
+          salutation: meta.salutation,
+          closing: meta.closing,
+        },
+        styleChecks(personality.data),
+      );
 
   function onDiscuss() {
     if (!sel) return;
@@ -452,6 +470,18 @@ export function LetterEditor({
             letter: {leaks.join(", ")}. Flagged, not rewritten — fix them by
             hand or with a rewrite.
           </p>
+        )}
+        {styleFlags.length > 0 && (
+          <div className="text-xs text-amber-700 dark:text-amber-400">
+            <p>
+              Your style rules (Account → Personality), flagged, not rewritten:
+            </p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {styleFlags.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
         )}
       </div>
 

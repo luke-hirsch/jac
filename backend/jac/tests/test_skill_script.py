@@ -7,7 +7,10 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -16,17 +19,19 @@ from rest_framework.test import APITestCase
 
 from jac.career_changes import FIELDS, LISTS
 from jac.models import Education, Job, Skill
-from jac.skill import SKILL_DIR
+from jac.skill import skill_bundle
 
 from ._helpers import make_user
 
 SKILL_URL = "/api/jac/skill/"
 
 
-def _load_script():
-    """A fresh copy per test: the script caches the career file it found."""
+def _load_script(into: Path):
+    """A fresh copy per test (the script caches the career file it found), out of the zip the user
+    uploads: jac's style checks sit beside the script there, not in the skill folder."""
+    zipfile.ZipFile(io.BytesIO(skill_bundle())).extractall(into)
     spec = importlib.util.spec_from_file_location(
-        "jac_skill_script", SKILL_DIR / "scripts" / "jac.py"
+        "jac_skill_script", into / "jac" / "scripts" / "jac.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -56,10 +61,10 @@ class SkillScriptFileModeTests(APITestCase):
 
     def setUp(self):
         self.client.force_login(self.user)
-        self.script = _load_script()
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        self.script = _load_script(self.root / "skill")
         # The Claude app's folders, here in a temp dir.
         self.script.USER_DATA = self.root / "user-data"
         self.script.OUTPUTS = self.script.USER_DATA / "outputs"
@@ -194,6 +199,78 @@ class SkillScriptFileModeTests(APITestCase):
         self.assertIn(
             f"education:{self.master.pk}", warnings
         )  # the highest degree, added
+
+    def _styled(self, **letter):
+        """An application whose letter breaks both style rules, inside the word band."""
+        body = (
+            " ".join(["Wort"] * 190)
+            + " Ich bringe Erfahrung mit — und Neugier."
+            + " Ich schreibe nicht nur Code, sondern auch Tests."
+        )
+        return self._application(letter={"body": body, **letter})
+
+    @staticmethod
+    def _style(warnings) -> list[str]:
+        return [w for w in warnings if " rule (" in w]
+
+    def test_save_runs_jacs_style_checks_as_the_import_does(self):
+        app = self._styled(closing="Beste Grüße – Alice")
+        code, out, err = self._run("save", str(self._write("application.json", app)))
+        self.assertEqual(code, 0, err)
+        mine = self._style(json.loads(out)["warnings"])
+        self.assertEqual(len(mine), 3, mine)  # the body's two, the closing's dash
+        handed = self.script.OUTPUTS / "application.json"
+        r = self.client.post(
+            f"{SKILL_URL}applications/", json.loads(handed.read_text()), format="json"
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(self._style(r.data["warnings"]), mine)
+
+    def test_save_skips_the_checks_the_user_turned_off(self):
+        self.user.personality.style_no_dashes = False
+        self.user.personality.save()
+        career = self.client.get(f"{SKILL_URL}career/file/").content
+        (self.uploads / "career (1).json").write_bytes(career)
+        code, out, err = self._run(
+            "save", str(self._write("application.json", self._styled()))
+        )
+        self.assertEqual(code, 0, err)
+        (only,) = self._style(json.loads(out)["warnings"])
+        self.assertIn("no_antithesis", only)
+
+    def test_without_the_style_checks_beside_it_save_still_hands_over(self):
+        """The skill folder itself lacks them (the zip adds them): say so, and let the import
+        check."""
+        (self.root / "skill" / "jac" / "scripts" / "jac_style.py").unlink()
+        code, out, err = self._run(
+            "save", str(self._write("application.json", self._styled()))
+        )
+        self.assertEqual(code, 0, err)
+        warnings = json.loads(out)["warnings"]
+        self.assertEqual(self._style(warnings), [])
+        self.assertTrue(any("style checks aren't beside" in w for w in warnings))
+
+    def test_the_zip_runs_on_the_standard_library_alone(self):
+        """The sandbox has no jac and no Django: the script and the checks it ships with run in
+        an isolated interpreter, the zip as the user uploads it."""
+        path = self._write("application.json", self._styled())
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(self.root / "skill" / "jac" / "scripts" / "jac.py"),
+                "save",
+                str(path),
+            ],
+            env={"JAC_CAREER_FILE": str(self.uploads / "career (1).json")},
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,  # the exit code is part of what's checked
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(len(self._style(json.loads(done.stdout)["warnings"])), 2)
 
     # ---- apply ----------------------------------------------------------------------------
 

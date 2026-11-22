@@ -125,6 +125,7 @@ from jac.skill import (
     save_application,
     skill_bundle,
 )
+from jac.style import style_rules
 from jac.tasks import generate_run, notify_when_drained, publish_event
 from jac.tokens import (
     AccessTokenAuthentication,
@@ -140,6 +141,7 @@ from llm_connector.views import ConsentView
 from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from lukehirsch.private_media import private_file_response
 from lukehirsch.throttling import ChatDailyThrottle, UploadThrottle
+from spa.models import PersonalityProfile
 from spa.portfolio import freeze_link, link_for_application
 from spa.serializers import PortfolioLinkSerializer
 
@@ -962,6 +964,9 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
             cv_content=application.cv_content,
             language=_letter_language(request.data, application),
             address_form=address_form,
+            style_rules=style_rules(
+                PersonalityProfile.objects.filter(user=request.user).first()
+            ),
         )
         # Call now, synchronously — `stream()` itself only ever builds a generator
         # (no LLM call happens yet), so this costs nothing, but it resolves

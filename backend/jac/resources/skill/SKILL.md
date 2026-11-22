@@ -155,8 +155,8 @@ Otherwise write it to a JSON file, e.g. `application.json`, and run
 **In file mode** nothing is saved from here. `save` checks the file the way jac's import will:
 - what the import would refuse (a missing field, an id that isn't in the career file) is an
   error: fix the file and run `save` again;
-- the `warnings` (the letter's length, the highest degree jac adds) are worth a look before you
-  hand it over.
+- the `warnings` (the letter's length, a broken style rule, the highest degree jac adds) are
+  worth a look before you hand it over.
 
 Then it answers with the `file` to give the user (in the Claude app it lands among the chat's
 downloads). Tell them: in jac, Applications → Import from Claude, pick the file. jac opens the new

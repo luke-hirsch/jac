@@ -6,13 +6,16 @@ no dash as punctuation, and no "not X but Y" antithesis. Deliberately regex, lik
 the check that catches a slip has to be cheaper and more reliable than the model that slipped.
 
 A finding is a warning, never a rewrite: every hit is quoted, so the user (or Claude) decides.
+
+Standard library only: the skill zip ships this file as `scripts/jac_style.py`, so the skill's
+script runs the same checks in file mode, in a sandbox without jac (`jac.skill.skill_bundle`).
+The letter editor runs a mirror, frontend/src/lib/style.ts: keep the two in step (their tests
+share their cases).
 """
 
 from __future__ import annotations
 
 import re
-
-from spa.models import DEFAULT_STYLE_RULES
 
 NO_DASHES = "no_dashes"
 NO_ANTITHESIS = "no_antithesis"
@@ -35,10 +38,11 @@ EM_DASH = "—"
 EN_DASH = "–"
 _DASH = re.compile(r"[—–-]")
 # Space on the line: a newline ends a clause, it doesn't separate one.
-_HSPACE = " \t  "
+_HSPACE = " \t\u00a0\u202f"  # space, tab, no-break space, narrow no-break space
 
 # Within one sentence, across its clauses. Specific before general: "nicht nur … sondern"
-# quotes better than "nicht … sondern", which also matches it.
+# quotes better than "nicht … sondern", which also matches it. "isn't X, it's Y" needs the
+# clause break: without one ("it isn't hard to see why it's a fit") nothing is turned around.
 _ANTITHESES = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -46,13 +50,51 @@ _ANTITHESES = tuple(
         r"\bkein(?:e[mnr]?)?\b.*?\bsondern\b(?:\s+auch\b)?",
         r"\bnicht\b.*?\bsondern\b(?:\s+auch\b)?",
         r"\bnot\s+(?:just|only|merely)\b.*?\bbut\b",
-        r"\bisn['’]t\b.*?\bit['’]s\b",
+        r"\b(?:isn['’]t|is\s+not|(?:it|this|that)['’]s\s+not)\b.*?(?:[,;:—–]|\s-\s)\s*it['’]s\b",
         r"\bnot\s+an?\b.*?\bbut\s+an?\b",
     )
 )
-# A full stop, ! or ? before space, or a line break. "z. B." splits a sentence too early, which
-# can only hide a hit, never invent one.
-_SENTENCE_BREAK = re.compile(r"(?<=[.!?…])\s+|\n+")
+
+# A full stop, !, ? or … before space ends a sentence, and so does a line break; a full stop
+# after an abbreviation, an initial or a day ("z. B.", "bzw.", "e.g.", "J. Smith", "am 1. März")
+# doesn't. A year does ("seit 2023."). Splitting too early could hide a hit, too late invent one.
+_BREAK = re.compile(r"(?<=[.!?…])\s+|\n+")
+_ABBREVIATIONS = frozenset(
+    {
+        # German
+        "abs",
+        "bzw",
+        "ca",
+        "d.h",
+        "dipl",
+        "dr",
+        "evtl",
+        "ggf",
+        "inkl",
+        "ing",
+        "nr",
+        "o.ä",
+        "prof",
+        "s.o",
+        "s.u",
+        "sog",
+        "u.a",
+        "u.u",
+        "vgl",
+        "z.b",
+        "z.t",
+        "zzgl",
+        # English
+        "approx",
+        "e.g",
+        "i.e",
+        "mr",
+        "mrs",
+        "ms",
+        "no",
+        "vs",
+    }
+)
 _FRAGMENT_MAX = 120
 
 
@@ -62,7 +104,12 @@ def rule_lines(text: str) -> list[str]:
 
 def style_rules(profile) -> list[str]:
     """The user's rules, one per line. Without a profile, the ones every account starts with."""
-    return rule_lines(DEFAULT_STYLE_RULES if profile is None else profile.style_rules)
+    if profile is not None:
+        return rule_lines(profile.style_rules)
+    # Imported here: this file also runs without Django, in the skill's sandbox.
+    from spa.models import DEFAULT_STYLE_RULES
+
+    return rule_lines(DEFAULT_STYLE_RULES)
 
 
 def style_checks(profile) -> list[str]:
@@ -122,6 +169,30 @@ def dash_fragments(text: str) -> list[str]:
     return found
 
 
+def _ends_sentence(before: str) -> bool:
+    """Whether the full stop, !, ? or … that closes `before` ends a sentence."""
+    if not before.endswith("."):
+        return True
+    words = before[:-1].split()
+    word = words[-1].lstrip("([{\"'„“‚‘»«").lower() if words else ""
+    if word in _ABBREVIATIONS:
+        return False
+    if len(word) == 1 and word.isalpha():
+        return False  # an initial, or half of "z. B."
+    return not (word.isdigit() and len(word) <= 2)  # a day or a rank, not a year
+
+
+def sentences(text: str) -> list[str]:
+    out: list[str] = []
+    start = 0
+    for m in _BREAK.finditer(text or ""):
+        if "\n" in m.group(0) or _ends_sentence(text[start : m.start()]):
+            out.append(text[start : m.start()])
+            start = m.end()
+    out.append((text or "")[start:])
+    return out
+
+
 def _shorten(fragment: str) -> str:
     if len(fragment) <= _FRAGMENT_MAX:
         return fragment
@@ -132,7 +203,7 @@ def _shorten(fragment: str) -> str:
 def antithesis_fragments(text: str) -> list[str]:
     """One quote per sentence that builds a "not X but Y" antithesis, deduped, in order."""
     found: list[str] = []
-    for sentence in _SENTENCE_BREAK.split(text or ""):
+    for sentence in sentences(text):
         for pattern in _ANTITHESES:
             m = pattern.search(sentence)
             if m:

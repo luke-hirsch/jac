@@ -157,11 +157,17 @@ class PersonalityProfile(models.Model):
     )
     # Writing rules, one per line: every letter writer follows them (jac's own and Claude's).
     # The two toggles turn jac's own checks on (jac/style.py), which flag a slip as a warning.
+    # db_default as well: the columns keep their defaults in the database, so code that doesn't
+    # know them (the previous image after a rollback, another branch on a laptop) can still
+    # create a profile, and with it an account.
     style_rules = models.TextField(
-        blank=True, default=DEFAULT_STYLE_RULES, max_length=MAX_STYLE_RULES_LEN
+        blank=True,
+        default=DEFAULT_STYLE_RULES,
+        db_default=DEFAULT_STYLE_RULES,
+        max_length=MAX_STYLE_RULES_LEN,
     )
-    style_no_dashes = models.BooleanField(default=True)
-    style_no_antithesis = models.BooleanField(default=True)
+    style_no_dashes = models.BooleanField(default=True, db_default=True)
+    style_no_antithesis = models.BooleanField(default=True, db_default=True)
     # writing style probe
     writing_sample = models.TextField(blank=True)
     style_dossier = models.TextField(blank=True)  # ai destill
