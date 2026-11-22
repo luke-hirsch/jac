@@ -123,7 +123,7 @@ class LegalPagesTests(TestCase):
         as a recipient (section 11)."""
         r = self.client.get("/legal/privacy/")
         for phrase in (
-            "Account → LLM bei den Connectors",
+            "Verbindest du Claude über den Connector",
             "bevor du den ersten Token anlegst",
             "dabei löschen wir deine Tokens",
             "dabei löschen wir deine Schlüssel",
@@ -132,6 +132,11 @@ class LegalPagesTests(TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertContains(r, phrase)
+
+    def test_the_privacy_page_says_what_happens_not_where_to_click(self):
+        """It says what happens to the data. Where a setting lives is the app's business, and it
+        moves (Account → LLM → Claude became a section of Account → LLM)."""
+        self.assertNotContains(self.client.get("/legal/privacy/"), "Account →")
 
     def test_the_legal_pages_name_no_infrastructure(self):
         """They say what data goes where and why. What it runs on is nobody's business."""

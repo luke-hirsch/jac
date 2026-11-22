@@ -212,8 +212,7 @@
   Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO. Die Übermittlung stützt sich auf deine ausdrückliche
   Einwilligung, die du einmal gibst, bevor du den ersten Schlüssel hinterlegst (Art. 49 Abs. 1 lit. a
   DSGVO). Wir speichern, wann du eingewilligt hast, und fragen danach nicht erneut. Du kannst sie
-  jederzeit unter Account → LLM providers widerrufen; dabei löschen wir deine Schlüssel, und es geht
-  nichts mehr an die Anbieter. Löschst du nur einen Schlüssel, geht über ihn nichts mehr hinaus. Was
+  jederzeit widerrufen; dabei löschen wir deine Schlüssel, und es geht nichts mehr an die Anbieter. Löschst du nur einen Schlüssel, geht über ihn nichts mehr hinaus. Was
   der Anbieter mit den Daten macht, regeln seine Bedingungen
   (<a href="https://www.anthropic.com/legal/commercial-terms">Anthropic</a>,
   <a href="https://openai.com/policies/data-processing-addendum/">OpenAI</a>). Darauf haben wir keinen
@@ -221,11 +220,11 @@
 </p>
 <p>
   <strong>Claude</strong>, die KI von Anthropic, kann mit deinem eigenen Claude-Konto Bewerbungen für
-  dich schreiben und deinen Werdegang überarbeiten. Dafür legst du unter Account → LLM bei den
-  Connectors einen Token an und gibst ihn Claude als Connector, in der Claude-App oder in Claude
-  Code. Mit dem Token liest Claude deinen Werdegang, deine Kontaktangaben, deine Antworten aus dem Persönlichkeitsfragebogen
-  samt Schreibprobe und deine Bewerbungen, und es speichert Bewerbungen und Änderungen am Werdegang bei
-  uns. Dein Konto, deine Anmeldedaten und deine API-Schlüssel erreicht der Token nicht. Die Daten gehen
+  dich schreiben und deinen Werdegang überarbeiten. Verbindest du Claude über den Connector mit deinem
+  Konto, liest Claude deinen Werdegang, deine Kontaktangaben, deine Antworten aus dem
+  Persönlichkeitsfragebogen samt Schreibprobe und deine Bewerbungen, und es speichert Bewerbungen und
+  Änderungen am Werdegang bei uns. Dein Konto, deine Anmeldedaten und deine API-Schlüssel erreicht
+  Claude nicht. Die Daten gehen
   unter deinem Claude-Konto an Anthropic und verlassen damit ebenfalls die EU, mit denselben Risiken
   wie oben.
 </p>
@@ -233,8 +232,7 @@
   Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO. Die Übermittlung stützt sich auf deine ausdrückliche
   Einwilligung, die du einmal gibst, bevor du den ersten Token anlegst (Art. 49 Abs. 1 lit. a DSGVO).
   Wir speichern, wann du eingewilligt hast, und fragen danach nicht erneut. Du kannst sie jederzeit
-  unter Account → LLM bei den Connectors widerrufen; dabei löschen wir deine Tokens, und Claude erreicht dein
-  Konto nicht mehr. Löschst du nur einen Token, funktioniert er ab dann nicht mehr. Was Anthropic mit
+  widerrufen; dabei löschen wir deine Tokens, und Claude erreicht dein Konto nicht mehr. Löschst du nur einen Token, funktioniert er ab dann nicht mehr. Was Anthropic mit
   den Daten macht, regeln die Bedingungen und die Datenschutzeinstellungen deines Claude-Kontos
   (<a href="https://www.anthropic.com/legal/consumer-terms">Verbraucherbedingungen</a>,
   <a href="https://www.anthropic.com/legal/commercial-terms">Geschäftsbedingungen</a>,
@@ -282,7 +280,7 @@
 <h2>12. Löschung</h2>
 {# Known gap, accepted for launch: a layout JSON replaced through PATCH /api/jac/layouts/<id>/ stays under application_layouts/ after account deletion (no per-user folder, and test_uploads pins the path). No UI uploads one today. #}
 <p>
-  Du kannst dein Konto jederzeit selbst löschen (Account → Danger zone). Dabei verschwinden alle Daten
+  Du kannst dein Konto jederzeit selbst löschen. Dabei verschwinden alle Daten
   aus Abschnitt 6, deine KI-Protokollzeilen und alle deine Dateien: Anhänge, Unterschrift, Profilbild
   und Portfolio-Bilder, auch früher ersetzte Fassungen. Bis dahin kann eine ersetzte Datei noch auf
   dem Speicher liegen; löschst du einen einzelnen Anhang oder Block, ist seine Datei sofort weg.
