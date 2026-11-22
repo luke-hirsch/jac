@@ -1,4 +1,4 @@
-"""Claude's custom connector: the skill's endpoints as MCP tools, on the same personal token.
+"""The jac connector: jac as MCP tools, on a personal token. Claude's custom connector today.
 
 The Claude app can't reach jac from its code sandbox (Pro and Max can't allow a custom domain),
 but a custom connector is called from Anthropic's servers, not from the sandbox. So the app on the
@@ -7,9 +7,9 @@ the letter on the user's own subscription, and saves the application here, where
 exports it. jac calls no model on this path.
 
 The transport is MCP's Streamable HTTP, kept to its stateless core: every message is one POST,
-answered with plain JSON (no SSE stream, no session id). The tools are the skill script's commands
-(`scripts/jac.py`), and `get_career` hands Claude the skill's own SKILL.md as its rules, so the
-connector works without the skill installed and the rules have one source.
+answered with plain JSON (no SSE stream, no session id). It is the only way an outside model reaches
+jac: `get_career` and `get_career_review` hand over the rules (jac/resources/rules/), so they are
+always the deployed ones. The skill the user uploads only points here (jac/resources/skill/).
 
 Tool failures Claude can fix (a field the import refuses, a stale read, an id that isn't the
 user's) are tool results with `isError`, so Claude reads them and tries again. Protocol mistakes
@@ -41,7 +41,7 @@ from jac.serializers import (
     SkillCareerChangesSerializer,
 )
 from jac.skill import (
-    SKILL_DIR,
+    RULES_DIR,
     application_payload,
     application_summary,
     career_payload,
@@ -60,7 +60,7 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
-# What the list tools show, as the skill's own endpoints do.
+# What the list tools show.
 APPLICATIONS_SHOWN = 50
 CHANGES_SHOWN = 20
 
@@ -90,13 +90,8 @@ class InvalidParams(Exception):
 
 @cache
 def rules(name: str) -> str:
-    """A skill file without its frontmatter: the connector's rulebook is the skill's own."""
-    text = (SKILL_DIR / name).read_text()
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            text = text[end + 4 :]
-    return text.strip()
+    """One of the connector's rulebooks (`applications`, `review`)."""
+    return (RULES_DIR / f"{name}.md").read_text().strip()
 
 
 def _pk(args: dict, what: str) -> int:
@@ -130,11 +125,11 @@ def _application(request, pk: int) -> JobApplication:
 
 
 def get_career(request, args):
-    return {"rules": rules("SKILL.md"), "career": career_payload(request.user)}
+    return {"rules": rules("applications"), "career": career_payload(request.user)}
 
 
 def get_career_review(request, args):
-    return {"rules": rules("REVIEW.md"), "review": review_career(request.user)}
+    return {"rules": rules("review"), "review": review_career(request.user)}
 
 
 def list_applications(request, args):

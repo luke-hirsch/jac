@@ -28,6 +28,8 @@ import {
 } from "@/lib/queries/consent";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { ClaudeConnector } from "@/components/connectors/claude-connector";
 
 export const Route = createFileRoute("/_authenticated/account/llm")({
   component: LLMConfigPage,
@@ -138,6 +140,19 @@ function LLMConfigPage() {
           />
         ))}
       </div>
+      <Separator />
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Connectors</h2>
+          <p className="text-sm text-muted-foreground">
+            The other way round: with a key, jac's AI runs on your provider
+            account; with a connector, the AI app you already use reaches jac,
+            writes with you on your own subscription, and saves here. Each asks
+            for its own consent.
+          </p>
+        </div>
+        <ClaudeConnector />
+      </section>
     </div>
   );
 }

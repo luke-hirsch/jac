@@ -61,7 +61,6 @@ from jac.queues import (
     runs_ahead,
 )
 from jac.serializers import MAX_POSTING_CHARS
-from jac.skill import STYLE_MODULE
 from jac.style import style_rules
 from jac.tokens import mint_token
 from llm_connector.catalog import default_model
@@ -2031,17 +2030,21 @@ class BulkActionShapeTests(APITestCase):
         self.assertEqual(list(self.skill.domains.all()), [self.domain])
 
 
-# --- [fullstack]-claude-skill -------------------------------------------------------------
+# --- [fullstack]-claude-connector: the jac connector, the only way Claude reaches jac ---------
 
 SKILL_URL = "/api/jac/skill/"
+MCP_URL = "/api/jac/mcp/"
 
 
 def _letter(words=200, word="Wort"):
     return " ".join([word] * words)
 
 
-class _SkillCase(APITestCase):
-    """A user with a small career and a token; requests go out on the token, not a session."""
+class _McpCase(APITestCase):
+    """A user with a small career and a token, talking JSON-RPC over one POST, as Claude's
+    connector does (MCP Streamable HTTP, stateless, plain JSON answers)."""
+
+    _next_id = 0
 
     @classmethod
     def setUpTestData(cls):
@@ -2080,53 +2083,97 @@ class _SkillCase(APITestCase):
             **kw,
         }
 
-    def _create(self, **kw):
+    def _rpc(self, method, params=None, url=MCP_URL, **extra):
+        self._next_id += 1
+        msg = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
+        if params is not None:
+            msg["params"] = params
         return self.client.post(
-            f"{SKILL_URL}applications/", self._payload(**kw), format="json"
+            url,
+            json.dumps(msg),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json, text/event-stream",
+            **extra,
         )
 
+    def _call(self, name, arguments=None):
+        """A tools/call: (the result's parsed JSON, isError)."""
+        r = self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertNotIn("error", body, body)
+        result = body["result"]
+        (content,) = result["content"]
+        self.assertEqual(content["type"], "text")
+        return json.loads(content["text"]), result.get("isError", False)
 
-class SkillTokenAuthTests(_SkillCase):
-    """The token opens the skill's endpoints and nothing else."""
+    def _career(self):
+        data, is_error = self._call("get_career")
+        self.assertFalse(is_error, data)
+        return data["career"]
 
-    def test_the_token_reads_the_career_and_marks_itself_used(self):
-        r = self.client.get(f"{SKILL_URL}career/")
-        self.assertEqual(r.status_code, 200, r.data)
+    def _save(self, **kw):
+        """save_application with the default payload: (the answer, isError)."""
+        return self._call("save_application", self._payload(**kw))
+
+
+class ConnectorTokenTests(_McpCase):
+    """The token opens the connector and nothing else."""
+
+    def test_the_token_marks_itself_used(self):
+        self._career()
         self.token.refresh_from_db()
         self.assertIsNotNone(self.token.last_used_at)
 
-    def test_no_credentials_is_refused(self):
-        self.client.credentials()
-        self.assertIn(self.client.get(f"{SKILL_URL}career/").status_code, (401, 403))
-
-    def test_a_revoked_token_is_a_401(self):
-        self.token.delete()
-        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
-
     def test_a_made_up_token_is_a_401(self):
         self.client.credentials(HTTP_AUTHORIZATION="Bearer jac_nope")
-        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+        self.assertEqual(self._rpc("ping").status_code, 401)
 
     def test_the_token_does_not_open_the_rest_of_the_api(self):
-        for url in (APPS_URL, "/api/jac/cv/entries/", "/api/llm/configs/"):
+        for url in (
+            APPS_URL,
+            "/api/jac/cv/entries/",
+            "/api/llm/configs/",
+            f"{SKILL_URL}career/changes/",
+        ):
             with self.subTest(url=url):
                 self.assertIn(self.client.get(url).status_code, (401, 403))
 
     def test_a_token_cannot_mint_tokens_or_download(self):
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "more"}, format="json")
         self.assertIn(r.status_code, (401, 403))
-        for url in (f"{SKILL_URL}bundle/", f"{SKILL_URL}career/file/"):
-            with self.subTest(url=url):
-                self.assertIn(self.client.get(url).status_code, (401, 403))
+        self.assertIn(self.client.get(f"{SKILL_URL}bundle/").status_code, (401, 403))
 
     def test_only_the_hash_is_stored(self):
         self.assertNotEqual(self.token.key_hash, self.key)
         self.assertNotIn(self.key, self.token.key_hash)
         self.assertEqual(self.token.prefix, self.key[:12])
 
+    def test_file_mode_is_gone(self):
+        """The connector is the only way in: the script's endpoints and the career file are
+        gone, on the token and on the session alike."""
+        gone = (
+            ("get", f"{SKILL_URL}career/"),
+            ("get", f"{SKILL_URL}review/"),
+            ("get", f"{SKILL_URL}career/file/"),
+            ("post", f"{SKILL_URL}applications/"),
+            ("post", f"{SKILL_URL}career/changes/"),
+        )
+        for method, url in gone:
+            with self.subTest(url=url, on="token"):
+                r = getattr(self.client, method)(url, {}, format="json")
+                self.assertIn(r.status_code, (401, 403, 404, 405))
+        self.client.credentials()
+        self.client.force_login(self.user)
+        for method, url in gone:
+            with self.subTest(url=url, on="session"):
+                r = getattr(self.client, method)(url, {}, format="json")
+                self.assertIn(r.status_code, (404, 405))
+
 
 class SkillTokenManagementTests(APITestCase):
-    """Minting, listing and revoking happen on the session, in Account → LLM → Claude."""
+    """Minting, listing and revoking happen on the session, in Account → LLM, under
+    Connectors."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2141,6 +2188,16 @@ class SkillTokenManagementTests(APITestCase):
         return self.client.post(
             f"{SKILL_URL}tokens/", {"transfer_consent": True, **body}, format="json"
         )
+
+    def _connector_answers(self, key) -> int:
+        """The status the connector gives this key, outside the session."""
+        self.client.logout()
+        return self.client.post(
+            MCP_URL,
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+        ).status_code
 
     def test_no_token_without_consent(self):
         """A token hands the career to Claude, and so to Anthropic, also outside the EU: the
@@ -2161,7 +2218,7 @@ class SkillTokenManagementTests(APITestCase):
         self.assertIsNotNone(r.data["transfer_consent_at"])
 
     def test_a_token_needs_no_flag_once_agreed(self):
-        """Agreed once on the Claude page, kept: the next token asks nothing."""
+        """Agreed once in the Connectors section, kept: the next token asks nothing."""
         r = self.client.post(f"{SKILL_URL}consent/")
         self.assertEqual(r.status_code, 201, r.data)
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "laptop"}, format="json")
@@ -2180,9 +2237,7 @@ class SkillTokenManagementTests(APITestCase):
         self.assertIsNone(self.client.get(f"{SKILL_URL}consent/").data["given_at"])
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "x"}, format="json")
         self.assertEqual(r.status_code, 400)
-        self.client.logout()
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
-        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+        self.assertEqual(self._connector_answers(key), 401)
 
     def test_a_token_cannot_give_or_withdraw_the_consent(self):
         _, key = mint_token(self.user)
@@ -2205,9 +2260,7 @@ class SkillTokenManagementTests(APITestCase):
         token, key = mint_token(self.user)
         r = self.client.delete(f"{SKILL_URL}tokens/{token.pk}/")
         self.assertEqual(r.status_code, 204)
-        self.client.logout()
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
-        self.assertEqual(self.client.get(f"{SKILL_URL}career/").status_code, 401)
+        self.assertEqual(self._connector_answers(key), 401)
 
     def test_someone_elses_token_is_a_404(self):
         token, _ = mint_token(self.other)
@@ -2225,8 +2278,8 @@ class SkillTokenManagementTests(APITestCase):
 
 
 class SkillDownloadTests(APITestCase):
-    """Account → LLM → Claude's two downloads, on the session: the skill once, the career per chat
-    (the Claude app's sandbox can't reach jac, so the career travels as a file)."""
+    """The skill the user uploads to Claude: one file that points at the connector. The rules
+    stay on the server, so the upload never goes stale."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2238,46 +2291,28 @@ class SkillDownloadTests(APITestCase):
 
     def test_anonymous_is_refused(self):
         self.client.logout()
-        for url in (f"{SKILL_URL}bundle/", f"{SKILL_URL}career/file/"):
-            with self.subTest(url=url):
-                self.assertIn(self.client.get(url).status_code, (401, 403))
+        self.assertIn(self.client.get(f"{SKILL_URL}bundle/").status_code, (401, 403))
 
-    def test_the_bundle_is_the_skill_alone(self):
+    def test_the_bundle_is_one_file_that_points_at_the_connector(self):
         r = self.client.get(f"{SKILL_URL}bundle/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["Content-Type"], "application/zip")
         z = zipfile.ZipFile(io.BytesIO(r.content))
-        self.assertEqual(
-            sorted(z.namelist()),
-            [
-                "jac/REVIEW.md",
-                "jac/SKILL.md",
-                "jac/scripts/jac.py",
-                "jac/scripts/jac_style.py",
-            ],
-        )
-        self.assertTrue(z.read("jac/SKILL.md").startswith(b"---\nname: jac\n"))
-        # jac's own checks, byte for byte: file mode warns as the import does.
-        self.assertEqual(z.read("jac/scripts/jac_style.py"), STYLE_MODULE.read_bytes())
-        everything = b"".join(z.read(name) for name in z.namelist())
-        self.assertNotIn(b"Quetzalcoatl", everything)  # nothing about the user
+        self.assertEqual(z.namelist(), ["jac/SKILL.md"])
+        skill = z.read("jac/SKILL.md").decode()
+        self.assertTrue(skill.startswith("---\nname: jac\n"))
+        self.assertIn("`get_career`", skill)
+        self.assertIn("`get_career_review`", skill)
+        # No rules of its own: they come with the connector, always the deployed ones.
+        for rule in ("Picking the CV entries", "Rules for changes", "170 to 230 words"):
+            self.assertNotIn(rule, skill)
+        self.assertNotIn("Quetzalcoatl", skill)  # nothing about the user
         self.assertFalse(AccessToken.objects.exists())  # and it mints no token
 
-    def test_the_career_file_is_the_career_with_its_review(self):
-        r = self.client.get(f"{SKILL_URL}career/file/")
-        self.assertEqual(r.status_code, 200)
-        data = json.loads(r.content)
-        self.assertEqual(data["format"], "jac-career-for-claude")
-        skill = data["entries"]["skills"][0]
-        self.assertEqual(skill["id"], f"skill:{self.skill.pk}")
-        self.assertTrue(skill["updated_at"])  # what a career change's `seen` must match
-        self.assertIn("findings", data["review"])
-        self.assertIn("counts", data["review"])
 
-
-class SkillCareerTests(_SkillCase):
+class ConnectorCareerTests(_McpCase):
     def test_entries_carry_ids_and_names_not_keys(self):
-        data = self.client.get(f"{SKILL_URL}career/").data
+        data = self._career()
         job = data["entries"]["jobs"][0]
         self.assertEqual(job["id"], f"job:{self.job.pk}")
         self.assertEqual(job["skills"], ["Python"])
@@ -2287,32 +2322,29 @@ class SkillCareerTests(_SkillCase):
         self.assertEqual(data["highest_degree"], f"education:{self.master.pk}")
 
     def test_only_the_users_own_entries(self):
-        data = self.client.get(f"{SKILL_URL}career/").data
-        names = [s["name"] for s in data["entries"]["skills"]]
+        names = [s["name"] for s in self._career()["entries"]["skills"]]
         self.assertEqual(names, ["Python"])
 
     def test_educations_and_certifications_together(self):
         # Both prefetch their domains; one mixed list was a ValueError, a 500 on the career
-        # and on the zip for anyone with both.
+        # for anyone with both.
         backend = Domain.objects.create(user=self.user, name="Backend")
         self.master.domains.add(backend)
         aws = Certification.objects.create(user=self.user, name="AWS SAA", issuer="AWS")
         aws.domains.add(backend)
-        r = self.client.get(f"{SKILL_URL}career/")
-        self.assertEqual(r.status_code, 200)
-        entries = r.data["entries"]
+        entries = self._career()["entries"]
         self.assertEqual(entries["educations"][0]["domains"], ["Backend"])
         self.assertEqual(entries["certifications"][0]["domains"], ["Backend"])
 
 
-class SkillApplicationTests(_SkillCase):
-    """What the skill saves is an ordinary application: the editor, the fit and the export
-    read it like a generated one."""
+class ConnectorApplicationTests(_McpCase):
+    """What Claude saves is an ordinary application: the editor, the fit and the export read
+    it like a generated one."""
 
     def test_create_builds_posting_cv_and_letter_frame(self):
-        r = self._create()
-        self.assertEqual(r.status_code, 201, r.data)
-        app = JobApplication.objects.get(pk=r.data["id"])
+        data, is_error = self._save()
+        self.assertFalse(is_error, data)
+        app = JobApplication.objects.get(pk=data["id"])
         self.assertEqual(app.user, self.user)
         self.assertEqual(app.posting.title, "Backend-Entwickler:in")
         self.assertEqual(app.posting.language, "de")
@@ -2328,67 +2360,62 @@ class SkillApplicationTests(_SkillCase):
         self.assertEqual(meta["address_form"], "sie")
         self.assertEqual(meta["recipient"]["company"], "Beispiel GmbH")
         self.assertEqual(meta["sender"]["name"], "alice")
-        self.assertTrue(r.data["url"].endswith(f"/applications/{app.pk}"))
+        self.assertTrue(data["url"].endswith(f"/applications/{app.pk}"))
 
     def test_the_highest_degree_is_added_and_pinned(self):
-        r = self._create()
+        data, _ = self._save()
         top = f"education:{self.master.pk}"
-        self.assertIn(top, r.data["entries"])
-        self.assertIn(top, r.data["pinned"])
-        self.assertTrue(any(top in w for w in r.data["warnings"]))
+        self.assertIn(top, data["entries"])
+        self.assertIn(top, data["pinned"])
+        self.assertTrue(any(top in w for w in data["warnings"]))
 
     def test_it_shows_up_in_the_applications_list(self):
-        app_id = self._create().data["id"]
+        app_id = self._save()[0]["id"]
         self.client.credentials()
         self.client.force_login(self.user)
         ids = [row["id"] for row in self.client.get(APPS_URL).data["results"]]
         self.assertIn(app_id, ids)
-
-    def test_the_session_can_import_a_file_the_skill_wrote(self):
-        self.client.credentials()
-        self.client.force_login(self.user)
-        self.assertEqual(self._create().status_code, 201)
-
-    def test_someone_elses_entry_is_rejected(self):
-        r = self._create(entries=[f"skill:{self.theirs.pk}"])
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("entries", r.data)
 
     def test_create_needs_posting_entries_and_letter(self):
         for field in ("posting", "entries", "letter"):
             with self.subTest(field=field):
                 payload = self._payload()
                 del payload[field]
-                r = self.client.post(
-                    f"{SKILL_URL}applications/", payload, format="json"
-                )
-                self.assertEqual(r.status_code, 400)
-                self.assertIn(field, r.data)
+                data, is_error = self._call("save_application", payload)
+                self.assertTrue(is_error)
+                self.assertIn(field, data["errors"])
 
-    def test_warnings_tell_the_skill_what_to_fix(self):
+    def test_someone_elses_entry_is_refused_by_name(self):
+        data, is_error = self._save(entries=[f"skill:{self.theirs.pk}"])
+        self.assertTrue(is_error)
+        self.assertIn("entries", data["errors"])
+
+    def test_warnings_tell_claude_what_to_fix(self):
         body = (
             "Sehr geehrte Frau Muster,\n\n"
             + _letter(50)
             + " du\n\nMit freundlichen Grüßen"
         )
-        r = self._create(letter={"body": body, "tone": "formal"})
-        text = " ".join(r.data["warnings"])
+        data, _ = self._save(letter={"body": body, "tone": "formal"})
+        text = " ".join(data["warnings"])
         self.assertIn("words", text)
         self.assertIn("salutation", text)
         self.assertIn("closing", text)
         self.assertIn("du", text)
 
     def test_a_clean_letter_has_no_letter_warnings(self):
-        r = self._create(entries=[f"job:{self.job.pk}", f"education:{self.master.pk}"])
-        self.assertEqual(r.data["warnings"], [])
-
-    def test_patch_changes_only_what_is_sent(self):
-        app_id = self._create().data["id"]
-        url = f"{SKILL_URL}applications/{app_id}/"
-        r = self.client.patch(
-            url, {"letter": {"body": _letter(word="Neu")}}, format="json"
+        data, _ = self._save(
+            entries=[f"job:{self.job.pk}", f"education:{self.master.pk}"]
         )
-        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(data["warnings"], [])
+
+    def test_an_update_changes_only_what_is_sent(self):
+        app_id = self._save()[0]["id"]
+        data, is_error = self._call(
+            "save_application",
+            {"id": app_id, "letter": {"body": _letter(word="Neu")}},
+        )
+        self.assertFalse(is_error, data)
         app = JobApplication.objects.get(pk=app_id)
         self.assertTrue(app.cover_letter.startswith("Neu"))
         self.assertEqual(
@@ -2397,38 +2424,31 @@ class SkillApplicationTests(_SkillCase):
         self.assertEqual(app.posting.title, "Backend-Entwickler:in")
 
     def test_read_back_round_trips(self):
-        created = self._create().data
-        r = self.client.get(f"{SKILL_URL}applications/{created['id']}/")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["entries"], created["entries"])
-        self.assertEqual(r.data["letter"]["body"], _letter())
-        self.assertEqual(r.data["posting"]["company"], "Beispiel GmbH")
-
-    def test_someone_elses_application_is_a_404(self):
-        theirs = make_application(self.other)
-        url = f"{SKILL_URL}applications/{theirs.pk}/"
-        self.assertEqual(self.client.get(url).status_code, 404)
-        r = self.client.patch(url, {"notes": "x"}, format="json")
-        self.assertEqual(r.status_code, 404)
+        created, _ = self._save()
+        data, is_error = self._call("get_application", {"id": created["id"]})
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["entries"], created["entries"])
+        self.assertEqual(data["letter"]["body"], _letter())
+        self.assertEqual(data["posting"]["company"], "Beispiel GmbH")
 
     def test_the_list_is_the_users_own(self):
         make_application(self.other)
-        own = self._create().data["id"]
-        ids = [row["id"] for row in self.client.get(f"{SKILL_URL}applications/").data]
-        self.assertEqual(ids, [own])
+        own = self._save()[0]["id"]
+        listed, _ = self._call("list_applications")
+        self.assertEqual([row["id"] for row in listed], [own])
 
 
 def _words(n, word="built"):
     return " ".join([word] * n)
 
 
-class SkillReviewTests(_SkillCase):
+class ConnectorReviewTests(_McpCase):
     """The machine half of a review: what a script can find without judgment."""
 
     def _review(self):
-        r = self.client.get(f"{SKILL_URL}review/")
-        self.assertEqual(r.status_code, 200, r.data)
-        return r.data
+        data, is_error = self._call("get_career_review")
+        self.assertFalse(is_error, data)
+        return data["review"]
 
     def _about(self, data, entry_id, check=None):
         return [
@@ -2534,24 +2554,25 @@ class SkillReviewTests(_SkillCase):
         Job.objects.create(
             user=self.other, title="Theirs", company="Y", started="2020-01-01"
         )
-        text = json.dumps(self._review())
-        self.assertNotIn("Theirs", text)
+        self.assertNotIn("Theirs", json.dumps(self._review()))
 
 
-class SkillCareerChangeTests(_SkillCase):
+class ConnectorCareerChangeTests(_McpCase):
     """Edits the user agreed to: all or nothing, through the entries' own serializers, logged
     with what they replaced so a batch can be undone."""
 
-    URL = f"{SKILL_URL}career/changes/"
+    LOG_URL = f"{SKILL_URL}career/changes/"
 
     def _seen(self, obj):
         obj.refresh_from_db()
         return obj.updated_at.isoformat()
 
     def _apply(self, *changes, **kw):
-        return self.client.post(
-            self.URL, {"changes": list(changes), **kw}, format="json"
-        )
+        """apply_career_changes: (the answer, isError)."""
+        return self._call("apply_career_changes", {"changes": list(changes), **kw})
+
+    def _undo(self, pk):
+        return self._call("undo_career_changes", {"id": pk})
 
     def _describe(self, text="- Built the billing API\n- Ran it on Kubernetes"):
         return {
@@ -2574,46 +2595,45 @@ class SkillCareerChangeTests(_SkillCase):
             "set": {"name": "Kubernetes", "category": "technical"},
             "add": {"builds_on": [f"skill:{self.python.pk}"]},
         }
-        r = self._apply(change, new)
-        self.assertEqual(r.status_code, 201, r.data)
+        data, is_error = self._apply(change, new)
+        self.assertFalse(is_error, data)
         k8s = Skill.objects.get(user=self.user, name="Kubernetes")
-        self.assertEqual(r.data["created"], {"new:k8s": f"skill:{k8s.pk}"})
+        self.assertEqual(data["created"], {"new:k8s": f"skill:{k8s.pk}"})
         self.job.refresh_from_db()
         self.assertTrue(self.job.description.startswith("- Built"))
         self.assertEqual(list(self.job.skills.all()), [k8s])
         self.assertEqual(list(k8s.builds_on.all()), [self.python])
-        logged = r.data["changes"][0]
+        logged = data["changes"][0]
         self.assertEqual(logged["before"]["skills"], [f"skill:{self.python.pk}"])
         self.assertEqual(logged["after"]["skills"], [f"skill:{k8s.pk}"])
         self.assertEqual(logged["label"], "Backend Dev at Acme")
-        self.assertIsNone(r.data["changes"][1]["before"])
-        self.assertEqual(r.data["labels"][f"skill:{k8s.pk}"], "Kubernetes")
-        batch = CareerChange.objects.get(pk=r.data["id"])
+        self.assertIsNone(data["changes"][1]["before"])
+        self.assertEqual(data["labels"][f"skill:{k8s.pk}"], "Kubernetes")
+        batch = CareerChange.objects.get(pk=data["id"])
         self.assertEqual(batch.source, CareerChange.Source.claude)
 
     def test_seen_from_the_career_round_trips(self):
-        career = self.client.get(f"{SKILL_URL}career/").data
-        job = career["entries"]["jobs"][0]
-        r = self._apply(
+        job = self._career()["entries"]["jobs"][0]
+        data, is_error = self._apply(
             {
                 "id": job["id"],
                 "seen": job["updated_at"],
                 "set": {"url": "https://acme.test"},
             }
         )
-        self.assertEqual(r.status_code, 201, r.data)
+        self.assertFalse(is_error, data)
 
     def test_the_job_type_round_trips_by_the_name_career_shows(self):
         # Live, 2026-11-21: career showed it as `type`, Claude set `type`, and the import 500d.
-        job = self.client.get(f"{SKILL_URL}career/").data["entries"]["jobs"][0]
+        job = self._career()["entries"]["jobs"][0]
         self.assertNotIn("type", job)
         self.assertEqual(job["job_type"], "ft")
-        r = self._apply(
+        data, is_error = self._apply(
             {"id": job["id"], "seen": job["updated_at"], "set": {"job_type": "ct"}}
         )
-        self.assertEqual(r.status_code, 201, r.data)
-        self.assertEqual(r.data["changes"][0]["before"], {"job_type": "ft"})
-        self.assertEqual(r.data["changes"][0]["after"], {"job_type": "ct"})
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["changes"][0]["before"], {"job_type": "ft"})
+        self.assertEqual(data["changes"][0]["after"], {"job_type": "ct"})
 
     def test_every_name_career_shows_is_settable_or_read_only(self):
         # What a change can't set: jac works it out, or the user edits it elsewhere in jac.
@@ -2623,15 +2643,14 @@ class SkillCareerChangeTests(_SkillCase):
         )
         Project.objects.create(user=self.user, name="Billing", job=self.job)
         Language.objects.create(user=self.user, name="Deutsch", certification=cert)
-        entries = self.client.get(f"{SKILL_URL}career/").data["entries"]
-        for section, rows in entries.items():
+        for section, rows in self._career()["entries"].items():
             with self.subTest(section):
                 self.assertTrue(rows)
                 etype = rows[0]["id"].split(":")[0]
                 takes = FIELDS[etype] | set(LISTS[etype]) | read_only
                 self.assertEqual(set(rows[0]) - takes, set())
 
-    def test_a_name_the_import_doesnt_take_is_a_400_not_a_500(self):
+    def test_a_name_jac_doesnt_take_is_refused_not_a_crash(self):
         # The snapshot reads every touched field before anything else looked at the names: one
         # the model lacks was an AttributeError, and the SPA could only say "try again".
         jid, seen = f"job:{self.job.pk}", self._seen(self.job)
@@ -2651,19 +2670,19 @@ class SkillCareerChangeTests(_SkillCase):
         }
         for field, change in bad.items():
             with self.subTest(field):
-                r = self._apply(change)
-                self.assertEqual(r.status_code, 400, r.data)
-                self.assertIn(field, r.data["changes"]["0"])
-        r = self._apply(bad["type"])
-        self.assertIn("job_type", r.data["changes"]["0"]["type"][0])
+                data, is_error = self._apply(change)
+                self.assertTrue(is_error, data)
+                self.assertIn(field, data["changes"]["0"])
+        data, _ = self._apply(bad["type"])
+        self.assertIn("job_type", data["changes"]["0"]["type"][0])
         self.assertFalse(CareerChange.objects.exists())
 
     def test_a_dry_run_answers_and_changes_nothing(self):
-        r = self._apply(self._describe(), dry_run=True)
-        self.assertEqual(r.status_code, 200, r.data)
-        self.assertIsNone(r.data["id"])
+        data, is_error = self._apply(self._describe(), dry_run=True)
+        self.assertFalse(is_error, data)
+        self.assertIsNone(data["id"])
         self.assertTrue(
-            r.data["changes"][0]["after"]["description"].startswith("- Built")
+            data["changes"][0]["after"]["description"].startswith("- Built")
         )
         self.job.refresh_from_db()
         self.assertEqual(self.job.description, "")
@@ -2678,23 +2697,21 @@ class SkillCareerChangeTests(_SkillCase):
             "seen": seen,
             "set": {"description": "x"},
         }
-        r = self._apply(fine, stale)
-        self.assertEqual(r.status_code, 409, r.data)
-        self.assertEqual(r.data["stale"], [f"job:{self.job.pk}"])
-        self.assertEqual(
-            r.data["labels"], {f"job:{self.job.pk}": "Backend Dev at Acme"}
-        )
-        self.assertIn("Read the career again", r.data["detail"])
+        data, is_error = self._apply(fine, stale)
+        self.assertTrue(is_error, data)
+        self.assertEqual(data["stale"], [f"job:{self.job.pk}"])
+        self.assertEqual(data["labels"], {f"job:{self.job.pk}": "Backend Dev at Acme"})
+        self.assertIn("Call `get_career` again", data["detail"])
         self.python.refresh_from_db()
         self.assertEqual(self.python.description, "")
 
     def test_one_bad_change_applies_none(self):
-        r = self._apply(
+        data, is_error = self._apply(
             self._describe(),
             {"new": "skill", "ref": "dup", "set": {"name": "Python"}},
         )
-        self.assertEqual(r.status_code, 400, r.data)
-        self.assertIn("1", r.data["changes"])
+        self.assertTrue(is_error, data)
+        self.assertIn("1", data["changes"])
         self.job.refresh_from_db()
         self.assertEqual(self.job.description, "")
 
@@ -2729,10 +2746,11 @@ class SkillCareerChangeTests(_SkillCase):
         }
         for name, change in bad.items():
             with self.subTest(name):
-                self.assertEqual(self._apply(change).status_code, 400)
-        r = self._apply(self._describe(), self._describe())
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("One change per entry", json.dumps(r.data))
+                self.assertTrue(self._apply(change)[1])
+        data, is_error = self._apply(self._describe(), self._describe())
+        self.assertTrue(is_error)
+        self.assertIn("One change per entry", json.dumps(data))
+        self.assertFalse(CareerChange.objects.exists())
 
     def test_the_favourite_cap_holds(self):
         for n in range(Job.FAVOURITE_LIMIT):
@@ -2743,19 +2761,19 @@ class SkillCareerChangeTests(_SkillCase):
                 started="2015-01-01",
                 favourite=True,
             )
-        r = self._apply(
+        data, is_error = self._apply(
             {
                 "id": f"job:{self.job.pk}",
                 "seen": self._seen(self.job),
                 "set": {"favourite": True},
             }
         )
-        self.assertEqual(r.status_code, 400, r.data)
+        self.assertTrue(is_error, data)
 
     def test_links_by_name_and_by_id(self):
         Domain.objects.create(user=self.user, name="Fintech")
         project = Project.objects.create(user=self.user, name="Billing")
-        r = self._apply(
+        data, is_error = self._apply(
             {
                 "id": f"project:{project.pk}",
                 "seen": self._seen(project),
@@ -2768,53 +2786,71 @@ class SkillCareerChangeTests(_SkillCase):
                 "set": {"degree_level": "bachelor"},
             },
         )
-        self.assertEqual(r.status_code, 201, r.data)
+        self.assertFalse(is_error, data)
         project.refresh_from_db()
         self.assertEqual(project.job, self.job)
         self.assertEqual([d.name for d in project.domains.all()], ["Fintech"])
         self.master.refresh_from_db()
         self.assertEqual(self.master.degree_level, Education.DegreeLevel.bachelor)
-        self.assertEqual(r.data["changes"][1]["before"], {"degree_level": "master"})
+        self.assertEqual(data["changes"][1]["before"], {"degree_level": "master"})
 
     def test_undo_puts_it_back_and_drops_the_new_skill(self):
-        r = self._apply(
+        applied, _ = self._apply(
             {**self._describe(), "add": {"skills": ["new:k8s"]}},
             {"new": "skill", "ref": "k8s", "set": {"name": "Kubernetes"}},
         )
-        undo = self.client.post(f"{self.URL}{r.data['id']}/undo/")
-        self.assertEqual(undo.status_code, 200, undo.data)
-        self.assertIsNotNone(undo.data["undone_at"])
+        undone, is_error = self._undo(applied["id"])
+        self.assertFalse(is_error, undone)
+        self.assertIsNotNone(undone["undone_at"])
         self.job.refresh_from_db()
         self.assertEqual(self.job.description, "")
         self.assertEqual(list(self.job.skills.all()), [self.python])
         self.assertFalse(Skill.objects.filter(name="Kubernetes").exists())
-        again = self.client.post(f"{self.URL}{r.data['id']}/undo/")
-        self.assertEqual(again.status_code, 409)
+        self.assertTrue(self._undo(applied["id"])[1])  # once only
 
     def test_undo_refuses_to_overwrite_a_later_edit(self):
-        batch = self._apply(self._describe()).data["id"]
+        batch = self._apply(self._describe())[0]["id"]
         self.job.refresh_from_db()
         self.job.description = "edited in jac"
         self.job.save()
-        r = self.client.post(f"{self.URL}{batch}/undo/")
-        self.assertEqual(r.status_code, 409, r.data)
-        self.assertEqual(r.data["stale"], [f"job:{self.job.pk}"])
+        data, is_error = self._undo(batch)
+        self.assertTrue(is_error, data)
+        self.assertEqual(data["stale"], [f"job:{self.job.pk}"])
         self.job.refresh_from_db()
         self.assertEqual(self.job.description, "edited in jac")
 
-    def test_the_session_imports_and_lists(self):
+    def test_the_spa_lists_and_undoes_on_the_session(self):
+        """Account → LLM, under Connectors → Career changes: what Claude applied, undoable by
+        the user."""
+        batch = self._apply(self._describe())[0]["id"]
         self.client.credentials()
         self.client.force_login(self.user)
-        r = self._apply(self._describe())
-        self.assertEqual(r.status_code, 201, r.data)
-        listed = self.client.get(self.URL).data
-        self.assertEqual([b["id"] for b in listed], [r.data["id"]])
-        self.assertEqual(listed[0]["source"], CareerChange.Source.imported)
+        listed = self.client.get(self.LOG_URL).data
+        self.assertEqual([b["id"] for b in listed], [batch])
+        self.assertEqual(listed[0]["source"], CareerChange.Source.claude)
+        r = self.client.post(f"{self.LOG_URL}{batch}/undo/")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "")
+        again = self.client.post(f"{self.LOG_URL}{batch}/undo/")
+        self.assertEqual(again.status_code, 409)
+
+    def test_the_spa_refuses_an_undo_over_a_later_edit(self):
+        batch = self._apply(self._describe())[0]["id"]
+        Job.objects.filter(pk=self.job.pk).update(updated_at=timezone.now())
+        self.client.credentials()
+        self.client.force_login(self.user)
+        r = self.client.post(f"{self.LOG_URL}{batch}/undo/")
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertEqual(r.data["stale"], [f"job:{self.job.pk}"])
 
     def test_someone_elses_batch(self):
         theirs = CareerChange.objects.create(user=self.other, changes=[], stamps={})
-        self.assertEqual(self.client.get(self.URL).data, [])
-        r = self.client.post(f"{self.URL}{theirs.pk}/undo/")
+        self.assertEqual(self._call("list_career_changes")[0], [])
+        self.client.credentials()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.LOG_URL).data, [])
+        r = self.client.post(f"{self.LOG_URL}{theirs.pk}/undo/")
         self.assertEqual(r.status_code, 404)
 
     def test_the_log_keeps_the_latest_batches(self):
@@ -2829,42 +2865,6 @@ class SkillCareerChangeTests(_SkillCase):
         self.assertEqual(
             CareerChange.objects.filter(user=self.user).count(), CareerChange.KEEP
         )
-
-
-# --- [fullstack]-claude-connector ---------------------------------------------------------
-
-MCP_URL = "/api/jac/mcp/"
-
-
-class _McpCase(_SkillCase):
-    """JSON-RPC over one POST, as Claude's connector sends it (MCP Streamable HTTP, stateless,
-    plain JSON answers)."""
-
-    _next_id = 0
-
-    def _rpc(self, method, params=None, url=MCP_URL, **extra):
-        self._next_id += 1
-        msg = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
-        if params is not None:
-            msg["params"] = params
-        return self.client.post(
-            url,
-            json.dumps(msg),
-            content_type="application/json",
-            HTTP_ACCEPT="application/json, text/event-stream",
-            **extra,
-        )
-
-    def _call(self, name, arguments=None):
-        """A tools/call: (the result's parsed JSON, isError)."""
-        r = self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
-        self.assertEqual(r.status_code, 200, r.content)
-        body = r.json()
-        self.assertNotIn("error", body, body)
-        result = body["result"]
-        (content,) = result["content"]
-        self.assertEqual(content["type"], "text")
-        return json.loads(content["text"]), result.get("isError", False)
 
 
 class McpProtocolTests(_McpCase):
@@ -2982,20 +2982,32 @@ class McpProtocolTests(_McpCase):
         ).json()
         self.assertEqual(body["error"]["code"], -32602)
 
-    def test_the_skill_names_every_tool(self):
-        """SKILL.md is the connector's rulebook too (get_career hands it over): it has to say
-        which tool does what, or Claude reaches for the script."""
-        from jac.skill import SKILL_DIR
+    def test_the_rules_name_every_tool(self):
+        """The rules get_career and get_career_review hand over are Claude's whole manual: they
+        have to say which tool does what."""
+        from jac.skill import RULES_DIR
 
-        text = (SKILL_DIR / "SKILL.md").read_text() + (
-            SKILL_DIR / "REVIEW.md"
-        ).read_text()
+        text = "".join(path.read_text() for path in sorted(RULES_DIR.glob("*.md")))
         tools = self._rpc("tools/list").json()["result"]["tools"]
         for tool in tools:
             with self.subTest(tool=tool["name"]):
                 self.assertTrue(
-                    f"`{tool['name']}`" in text, f"the skill never names {tool['name']}"
+                    f"`{tool['name']}`" in text, f"the rules never name {tool['name']}"
                 )
+
+    def test_the_rules_speak_of_the_connector_alone(self):
+        from jac.skill import RULES_DIR
+
+        text = "".join(path.read_text() for path in sorted(RULES_DIR.glob("*.md")))
+        for gone in (
+            "scripts/jac.py",
+            "file mode",
+            "File mode",
+            "JAC_TOKEN",
+            "career file",
+        ):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, text)
 
 
 class McpAuthTests(_McpCase):
@@ -3084,16 +3096,6 @@ class McpToolTests(_McpCase):
         self.assertIn("Rules for changes", data["rules"])
         self.assertIn("findings", data["review"])
 
-    def test_save_application_creates_and_links_it(self):
-        payload = self._payload()
-        data, is_error = self._call("save_application", payload)
-        self.assertFalse(is_error, data)
-        app = JobApplication.objects.get(pk=data["id"])
-        self.assertEqual(app.user, self.user)
-        self.assertTrue(data["url"].endswith(f"/applications/{app.pk}"))
-        self.assertIn("warnings", data)
-        self.assertEqual(app.posting.title, "Backend-Entwickler:in")
-
     def test_save_application_warns_about_broken_style_rules(self):
         body = (
             "Ich bringe Erfahrung mit — und Neugier. "
@@ -3112,17 +3114,6 @@ class McpToolTests(_McpCase):
         self.assertIn("no_antithesis", body_antithesis)
         self.assertIn("nicht nur Code, sondern auch Tests", body_antithesis)
         self.assertIn("The closing", closing_dash)
-
-    def test_save_application_with_an_id_updates_it(self):
-        created, _ = self._call("save_application", self._payload())
-        data, is_error = self._call(
-            "save_application",
-            {"id": created["id"], "letter": {"body": _letter(word="Neu")}},
-        )
-        self.assertFalse(is_error, data)
-        app = JobApplication.objects.get(pk=created["id"])
-        self.assertTrue(app.cover_letter.startswith("Neu"))
-        self.assertEqual(JobApplication.objects.filter(user=self.user).count(), 1)
 
     def test_save_application_refusals_come_back_as_tool_errors(self):
         for args in (
@@ -3147,14 +3138,6 @@ class McpToolTests(_McpCase):
                 self.assertTrue(is_error)
         theirs.refresh_from_db()
         self.assertNotEqual(theirs.notes, "mine now")
-
-    def test_list_and_get_applications(self):
-        created, _ = self._call("save_application", self._payload())
-        listed, _ = self._call("list_applications")
-        self.assertEqual([a["id"] for a in listed], [created["id"]])
-        shown, is_error = self._call("get_application", {"id": created["id"]})
-        self.assertFalse(is_error)
-        self.assertEqual(shown["entries"], created["entries"])
 
     def test_apply_check_apply_list_and_undo_career_changes(self):
         change = {
@@ -3184,26 +3167,6 @@ class McpToolTests(_McpCase):
         self.assertFalse(is_error, undone)
         self.job.refresh_from_db()
         self.assertEqual(self.job.description, "")
-
-    def test_a_stale_change_is_a_tool_error_naming_the_entry(self):
-        change = {
-            "id": f"job:{self.job.pk}",
-            "seen": "2001-01-01T00:00:00+00:00",
-            "set": {"description": "late"},
-        }
-        data, is_error = self._call("apply_career_changes", {"changes": [change]})
-        self.assertTrue(is_error)
-        self.assertEqual(data["stale"], [f"job:{self.job.pk}"])
-
-    def test_a_bad_change_is_a_tool_error_by_position(self):
-        change = {
-            "id": f"job:{self.job.pk}",
-            "seen": self._seen(self.job),
-            "set": {"type": "ft"},
-        }
-        data, is_error = self._call("apply_career_changes", {"changes": [change]})
-        self.assertTrue(is_error)
-        self.assertIn("changes", data)
 
     def test_undo_of_someone_elses_batch_is_not_found(self):
         theirs = CareerChange.objects.create(user=self.other, changes=[], stamps={})

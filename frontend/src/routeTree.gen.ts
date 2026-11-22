@@ -44,7 +44,6 @@ import { Route as AuthenticatedAccountPersonalityRouteImport } from './routes/_a
 import { Route as AuthenticatedAccountLlmRouteImport } from './routes/_authenticated/account/llm'
 import { Route as AuthenticatedAccountEmailRouteImport } from './routes/_authenticated/account/email'
 import { Route as AuthenticatedAccountDangerRouteImport } from './routes/_authenticated/account/danger'
-import { Route as AuthenticatedAccountLlmClaudeRouteImport } from './routes/_authenticated/account/llm_.claude'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -235,12 +234,6 @@ const AuthenticatedAccountDangerRoute =
     path: '/danger',
     getParentRoute: () => AuthenticatedAccountRoute,
   } as any)
-const AuthenticatedAccountLlmClaudeRoute =
-  AuthenticatedAccountLlmClaudeRouteImport.update({
-    id: '/llm_/claude',
-    path: '/llm/claude',
-    getParentRoute: () => AuthenticatedAccountRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -277,7 +270,6 @@ export interface FileRoutesByFullPath {
   '/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/cv/': typeof AuthenticatedCvIndexRoute
   '/portfolio/': typeof AuthenticatedPortfolioIndexRoute
-  '/account/llm/claude': typeof AuthenticatedAccountLlmClaudeRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -310,7 +302,6 @@ export interface FileRoutesByTo {
   '/applications': typeof AuthenticatedApplicationsIndexRoute
   '/cv': typeof AuthenticatedCvIndexRoute
   '/portfolio': typeof AuthenticatedPortfolioIndexRoute
-  '/account/llm/claude': typeof AuthenticatedAccountLlmClaudeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -349,7 +340,6 @@ export interface FileRoutesById {
   '/_authenticated/applications/': typeof AuthenticatedApplicationsIndexRoute
   '/_authenticated/cv/': typeof AuthenticatedCvIndexRoute
   '/_authenticated/portfolio/': typeof AuthenticatedPortfolioIndexRoute
-  '/_authenticated/account/llm_/claude': typeof AuthenticatedAccountLlmClaudeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -388,7 +378,6 @@ export interface FileRouteTypes {
     | '/applications/'
     | '/cv/'
     | '/portfolio/'
-    | '/account/llm/claude'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -421,7 +410,6 @@ export interface FileRouteTypes {
     | '/applications'
     | '/cv'
     | '/portfolio'
-    | '/account/llm/claude'
   id:
     | '__root__'
     | '/'
@@ -459,7 +447,6 @@ export interface FileRouteTypes {
     | '/_authenticated/applications/'
     | '/_authenticated/cv/'
     | '/_authenticated/portfolio/'
-    | '/_authenticated/account/llm_/claude'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -716,13 +703,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountDangerRouteImport
       parentRoute: typeof AuthenticatedAccountRoute
     }
-    '/_authenticated/account/llm_/claude': {
-      id: '/_authenticated/account/llm_/claude'
-      path: '/llm/claude'
-      fullPath: '/account/llm/claude'
-      preLoaderRoute: typeof AuthenticatedAccountLlmClaudeRouteImport
-      parentRoute: typeof AuthenticatedAccountRoute
-    }
   }
 }
 
@@ -746,7 +726,6 @@ interface AuthenticatedAccountRouteChildren {
   AuthenticatedAccountPersonalityRoute: typeof AuthenticatedAccountPersonalityRoute
   AuthenticatedAccountProfileRoute: typeof AuthenticatedAccountProfileRoute
   AuthenticatedAccountSecurityRoute: typeof AuthenticatedAccountSecurityRoute
-  AuthenticatedAccountLlmClaudeRoute: typeof AuthenticatedAccountLlmClaudeRoute
 }
 
 const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
@@ -756,7 +735,6 @@ const AuthenticatedAccountRouteChildren: AuthenticatedAccountRouteChildren = {
   AuthenticatedAccountPersonalityRoute: AuthenticatedAccountPersonalityRoute,
   AuthenticatedAccountProfileRoute: AuthenticatedAccountProfileRoute,
   AuthenticatedAccountSecurityRoute: AuthenticatedAccountSecurityRoute,
-  AuthenticatedAccountLlmClaudeRoute: AuthenticatedAccountLlmClaudeRoute,
 }
 
 const AuthenticatedAccountRouteWithChildren =

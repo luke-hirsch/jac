@@ -777,10 +777,10 @@ class CvAttachment(models.Model):
 
 
 class AccessToken(models.Model):
-    """A personal token for the Claude skill: it reads the career DB, writes applications and
-    edits career entries over `/api/jac/skill/`, and nothing else
-    (`jac.tokens.AccessTokenAuthentication` sits on those views only, never in DRF's
-    defaults). It deletes nothing but a skill its own batch created, on undo. Only the SHA-256
+    """A personal token for the jac connector: it reads the career DB, writes applications and
+    edits career entries over `/api/jac/mcp/`, and nothing else (`jac.tokens`' classes sit on
+    that view only, never in DRF's defaults). It deletes nothing but a skill its own batch
+    created, on undo. Only the SHA-256
     of the key is stored; the key itself is shown once. Revoking is deleting the row."""
 
     MAX_PER_USER = 10
@@ -807,10 +807,11 @@ class AccessToken(models.Model):
 
 
 class CareerChange(models.Model):
-    """One batch of career edits the Claude skill applied, or the SPA imported from a file it
-    wrote (`jac.career_changes`). Each change keeps the touched fields as they were before and
-    after, so the batch can be undone; `stamps` holds every touched entry's `updated_at` after
-    the batch, so an undo can tell when the user has edited one since."""
+    """One batch of career edits Claude applied over the connector (`jac.career_changes`).
+    `imported` marks the batches the SPA took from a file before file mode went (2026-11). Each
+    change keeps the touched fields as they were before and after, so the batch can be undone;
+    `stamps` holds every touched entry's `updated_at` after the batch, so an undo can tell when
+    the user has edited one since."""
 
     KEEP = 50
 

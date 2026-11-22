@@ -1,6 +1,6 @@
-"""Personal access tokens for the Claude skill: minting, and the DRF authentication that reads
-them. The class goes on the skill views only, so a leaked token reaches the career DB and the
-applications, never the account, the API keys or the rest of the API."""
+"""Personal access tokens for the jac connector: minting, and the DRF authentication that reads
+them. The classes go on the connector's view only (`SkillMcpView`), so a leaked token reaches the
+career DB and the applications, never the account, the API keys or the rest of the API."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from rest_framework.exceptions import AuthenticationFailed
 from jac.models import AccessToken
 
 KEY_PREFIX = "jac_"
-# A write per request is wasted on a skill that fires five calls in a row.
+# A write per request is wasted on a conversation that fires five calls in a row.
 _TOUCH_EVERY = timedelta(minutes=1)
 
 

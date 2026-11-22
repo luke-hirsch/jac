@@ -13,6 +13,8 @@ from rest_framework.routers import DefaultRouter
 from jac.views import (
     AccessTokenViewSet,
     ApplicationLayoutViewSet,
+    CareerChangeListView,
+    CareerChangeUndoView,
     CareerExportView,
     CareerImportView,
     CertificationViewSet,
@@ -28,15 +30,8 @@ from jac.views import (
     LocationViewSet,
     ProjectViewSet,
     SampleCareerView,
-    SkillApplicationDetailView,
-    SkillApplicationListView,
     SkillBundleView,
-    SkillCareerChangeListView,
-    SkillCareerChangeUndoView,
-    SkillCareerFileView,
-    SkillCareerView,
     SkillMcpView,
-    SkillReviewView,
     SkillViewSet,
 )
 
@@ -60,33 +55,21 @@ urlpatterns = router.urls + [
     path("sample-career/", SampleCareerView.as_view(), name="sample-career"),
     path("career/export/", CareerExportView.as_view(), name="career-export"),
     path("career/import/", CareerImportView.as_view(), name="career-import"),
-    # The Claude skill: a personal token or the session (jac/skill.py).
-    path("skill/career/", SkillCareerView.as_view(), name="skill-career"),
-    path(
-        "skill/applications/",
-        SkillApplicationListView.as_view(),
-        name="skill-applications",
-    ),
-    path(
-        "skill/applications/<int:pk>/",
-        SkillApplicationDetailView.as_view(),
-        name="skill-application",
-    ),
-    path("skill/review/", SkillReviewView.as_view(), name="skill-review"),
+    # The connector's side in the SPA, on the session: the change log, the skill, the consent.
+    # Claude itself only ever calls mcp/ below.
     path(
         "skill/career/changes/",
-        SkillCareerChangeListView.as_view(),
+        CareerChangeListView.as_view(),
         name="skill-career-changes",
     ),
     path(
         "skill/career/changes/<int:pk>/undo/",
-        SkillCareerChangeUndoView.as_view(),
+        CareerChangeUndoView.as_view(),
         name="skill-career-change-undo",
     ),
     path("skill/bundle/", SkillBundleView.as_view(), name="skill-bundle"),
     path("skill/consent/", ClaudeConsentView.as_view(), name="skill-consent"),
-    path("skill/career/file/", SkillCareerFileView.as_view(), name="skill-career-file"),
-    # Claude's custom connector (jac/mcp.py): the token in the header, or in the URL for a
+    # The jac connector (jac/mcp.py): the token in the header, or in the URL for a
     # connector dialog without request headers. The slash is optional: a POST can't follow
     # APPEND_SLASH's redirect.
     re_path(r"^mcp/?$", SkillMcpView.as_view(), name="skill-mcp"),

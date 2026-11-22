@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -15,8 +15,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
-import { useImportChangesFile } from "@/components/skill/use-import-changes-file";
-import { Lines } from "@/components/toast-lines";
 import { ExportButton, ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
@@ -35,11 +33,6 @@ import {
   useCvEntries,
 } from "@/lib/queries/jac";
 import { hasOwnName, useProfile } from "@/lib/queries/profile";
-import {
-  errorLines,
-  parseImportFile,
-  useImportApplication,
-} from "@/lib/queries/skill";
 
 export const Route = createFileRoute("/_authenticated/applications/")({
   component: ApplicationsPage,
@@ -160,7 +153,6 @@ function ApplicationsPage() {
                   {create.isPending ? "Creating…" : "Create application"}
                 </Button>
               )}
-              <ImportFromClaude />
             </div>
           </CardContent>
         </Card>
@@ -258,74 +250,5 @@ function ApplicationsPage() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-/** Import an application the Claude skill wrote as a file, when Claude's sandbox couldn't reach
- *  jac to save it itself (account → Claude). A file of career changes is imported as those. */
-function ImportFromClaude() {
-  const navigate = useNavigate();
-  const importApp = useImportApplication();
-  const importChanges = useImportChangesFile(
-    "Account → LLM → Claude lists them, and can undo them.",
-  );
-  const fileRef = useRef<HTMLInputElement>(null);
-  const pending = importApp.isPending || importChanges.isPending;
-
-  async function onFile(file: File) {
-    let parsed;
-    try {
-      parsed = parseImportFile(await file.text());
-    } catch (e) {
-      toast.error((e as Error).message);
-      return;
-    }
-    if (parsed.kind === "changes") {
-      await importChanges.apply(parsed.changes);
-      return;
-    }
-    let app;
-    try {
-      app = await importApp.mutateAsync(parsed.body);
-    } catch (e) {
-      toast.error("Could not import the application", {
-        description: <Lines lines={errorLines(e, "Try again in a moment.")} />,
-        duration: 10_000,
-      });
-      return;
-    }
-    if (app.warnings.length)
-      toast.warning("Imported, with warnings", {
-        description: <Lines lines={app.warnings} />,
-        duration: 10_000,
-      });
-    else toast.success("Imported from Claude");
-    navigate({
-      to: "/applications/$applicationId",
-      params: { applicationId: String(app.id) },
-    });
-  }
-
-  return (
-    <>
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".json,application/json"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = ""; // the same file again is a new pick
-          if (file) onFile(file);
-        }}
-      />
-      <Button
-        variant="outline"
-        disabled={pending}
-        onClick={() => fileRef.current?.click()}
-      >
-        {pending ? "Importing…" : "Import from Claude"}
-      </Button>
-    </>
   );
 }

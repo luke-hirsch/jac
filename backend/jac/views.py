@@ -33,7 +33,6 @@ from django.utils.text import slugify
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from kombu.exceptions import OperationalError
 from rest_framework import mixins, serializers, status, viewsets
-from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -54,7 +53,6 @@ from jac.career_changes import (
     ChangeError,
     StaleError,
     UndoRefused,
-    apply_changes,
     batch_payload,
     entry_labels,
     undo_batch,
@@ -66,7 +64,6 @@ from jac.career_import import (
     load_into_empty_career,
     load_sample_career,
 )
-from jac.career_review import review_career
 from jac.cv import CV
 from jac.llm_prompts import LetterChat
 from jac.models import (
@@ -113,16 +110,9 @@ from jac.serializers import (
     ProjectSerializer,
     RewriteRequestSerializer,
     ShortenRequestSerializer,
-    SkillApplicationSerializer,
-    SkillCareerChangesSerializer,
     SkillSerializer,
 )
 from jac.skill import (
-    application_payload,
-    application_summary,
-    career_file,
-    career_payload,
-    save_application,
     skill_bundle,
 )
 from jac.style import style_rules
@@ -1185,100 +1175,18 @@ class CvAttachmentViewSet(viewsets.ModelViewSet):
 # --- the Claude skill ---------------------------------------------------------------------------
 
 
-class _SkillView(APIView):
-    """The skill's endpoints: a personal token (`Authorization: Bearer jac_…`) or the session,
-    nothing else. The session is there so the SPA can import a file the skill wrote when
-    Claude's sandbox can't reach jac."""
+class _CareerChangeView(APIView):
+    """The career edits Claude made over the connector, as the SPA shows them (Account → LLM,
+    under Connectors): on the session only. Claude lists and undoes them with the connector's own
+    tools."""
 
-    authentication_classes = [AccessTokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
     throttle_classes = [_LiveScopedRateThrottle]
     throttle_scope = "skill"
 
 
-class SkillCareerView(_SkillView):
-    """The whole career DB in one document, shaped for Claude to read (`jac.skill`)."""
-
-    @extend_schema(responses=OpenApiResponse(description="The career document"))
-    def get(self, request):
-        return Response(career_payload(request.user))
-
-
-class SkillApplicationListView(_SkillView):
-    """GET the user's latest applications; POST one the skill wrote."""
-
-    LIMIT = 50
-
-    @extend_schema(responses=OpenApiResponse(description="[{id, title, company, …}]"))
-    def get(self, request):
-        rows = (
-            JobApplication.objects.filter(user=request.user)
-            .select_related("posting__address")
-            .order_by("-created_at")[: self.LIMIT]
-        )
-        return Response([application_summary(a) for a in rows])
-
-    @extend_schema(
-        request=SkillApplicationSerializer,
-        responses={201: OpenApiResponse(description="The application + warnings")},
-    )
-    def post(self, request):
-        serializer = SkillApplicationSerializer(
-            data=request.data, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        application, warnings = save_application(
-            request.user, serializer.validated_data
-        )
-        return Response(
-            {**application_payload(application), "warnings": warnings},
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class SkillApplicationDetailView(_SkillView):
-    """GET one application in the skill's shape; PATCH what the conversation changed. Someone
-    else's id is a 404, like a missing one."""
-
-    def _get(self, request, pk):
-        return get_object_or_404(
-            JobApplication.objects.select_related("posting__address"),
-            pk=pk,
-            user=request.user,
-        )
-
-    @extend_schema(responses=OpenApiResponse(description="The application"))
-    def get(self, request, pk):
-        return Response(application_payload(self._get(request, pk)))
-
-    @extend_schema(
-        request=SkillApplicationSerializer,
-        responses=OpenApiResponse(description="The application + warnings"),
-    )
-    def patch(self, request, pk):
-        application = self._get(request, pk)
-        serializer = SkillApplicationSerializer(
-            data=request.data, partial=True, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        application, warnings = save_application(
-            request.user, serializer.validated_data, application
-        )
-        return Response({**application_payload(application), "warnings": warnings})
-
-
-class SkillReviewView(_SkillView):
-    """The machine half of a career review (`jac.career_review`): findings Claude reads next to
-    the career before it adds its own judgment."""
-
-    @extend_schema(responses=OpenApiResponse(description="{counts, findings}"))
-    def get(self, request):
-        return Response(review_career(request.user))
-
-
-class SkillCareerChangeListView(_SkillView):
-    """GET the latest batches of career edits; POST a batch (`jac.career_changes`). On the
-    token it's Claude applying it; on the session it's the SPA importing a file Claude wrote."""
+class CareerChangeListView(_CareerChangeView):
+    """GET the latest batches of career edits (`jac.career_changes`), newest first."""
 
     LIMIT = 20
 
@@ -1287,52 +1195,8 @@ class SkillCareerChangeListView(_SkillView):
         rows = CareerChange.objects.filter(user=request.user)[: self.LIMIT]
         return Response([batch_payload(b) for b in rows])
 
-    @extend_schema(
-        request=SkillCareerChangesSerializer,
-        responses={
-            201: OpenApiResponse(description="The batch + `created`"),
-            409: OpenApiResponse(description="{detail, stale}: entries edited since"),
-        },
-    )
-    def post(self, request):
-        serializer = SkillCareerChangesSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        on_token = isinstance(
-            request.successful_authenticator, AccessTokenAuthentication
-        )
-        dry_run = serializer.validated_data["dry_run"]
-        try:
-            payload = apply_changes(
-                request,
-                serializer.validated_data["changes"],
-                source=CareerChange.Source.claude
-                if on_token
-                else CareerChange.Source.imported,
-                dry_run=dry_run,
-            )
-        except ChangeError as err:
-            return Response({"changes": err.errors}, status=status.HTTP_400_BAD_REQUEST)
-        except StaleError as err:
-            # Claude reads this on the token, the user on an import.
-            redo = (
-                "Read the career again and redo these changes from what it says now."
-                if on_token
-                else "Ask Claude to read your career again and redo these changes."
-            )
-            return Response(
-                {
-                    "detail": f"{err.detail} {redo}",
-                    "stale": err.ids,
-                    "labels": entry_labels(request.user, err.ids),
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        return Response(
-            payload, status=status.HTTP_200_OK if dry_run else status.HTTP_201_CREATED
-        )
 
-
-class SkillCareerChangeUndoView(_SkillView):
+class CareerChangeUndoView(_CareerChangeView):
     """POST: put a batch's entries back as they were. Someone else's batch is a 404."""
 
     @extend_schema(
@@ -1369,9 +1233,9 @@ class SkillCareerChangeUndoView(_SkillView):
 
 @extend_schema(exclude=True)
 class SkillMcpView(APIView):
-    """Claude's custom connector (`jac.mcp`): MCP over Streamable HTTP, stateless, one POST per
-    message, plain JSON back. The same token as the skill, in the Authorization header or as
-    the URL's last segment; never the session (Anthropic's servers call it, not a browser)."""
+    """The jac connector (`jac.mcp`): MCP over Streamable HTTP, stateless, one POST per message,
+    plain JSON back. A personal token, in the Authorization header or as the URL's last segment;
+    never the session (Anthropic's servers call it, not a browser)."""
 
     authentication_classes = [AccessTokenAuthentication, PathTokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -1391,8 +1255,8 @@ class SkillMcpView(APIView):
 
 
 class ClaudeConsentView(ConsentView):
-    """The kept consent for Claude tokens (Account → LLM → Claude). Withdrawing revokes every
-    token: the connector and Claude Code stop, and the next token asks again."""
+    """The kept consent for Claude's connector tokens (Account → LLM, under Connectors).
+    Withdrawing revokes every token: the connector stops, and the next token asks again."""
 
     scope = TransferConsent.Scope.claude
 
@@ -1406,7 +1270,7 @@ class AccessTokenViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    """The user's skill tokens: list, mint (the key is in this one response only), revoke.
+    """The user's connector tokens: list, mint (the key is in this one response only), revoke.
     Session only: a token can't mint more of itself."""
 
     serializer_class = AccessTokenSerializer
@@ -1443,8 +1307,9 @@ class AccessTokenViewSet(
 
 
 class SkillBundleView(APIView):
-    """GET: the skill as a zip, ready to upload to Claude. It holds the skill alone, no token and
-    no career (`jac.skill.skill_bundle`), so downloading it mints nothing."""
+    """GET: the skill as a zip, ready to upload to Claude: one file that points at the connector,
+    no token, no career and no rules (`jac.skill.skill_bundle`), so downloading it mints
+    nothing."""
 
     permission_classes = [IsAuthenticated]
 
@@ -1453,17 +1318,3 @@ class SkillBundleView(APIView):
         response = HttpResponse(skill_bundle(), content_type="application/zip")
         response["Content-Disposition"] = 'attachment; filename="jac-skill.zip"'
         return response
-
-
-class SkillCareerFileView(APIView):
-    """GET: the career file for a chat in the Claude app (`jac.skill.career_file`): the career
-    and its machine review, with the ids and stamps the files Claude writes back point at.
-    Session only: the download button in Account → LLM → Claude."""
-
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(
-        responses=OpenApiResponse(description="The career document + `review`")
-    )
-    def get(self, request):
-        return Response(career_file(request.user))
