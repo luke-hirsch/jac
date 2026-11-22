@@ -40,6 +40,7 @@ import {
   knobParams,
   pendingAgeSeconds,
   registerBadge,
+  styleBadge,
   useCreateGeneration,
   type RunState,
 } from "@/lib/queries/generations";
@@ -199,6 +200,7 @@ export function GeneratePanel({
     ? groundingBadge(result.cover_letter.grounding)
     : null;
   const register = result ? registerBadge(result.cover_letter.register) : null;
+  const style = result ? styleBadge(result.cover_letter.style_warnings) : null;
 
   return (
     <Card>
@@ -510,6 +512,15 @@ export function GeneratePanel({
                 }
               >
                 {register.label}
+              </span>
+            )}
+
+            {style && (
+              <span
+                className={`rounded px-2 py-0.5 text-xs ${toneClass(style.tone)}`}
+                title={result.cover_letter.style_warnings?.join("\n")}
+              >
+                {style.label}
               </span>
             )}
 

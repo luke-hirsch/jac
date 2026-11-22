@@ -38,9 +38,14 @@ from jac.models import (
     JobPosting,
 )
 from jac.register import register_leaks, resolve_address_form
+from jac.style import style_checks, style_rules, style_warnings
 from spa.models import PersonalityProfile, PersonalityQuestion
 
 SKILL_DIR = Path(__file__).resolve().parent / "resources" / "skill"
+# jac's style checks, shipped beside the script so file mode runs the same ones: jac/style.py is
+# standard library only for that.
+STYLE_MODULE = Path(__file__).resolve().parent / "style.py"
+STYLE_MODULE_IN_BUNDLE = "scripts/jac_style.py"
 SKILL_NAME = "jac"
 # Marks the career file, so the skill's script finds it among a chat's uploads whatever the user
 # (or the Claude app) named it.
@@ -235,6 +240,10 @@ def career_payload(user) -> dict:
             "tone": personality.letter_tone if personality else "neutral",
             "focus": personality.letter_focus if personality else "balanced",
             "words": list(LETTER_WORDS),
+            # The user's own writing rules, one per line: every letter follows them. jac checks
+            # the ones in style_checks on save, and so does the script in file mode.
+            "style_rules": style_rules(personality),
+            "style_checks": style_checks(personality),
         },
         "personality": [
             {"question": labels.get(slug, slug), "answer": text}
@@ -352,7 +361,11 @@ def _letter_meta(user, posting: JobPosting, letter: dict) -> dict:
     }
 
 
-def _letter_warnings(body: str, meta: dict) -> list[str]:
+# The frame the skill may override: its own text then, so the style checks read it too.
+_LETTER_OVERRIDES = ("subject", "salutation", "closing")
+
+
+def _letter_warnings(body: str, meta: dict, letter: dict, checks) -> list[str]:
     warnings = []
     words = len(body.split())
     lo, hi = LETTER_WORDS
@@ -374,6 +387,8 @@ def _letter_warnings(body: str, meta: dict) -> list[str]:
             f"The letter addresses the reader as '{meta['address_form']}', "
             f"but also uses: {', '.join(leaks)}."
         )
+    overrides = {part: letter[part] for part in _LETTER_OVERRIDES if letter.get(part)}
+    warnings += style_warnings({"body": body, **overrides}, checks)
     return warnings
 
 
@@ -426,7 +441,12 @@ def save_application(
         if "body" in letter:
             application.cover_letter = letter["body"].strip()
         application.letter_meta = _letter_meta(user, posting, letter)
-        warnings += _letter_warnings(application.cover_letter, application.letter_meta)
+        warnings += _letter_warnings(
+            application.cover_letter,
+            application.letter_meta,
+            letter,
+            style_checks(PersonalityProfile.objects.filter(user=user).first()),
+        )
     if "notes" in data:
         application.notes = data["notes"]
     application.save()
@@ -446,13 +466,14 @@ def career_file(user) -> dict:
 
 
 def skill_bundle() -> bytes:
-    """The skill as a zip Claude takes as an upload: the skill folder and nothing else. No token
-    and no personal data, so it's the same for everyone and uploaded once: the career comes per
-    chat (`career_file`), and Claude Code reaches jac with a token of its own (JAC_URL /
-    JAC_TOKEN)."""
+    """The skill as a zip Claude takes as an upload: the skill folder plus jac's style checks
+    (`STYLE_MODULE`), and nothing else. No token and no personal data, so it's the same for
+    everyone and uploaded once: the career comes per chat (`career_file`), and Claude Code reaches
+    jac with a token of its own (JAC_URL / JAC_TOKEN)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(SKILL_DIR.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 z.write(path, f"{SKILL_NAME}/{path.relative_to(SKILL_DIR)}")
+        z.write(STYLE_MODULE, f"{SKILL_NAME}/{STYLE_MODULE_IN_BUNDLE}")
     return buf.getvalue()

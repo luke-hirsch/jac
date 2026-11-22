@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import {
   MAX_ANSWER_LEN,
+  MAX_STYLE_RULES_LEN,
   answeredCount,
   answersDirty,
   cleanAnswers,
@@ -32,6 +34,7 @@ import {
   FOCUS_OPTIONS,
   type LetterTone,
   type LetterFocus,
+  type LetterSettings,
   styleState,
   useUpdateLetterSettings,
 } from "@/lib/queries/personality";
@@ -54,9 +57,14 @@ function PersonalityPage() {
   const createQuestion = useCreateQuestion();
   const deleteQuestion = useDeleteQuestion();
   const settings = useUpdateLetterSettings();
+  // Its own mutation, so saving the rules doesn't show the sample's button as saving.
+  const rulesSave = useUpdateLetterSettings();
   const [sample, setSample] = useState<string | null>(null);
   if (personality.data && sample === null)
     setSample(personality.data.writing_sample);
+  const [rules, setRules] = useState<string | null>(null);
+  if (personality.data && rules === null)
+    setRules(personality.data.style_rules);
   // Seeded from the server once; refetches must not clobber edits (adjust-state-
   // during-render, same pattern as the content card's server re-seed).
   const [draft, setDraft] = useState<Record<string, string> | null>(null);
@@ -76,14 +84,25 @@ function PersonalityPage() {
   const styleFresh = styleState(row);
   const sampleDirty =
     sample !== null && sample.trim() !== row.writing_sample.trim();
+  const rulesDirty = rules !== null && rules.trim() !== row.style_rules.trim();
 
-  function saveMatrix(patch: {
-    letter_tone?: LetterTone;
-    letter_focus?: LetterFocus;
-  }) {
+  function saveSetting(patch: Partial<LetterSettings>) {
     settings.mutate(patch, {
       onError: () => toast.error("Could not save the letter setting"),
     });
+  }
+  function saveRules() {
+    rulesSave.mutate(
+      { style_rules: (rules ?? "").trim() },
+      {
+        // The server stores one trimmed rule per line: show that, not the draft.
+        onSuccess: (saved) => {
+          setRules(saved.style_rules);
+          toast.success("Style rules saved");
+        },
+        onError: () => toast.error("Could not save the style rules"),
+      },
+    );
   }
   function saveSample() {
     settings.mutate(
@@ -229,9 +248,9 @@ function PersonalityPage() {
         <div>
           <h3 className="text-sm font-medium">Cover-letter voice</h3>
           <p className="text-sm text-muted-foreground">
-            The default tone × focus for every letter, and a sample of your own
-            writing the model imitates. A run can override the tone/focus for
-            one application.
+            The default tone × focus for every letter, your style rules, and a
+            sample of your own writing the model imitates. A run can override
+            the tone/focus for one application.
           </p>
         </div>
 
@@ -241,7 +260,7 @@ function PersonalityPage() {
             <Select
               value={row.letter_tone}
               onValueChange={(v) =>
-                saveMatrix({ letter_tone: v as LetterTone })
+                saveSetting({ letter_tone: v as LetterTone })
               }
             >
               <SelectTrigger>
@@ -261,7 +280,7 @@ function PersonalityPage() {
             <Select
               value={row.letter_focus}
               onValueChange={(v) =>
-                saveMatrix({ letter_focus: v as LetterFocus })
+                saveSetting({ letter_focus: v as LetterFocus })
               }
             >
               <SelectTrigger>
@@ -275,6 +294,55 @@ function PersonalityPage() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="style-rules">Style rules</Label>
+          <Textarea
+            id="style-rules"
+            value={rules ?? ""}
+            rows={4}
+            maxLength={MAX_STYLE_RULES_LEN}
+            placeholder="One rule per line, e.g. No exclamation marks."
+            onChange={(e) => setRules(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            One rule per line. Every letter follows them, jac&apos;s own and the
+            ones Claude writes. The two checks flag a slip as a warning; they
+            never rewrite the letter.
+          </p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Button
+              onClick={saveRules}
+              disabled={!rulesDirty || rulesSave.isPending}
+            >
+              {rulesSave.isPending ? "Saving…" : "Save rules"}
+            </Button>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="style-no-dashes"
+                checked={row.style_no_dashes}
+                onCheckedChange={(v) =>
+                  saveSetting({ style_no_dashes: v === true })
+                }
+              />
+              <Label htmlFor="style-no-dashes">
+                Check for dashes as punctuation
+              </Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="style-no-antithesis"
+                checked={row.style_no_antithesis}
+                onCheckedChange={(v) =>
+                  saveSetting({ style_no_antithesis: v === true })
+                }
+              />
+              <Label htmlFor="style-no-antithesis">
+                Check for &ldquo;not X but Y&rdquo;
+              </Label>
+            </div>
           </div>
         </div>
 

@@ -329,12 +329,12 @@ class Skill(CvEntry):
 
     @property
     def years_of_experience(self) -> int | None:
-        """Whole years since the earliest evidence this skill has been used.
+        """Whole years since the skill has been in use.
 
-        Considers three sources, takes the smallest:
-          - `first_used` on the Skill itself
-          - the earliest `started` among Jobs that include this skill
-          - the earliest `started` among Projects that include this skill
+        Counts from `first_used` when it's set: the user's own date wins, earlier or later than
+        the linked entries (a job that started before they picked the skill up didn't use it
+        from its first day; a skill from before any listed job is older than the CV). Without
+        it, from the earliest `started` among the Jobs and Projects that include this skill.
 
         is overridden by the `years_of_experience_override` field
 
@@ -347,8 +347,7 @@ class Skill(CvEntry):
         if self.years_of_experience_override is not None:
             return self.years_of_experience_override
 
-        earliest = _min_ignoring_none(
-            self.first_used,
+        earliest = self.first_used or _min_ignoring_none(
             getattr(self, "_earliest_job_started", None),
             getattr(self, "_earliest_project_started", None),
         )

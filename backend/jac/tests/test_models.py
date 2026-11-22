@@ -9,6 +9,7 @@ import io
 import json
 import tempfile
 from datetime import date
+from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.sites.models import Site
@@ -170,6 +171,35 @@ class EducationDegreeTests(TestCase):
             degree_level=Education.DegreeLevel.none,
         )
         self.assertFalse(e.is_degree)
+
+
+class SkillYearsTests(TestCase):
+    """The computed years: when `first_used` is set it wins, whatever the linked entries say."""
+
+    def test_first_used_wins_over_an_earlier_linked_job(self):
+        user = make_user()
+        django = Skill.objects.create(
+            user=user, name="Django", first_used=date(2020, 2, 1)
+        )
+        job = Job.objects.create(
+            user=user, title="Developer", company="Acme", started=date(2016, 4, 15)
+        )
+        job.skills.add(django)
+        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
+            # It showed 10, counted from the job.
+            self.assertEqual(Skill.objects.get(pk=django.pk).years_of_experience, 6)
+
+    def test_first_used_wins_over_a_later_linked_job(self):
+        user = make_user()
+        python = Skill.objects.create(
+            user=user, name="Python", first_used=date(2015, 9, 1)
+        )
+        job = Job.objects.create(
+            user=user, title="Developer", company="Acme", started=date(2018, 4, 15)
+        )
+        job.skills.add(python)
+        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
+            self.assertEqual(Skill.objects.get(pk=python.pk).years_of_experience, 11)
 
 
 class SeedSystemDefaultsTests(TestCase):

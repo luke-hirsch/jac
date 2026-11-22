@@ -114,6 +114,8 @@ same JSON. Where this file says `career`, `save` and so on, use the tool.
 - **Voice:** `personality` holds the user's own answers about how they work and what drives
   them; let them shape emphasis and framing, but they aren't hard facts. If there is a
   `writing_sample`, write in that voice. It carries no facts.
+- **Style rules:** the letter must follow every rule in `letter_defaults.style_rules`, the user's
+  own, and so must a subject, salutation or closing you override.
 
 ## Saving
 
@@ -153,8 +155,8 @@ Otherwise write it to a JSON file, e.g. `application.json`, and run
 **In file mode** nothing is saved from here. `save` checks the file the way jac's import will:
 - what the import would refuse (a missing field, an id that isn't in the career file) is an
   error: fix the file and run `save` again;
-- the `warnings` (the letter's length, the highest degree jac adds) are worth a look before you
-  hand it over.
+- the `warnings` (the letter's length, a broken style rule, the highest degree jac adds) are
+  worth a look before you hand it over.
 
 Then it answers with the `file` to give the user (in the Claude app it lands among the chat's
 downloads). Tell them: in jac, Applications → Import from Claude, pick the file. jac opens the new
@@ -163,12 +165,12 @@ form. Every import creates a new application, so for a correction after the user
 tell them to edit it in jac, or write a fresh file for a fresh import.
 
 **With the connector, and online**, the answer gives the application's `id`, its `url` and any
-`warnings` (length, a salutation inside the body, a slipped German form, the highest degree
-added). Fix what's worth fixing, then save again with that `id`: it updates the application
-instead of creating a second one, and only what you send changes. Give the user the `url`: it
-opens the application in jac, where they check the layout and export the PDF. To continue with an
-existing application: `applications` (`list_applications`), then `show ID` (`get_application`),
-change what the conversation changed, and save it with its `id`.
+`warnings` (length, a salutation inside the body, a slipped German form, a broken style rule,
+the highest degree added). Fix what's worth fixing, then save again with that `id`: it updates
+the application instead of creating a second one, and only what you send changes. Give the user
+the `url`: it opens the application in jac, where they check the layout and export the PDF. To
+continue with an existing application: `applications` (`list_applications`), then `show ID`
+(`get_application`), change what the conversation changed, and save it with its `id`.
 
 **If a command answers `NOT HERE`**, it needs jac itself: in file mode that's `applications`,
 `show`, `changes` and `undo`, and the message says where the same thing is in jac. Online, it means
