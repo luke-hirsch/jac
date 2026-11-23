@@ -5,7 +5,9 @@ import {
   connectorHeader,
   connectorUrl,
   errorLines,
+  expandedBatch,
   fetchSkillBundle,
+  keepCareerChange,
   staleLines,
   validationLines,
   type CareerChange,
@@ -13,8 +15,9 @@ import {
 
 /**
  * The connector's SPA side (Account → LLM, under Connectors): its URL and header, DRF errors
- * as readable lines, a career change as display rows, the 409's stale entries by name, and the
- * bundle's raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
+ * as readable lines, a career change as display rows, the 409's stale entries by name, which
+ * batch the log starts expanded, keeping a batch, and the bundle's raw fetch (`fetch` +
+ * `document.cookie` stubbed per test, node env).
  */
 
 afterEach(() => vi.unstubAllGlobals());
@@ -265,6 +268,77 @@ describe("staleLines", () => {
     expect(staleLines(new TypeError("Failed to fetch"), "fallback")).toEqual([
       "fallback",
     ]);
+  });
+});
+
+describe("expandedBatch", () => {
+  it("is the newest batch that isn't undone", () => {
+    expect(
+      expandedBatch([
+        { id: 9, undone_at: "2026-11-23T10:00:00+00:00" },
+        { id: 8, undone_at: null },
+        { id: 7, undone_at: null },
+      ]),
+    ).toBe(8);
+  });
+
+  it("is none when every batch is undone, or there are none", () => {
+    expect(
+      expandedBatch([{ id: 9, undone_at: "2026-11-23T10:00:00+00:00" }]),
+    ).toBeNull();
+    expect(expandedBatch([])).toBeNull();
+  });
+});
+
+describe("keepCareerChange", () => {
+  function answer(status: number, body: unknown = "") {
+    const isJson = typeof body !== "string";
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: {
+        get: (h: string) =>
+          h === "content-type" && isJson ? "application/json" : null,
+      },
+      json: async () => body,
+      text: async () => body,
+    } as unknown as Response;
+  }
+
+  it("DELETEs the batch, with the CSRF token", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      answer(204),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("document", { cookie: "csrftoken=tok123" });
+
+    await expect(keepCareerChange(7)).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/jac/skill/career/changes/7/");
+    expect(init.method).toBe("DELETE");
+    expect(new Headers(init.headers).get("X-CSRFToken")).toBe("tok123");
+  });
+
+  it("takes a 404 as kept: another tab was first", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => answer(404, { detail: "Not found." })),
+    );
+    vi.stubGlobal("document", { cookie: "" });
+
+    await expect(keepCareerChange(7)).resolves.toBeUndefined();
+  });
+
+  it("throws any other failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => answer(429, { detail: "Request was throttled." })),
+    );
+    vi.stubGlobal("document", { cookie: "" });
+
+    const error = await keepCareerChange(7).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(429);
   });
 });
 

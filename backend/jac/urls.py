@@ -13,6 +13,7 @@ from rest_framework.routers import DefaultRouter
 from jac.views import (
     AccessTokenViewSet,
     ApplicationLayoutViewSet,
+    CareerChangeKeepView,
     CareerChangeListView,
     CareerChangeUndoView,
     CareerExportView,
@@ -61,6 +62,11 @@ urlpatterns = router.urls + [
         "skill/career/changes/",
         CareerChangeListView.as_view(),
         name="skill-career-changes",
+    ),
+    path(
+        "skill/career/changes/<int:pk>/",
+        CareerChangeKeepView.as_view(),
+        name="skill-career-change",
     ),
     path(
         "skill/career/changes/<int:pk>/undo/",

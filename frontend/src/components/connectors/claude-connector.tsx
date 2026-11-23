@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { QueryError } from "@/components/query-error";
 import { ConsentKept, TransferConsent } from "@/components/transfer-consent";
@@ -26,11 +27,14 @@ import {
   connectorHeader,
   connectorUrl,
   errorLines,
+  expandedBatch,
   staleLines,
   useAccessTokens,
   useCareerChanges,
   useCreateAccessToken,
   useDownloadSkill,
+  useKeepAllCareerChanges,
+  useKeepCareerChange,
   useRevokeAccessToken,
   useUndoCareerChange,
   type AccessTokenRow,
@@ -38,6 +42,7 @@ import {
   type CareerChangeBatch,
   type NewAccessToken,
 } from "@/lib/queries/skill";
+import { cn } from "@/lib/utils";
 
 /** Where Anthropic says what it does with the data of a Claude account. */
 const CLAUDE_TERMS = [
@@ -228,24 +233,76 @@ function when(iso: string): string {
   });
 }
 
-/** The batches of career edits Claude applied, newest first, each one undoable. */
+/** The batches of career edits Claude applied, newest first, each one undoable until the user
+ *  keeps it. Only the newest open batch starts expanded: it's the one to check, and the rest
+ *  read as one line each. */
 function CareerChanges() {
   const batches = useCareerChanges();
+  // Up here, not in the row: a kept row unmounts before its own callbacks could toast.
+  const keep = useKeepCareerChange();
+  const keepAll = useKeepAllCareerChanges();
   const rows = batches.data ?? [];
+  const expanded = expandedBatch(rows);
+
+  // No confirm: the edits stay, only the undo goes.
+  function onKeep(batch: CareerChangeBatch) {
+    const [done, verb] = batch.undone_at
+      ? ["removed", "remove"]
+      : ["kept", "keep"];
+    keep.mutate(batch.id, {
+      onSuccess: () => toast.success(`Batch ${done}`),
+      onError: (e) =>
+        toast.error(errorLines(e, `Couldn't ${verb} it. Try again.`)[0]),
+    });
+  }
+
+  function onKeepAll() {
+    // Every batch goes, also the ones older than this list shows: so no count.
+    if (!confirm("Keep all batches? They can't be undone any more.")) return;
+    keepAll.mutate(undefined, {
+      onSuccess: () => toast.success("All batches kept"),
+      onError: (e) =>
+        toast.error(errorLines(e, "Couldn't keep them. Try again.")[0]),
+    });
+  }
+
   return (
     <section className="space-y-3">
-      <div>
-        <h4 className="text-sm font-medium">Career changes</h4>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Career changes</h4>
+          {rows.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={keepAll.isPending}
+              onClick={onKeepAll}
+            >
+              {keepAll.isPending ? "Keeping…" : "Keep all"}
+            </Button>
+          )}
+        </div>
         <p className="text-sm text-muted-foreground">
           Claude can review your career and, once you agree, edit entries:
           descriptions, the skills a job used, skills that are missing. Every
-          batch of changes is listed here and can be undone.
+          batch of changes is listed here and can be undone. Once a batch is
+          right, keep it: it leaves the list and can't be undone any more, here
+          or by Claude. The edits stay.
         </p>
       </div>
       {rows.length ? (
         <ul className="divide-y">
           {rows.map((batch) => (
-            <BatchItem key={batch.id} batch={batch} />
+            <BatchItem
+              key={batch.id}
+              batch={batch}
+              startsOpen={batch.id === expanded}
+              keeping={
+                keepAll.isPending ||
+                (keep.isPending && keep.variables === batch.id)
+              }
+              onKeep={() => onKeep(batch)}
+            />
           ))}
         </ul>
       ) : batches.isError ? (
@@ -264,8 +321,24 @@ function CareerChanges() {
   );
 }
 
-function BatchItem({ batch }: { batch: CareerChangeBatch }) {
+/** One batch: its header line (when, by whom, how many, and what can be done with it), and
+ *  its changes below it once expanded. The buttons sit beside the toggle, not in it, so a
+ *  click on one never folds the batch. */
+function BatchItem({
+  batch,
+  startsOpen,
+  keeping,
+  onKeep,
+}: {
+  batch: CareerChangeBatch;
+  startsOpen: boolean;
+  keeping: boolean;
+  onKeep: () => void;
+}) {
   const undo = useUndoCareerChange();
+  // Held per batch, keyed by its id: what the user opened stays open as the list refreshes.
+  const [open, setOpen] = useState(startsOpen);
+  const busy = keeping || undo.isPending;
   const n = batch.changes.length;
   const count = `${n} change${n === 1 ? "" : "s"}`;
 
@@ -287,37 +360,62 @@ function BatchItem({ batch }: { batch: CareerChangeBatch }) {
   return (
     <li className="space-y-2 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm">
-          <span className="font-medium">{when(batch.created_at)}</span>
-          <span className="text-muted-foreground">
-            {" "}
-            · {batch.source === "claude" ? "by Claude" : "imported"} · {count}
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-1 text-left text-sm"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          <ChevronRight
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-90",
+            )}
+          />
+          <span>
+            <span className="font-medium">{when(batch.created_at)}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              · {batch.source === "claude" ? "by Claude" : "imported"} · {count}
+            </span>
           </span>
-        </p>
+        </button>
         {batch.undone_at ? (
-          <span className="text-xs text-muted-foreground">
-            undone {when(batch.undone_at)}
-          </span>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">
+              undone {when(batch.undone_at)}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={keeping}
+              onClick={onKeep}
+            >
+              {keeping ? "Removing…" : "Remove"}
+            </Button>
+          </div>
         ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={undo.isPending}
-            onClick={onUndo}
-          >
-            {undo.isPending ? "Undoing…" : "Undo"}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={onKeep}>
+              {keeping ? "Keeping…" : "Keep"}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={onUndo}>
+              {undo.isPending ? "Undoing…" : "Undo"}
+            </Button>
+          </div>
         )}
       </div>
-      <ul className={batch.undone_at ? "space-y-1 opacity-60" : "space-y-1"}>
-        {batch.changes.map((change, i) => (
-          <ChangeItem
-            key={`${change.id}-${i}`}
-            change={change}
-            labels={batch.labels}
-          />
-        ))}
-      </ul>
+      {open && (
+        <ul className={batch.undone_at ? "space-y-1 opacity-60" : "space-y-1"}>
+          {batch.changes.map((change, i) => (
+            <ChangeItem
+              key={`${change.id}-${i}`}
+              change={change}
+              labels={batch.labels}
+            />
+          ))}
+        </ul>
+      )}
     </li>
   );
 }
