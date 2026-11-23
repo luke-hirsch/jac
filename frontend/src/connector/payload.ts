@@ -5,7 +5,7 @@
 import type { ExportScope } from "@/lib/export";
 import type { ApplicationRow } from "@/lib/queries/applications";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
-import type { ProfileRow } from "@/lib/queries/profile";
+import type { RenderProfile } from "@/lib/render/build";
 import { fitNotices, type BuiltPdf, type Notice } from "@/lib/render/preview";
 
 /** The parts of an MCP CallToolResult the preview reads. jac answers with one text block of
@@ -20,8 +20,9 @@ export type PreviewPayload = {
   application: ApplicationRow;
   layout: unknown; // the layout's JSON spec as stored, null without a template file
   career: CvEntriesResponse;
-  profile: ProfileRow; // `signature` is a data URL here, or ""
+  profile: RenderProfile; // what the render reads, no signature
   attachments: number; // what the export in jac appends, which the preview can't
+  signature: boolean; // the export in jac signs the letter; the preview can't
   url: string;
 };
 
@@ -71,15 +72,20 @@ export function previewNotices(
   built: BuiltPdf,
   pageBudget: number,
   scope: ExportScope,
-  attachments: number,
+  inJac: { attachments: number; signature: boolean },
 ): Notice[] {
   const out = fitNotices(built, pageBudget);
-  if (scope !== "letter" && attachments > 0) {
+  const n = inJac.attachments;
+  if (scope !== "letter" && n > 0) {
     out.push({
       level: "info",
-      text:
-        `${attachments} attachment${attachments === 1 ? "" : "s"} ` +
-        `${attachments === 1 ? "is" : "are"} added when you export in jac.`,
+      text: `${n} attachment${n === 1 ? " is" : "s are"} added when you export in jac.`,
+    });
+  }
+  if (scope !== "cv" && inJac.signature) {
+    out.push({
+      level: "info",
+      text: "Your signature is added when you export in jac.",
     });
   }
   return out;

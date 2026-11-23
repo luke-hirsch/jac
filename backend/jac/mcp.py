@@ -20,15 +20,15 @@ and `show_application` name the page `ui://jac/preview`, and the Claude app (web
 renders it beside the tool call. The page is the frontend's own renderer, built into one
 self-contained file (`frontend/vite.connector.config.ts`). It runs in Claude's sandbox with no
 session and no network: its only way to jac is `application_preview`, a tool only the page can
-call, through this same connector and token. Clients without MCP Apps ignore the `_meta`.
+call, through this same connector and token. It reads no more than `get_career` already gives
+Claude (privacy §8): no signature image, no attachments. Clients without MCP Apps ignore the
+`_meta`.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
-import mimetypes
 from functools import cache
 from pathlib import Path
 
@@ -217,36 +217,41 @@ def _layout_template(application: JobApplication):
         ) from err
 
 
-def _signature_data_url(profile: UserProfile) -> str:
-    """The signature inline: in Claude's sandbox the page can't fetch the owner-only URL."""
-    signature = profile.signature
-    if not signature:
-        return ""
-    try:
-        with signature.open("rb") as fh:
-            data = fh.read()
-    except OSError as err:
-        log.warning("connector preview: signature unreadable: %s", err)
-        return ""
-    mime = mimetypes.guess_type(signature.name)[0] or "image/png"
-    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+# What the renderer reads of the profile: the sender block, the bio, two display settings. No
+# more goes through Anthropic than `get_career` already sends (privacy §8); the signature image
+# stays in jac, and the page says the export adds it.
+PREVIEW_PROFILE = (
+    "name",
+    "email",
+    "phone",
+    "street",
+    "address_line2",
+    "zip",
+    "city",
+    "country",
+    "website",
+    "linkedin_url",
+    "github_url",
+    "bio",
+    "show_socials",
+    "accent_color",
+)
 
 
 def application_preview(request, args):
     """What the export card renders from, in the shapes the SPA's own endpoints answer
     (applications/<id>/, cv/entries/, profile/), so the page reuses the export's renderer as is.
-    Attachments stay in jac: the page only says how many the export would add."""
+    Attachments and the signature stay in jac: the page says the export adds them."""
     application = _application(request, _pk(args, "application"))
     context = {"request": request}
     profile = UserProfile.objects.select_related("user").get(user=request.user)
+    shown = UserProfileSerializer(profile, context=context).data
     return {
         "application": JobApplicationSerializer(application, context=context).data,
         "layout": _layout_template(application),
         "career": CvSerializer(CV(request.user.pk).entries, context=context).data,
-        "profile": {
-            **UserProfileSerializer(profile, context=context).data,
-            "signature": _signature_data_url(profile),
-        },
+        "profile": {field: shown[field] for field in PREVIEW_PROFILE},
+        "signature": bool(profile.signature),
         # The export skips ids whose file is gone; so does the count.
         "attachments": CvAttachment.objects.filter(
             user=request.user, pk__in=application.attachments or []

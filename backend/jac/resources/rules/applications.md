@@ -128,7 +128,7 @@ renders it, page by page, below the call: the page fit included, so it shows wha
 dropped or shortened. Its notes name what the fit did; take them up with the user (an entry they
 want back, a letter that runs over a page). When the user wants to see a saved application again
 without changing it, call `show_application` with its `id`. The preview can download the PDF;
-attachments and the portfolio QR come only with the export in jac. Where no preview appears (an
+the signature, attachments and the portfolio QR come only with the export in jac. Where no preview appears (an
 app without it), the `url` is the way.
 
 **If jac refuses the token**, it was revoked: the user creates a new one in jac (Account → LLM,
