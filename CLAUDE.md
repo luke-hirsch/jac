@@ -73,7 +73,7 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in eleven guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in ten guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
 - `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` reaches Django now (merged, live). His curls
   against the live names and the Results are left;
@@ -82,13 +82,13 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 - `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
   gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]);
 - `05` to `12`: coded by the AI at his request (2026-11-20, 09 and 10 on 2026-11-21, 11 and 12 on 2026-11-22), summary
-  guides, all merged into `main` and live, his to test on live and log:
+  guides, all merged into `main` and live, his to test on live and log (08 `skill-file-mode` is in `done/`: 12
+  superseded it, nothing left to test):
   - 05 `live-model-catalog`: each key's live model list + the fix for effort on current Claude models;
   - 06 `claude-skill`: write applications with Claude on his own subscription, and have Claude review and improve
     the career data, every batch of edits undoable ([[claude-skill]]);
   - 07 `career-export`: the career and the applications as files, a download and an import each; an import fills
     only an empty career or list ([[career-files]]);
-  - 08 `skill-file-mode`: superseded by 12, file mode is gone; nothing left to test.
   - 09 `career-change-field-names` (deployed by the AI at his request): the changes import 500d on a name `career`
     showed but the import doesn't take (`type` for `job_type`); names are checked first now, a refusal, not a 500.
     His live test runs through the connector.
@@ -113,8 +113,10 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  guides 02 and 05 to 12, all deployed (2026-11-22).
-- **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). Since 2026-11-07 they say `jac.`
+  guides 02 and 05 to 12, all deployed (2026-11-22). After that deploy, one commit on `main` is neither pushed nor
+  deployed: the privacy page drops its menu paths (2026-11-22).
+- **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
+  data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
   (2026-11-14); what the VPS's own logs keep is still open (guide 04). The visitor hash waits on the board. The DNS
