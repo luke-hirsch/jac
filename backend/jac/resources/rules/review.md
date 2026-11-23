@@ -52,7 +52,7 @@ and the public portfolio, which renders from the same entries.
   - a skill an entry clearly used, under another name ("Postgres" in the text, the skill is
     "PostgreSQL");
   - a project that was part of a job (the project's `job`);
-  - a skill that comes from a certification (the skill's `certification`).
+  - a skill that comes from a certification (the certification's `skills`).
 - **Skill hygiene:**
   - near-duplicates;
   - a level the record doesn't support. A skill's `years` count the time the jobs, projects
@@ -89,7 +89,7 @@ and the public portfolio, which renders from the same entries.
     entry's ranking against a posting. On jobs, projects and educations they also give the
     skill its years of use: a certification is a date, not a span, and adds none;
   - project → job;
-  - skill or language → certification.
+  - language → certification.
 
   Skill-to-skill links (`related_skills`, `builds_on`) are the user's own map in jac's skills
   page. jac's selection doesn't read them, so offer them as a tidy-up, not as an improvement to
@@ -131,7 +131,7 @@ Pass the batch to `apply_career_changes` as `changes`:
   - `degree_level` by name (`bachelor`, `master`, …);
   - `job_type` by code (`ft`, `pt`, `ct`, `fl`, `in`, `vl`);
   - a single link as an id or `null`: `"job": "job:3"` on a project, `"certification":
-    "certification:2"` on a skill or language;
+    "certification:2"` on a language;
   - read-only, so never in a change: `id`, `updated_at`, `location` (the user sets it in jac),
     a job's `projects` (set `job` on the project instead), an education's `completed` (it
     follows from `degree_level`) and a skill's `years` and `years_override` (see skill

@@ -23,6 +23,32 @@ describe("invalidateResource", () => {
       expect(keys).toContainEqual(["jac", "cv-entries"]);
     },
   );
+
+  it.each<[ResourceKey, ResourceKey]>([
+    ["skills", "certifications"],
+    ["certifications", "skills"],
+  ])(
+    "a write to %s reaches %s too: both list the one link between them",
+    async (resource, other) => {
+      const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+      await invalidateResource(
+        { invalidateQueries } as unknown as QueryClient,
+        resource,
+      );
+      const keys = invalidateQueries.mock.calls.map(([f]) => f.queryKey);
+      expect(keys).toContainEqual(["jac", other]);
+    },
+  );
+
+  it("a write to jobs leaves the skills lists alone", async () => {
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    await invalidateResource(
+      { invalidateQueries } as unknown as QueryClient,
+      "jobs",
+    );
+    const keys = invalidateQueries.mock.calls.map(([f]) => f.queryKey);
+    expect(keys).not.toContainEqual(["jac", "skills"]);
+  });
 });
 
 const EMPTY: CvEntriesResponse = {

@@ -258,7 +258,7 @@ class CertificationSerializer(
 class SkillSerializer(
     FavouriteLimitMixin, ScopeDomainsToUserMixin, serializers.ModelSerializer
 ):
-    user_scoped_fields = ("certification", "related_skills", "builds_on")
+    user_scoped_fields = ("certifications", "related_skills", "builds_on")
     domain_scoped_fields = ("domains",)
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -269,10 +269,11 @@ class SkillSerializer(
         required=False,
     )
 
-    certification = serializers.PrimaryKeyRelatedField(
+    # The reverse of `Certification.skills`: the same link, editable from either page.
+    certifications = serializers.PrimaryKeyRelatedField(
+        many=True,
         queryset=Certification.objects.all(),
         required=False,
-        allow_null=True,
     )
 
     # Directed prerequisite edge (symmetrical=False). `builds_on` is the writable
@@ -296,7 +297,7 @@ class SkillSerializer(
             "category",
             "domains",
             "first_used",
-            "certification",
+            "certifications",
             "years_of_experience_override",
             "years_of_experience",
             "description",

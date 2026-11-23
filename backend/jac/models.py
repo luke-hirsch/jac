@@ -361,9 +361,8 @@ class Skill(CvEntry):
         blank=True,
     )
     years_of_experience_override = models.IntegerField(null=True, blank=True)
-    certification = models.ForeignKey(
-        Certification, on_delete=models.SET_NULL, null=True, blank=True
-    )
+    # The certifications that back this skill are `certifications`: the reverse of
+    # `Certification.skills`, the one link between the two.
 
     objects = SkillManager()
 

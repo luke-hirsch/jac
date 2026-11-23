@@ -69,7 +69,8 @@ export type SkillRow = {
   builds_on: number[];
   enables: number[];
   first_used: string | null;
-  certification: number | null;
+  // The reverse of a certification's `skills`: the one link between the two.
+  certifications: number[];
   years_of_experience: number | null;
   years_of_experience_override: number | null;
   description: string;
@@ -214,12 +215,22 @@ export function useDetail<T>(key: ResourceKey, id: number | undefined) {
   });
 }
 
+/** Resources whose rows show the same link from the other side: a skill's `certifications`
+ *  are a certification's `skills`, so a write to one changes what the other lists. */
+export const LINKED_RESOURCES: Partial<Record<ResourceKey, ResourceKey[]>> = {
+  skills: ["certifications"],
+  certifications: ["skills"],
+};
+
 /** `cv-entries` holds the same rows again under its own key (the editor, the export and the
  *  applications page's "is there a career yet?" read that dump), so a write to any resource has
  *  to reach it too. */
 export function invalidateResource(qc: QueryClient, key: ResourceKey) {
   return Promise.all([
     qc.invalidateQueries({ queryKey: ["jac", key] }),
+    ...(LINKED_RESOURCES[key] ?? []).map((other) =>
+      qc.invalidateQueries({ queryKey: ["jac", other] }),
+    ),
     qc.invalidateQueries({ queryKey: CV_ENTRIES_KEY }),
   ]);
 }

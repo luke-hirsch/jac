@@ -100,7 +100,6 @@ def _skills(user: User) -> list[dict]:
             "category": s.category,
             "first_used": s.first_used,
             "years_of_experience_override": s.years_of_experience_override,
-            "certification": s.certification.name if s.certification else None,
             "domains": _names(s.domains),
             "related_skills": _names(s.related_skills),
             "builds_on": _names(s.builds_on),

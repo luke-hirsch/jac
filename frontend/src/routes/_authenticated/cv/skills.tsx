@@ -91,7 +91,7 @@ const schema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .or(z.literal("")),
-  certification: z.number().nullable(),
+  certifications: z.array(z.number()),
   years_of_experience_override: z.number().int().min(0).nullable(),
   description: z.string(),
   favourite: z.boolean(),
@@ -507,7 +507,7 @@ function SkillEditor({
         related_skills: row.related_skills,
         builds_on: row.builds_on,
         first_used: row.first_used ?? "",
-        certification: row.certification,
+        certifications: row.certifications,
         years_of_experience_override: row.years_of_experience_override,
         description: row.description,
         favourite: row.favourite,
@@ -520,7 +520,7 @@ function SkillEditor({
         related_skills: [],
         builds_on: [],
         first_used: "",
-        certification: null,
+        certifications: [],
         years_of_experience_override: null,
         description: "",
         favourite: false,
@@ -679,10 +679,10 @@ function SkillEditor({
         </form.Field>
       </div>
 
-      <form.Field name="certification">
+      <form.Field name="certifications">
         {(f) => (
           <div className="space-y-1">
-            <Label>Certification</Label>
+            <Label>Certifications</Label>
             <CertificationPicker
               value={f.state.value}
               onChange={(v) => {

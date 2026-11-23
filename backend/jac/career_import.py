@@ -326,7 +326,6 @@ def _import_skills(user: User, items: list[dict]) -> int:
             category=item.get("category", Skill.Category.technical),
             first_used=_parse_date(item.get("first_used")),
             years_of_experience_override=item.get("years_of_experience_override"),
-            certification=_resolve_certification(user, item.get("certification")),
             description=item.get("description", ""),
             favourite=item.get("favourite", False),
         )
