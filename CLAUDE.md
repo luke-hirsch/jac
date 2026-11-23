@@ -73,7 +73,7 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in ten guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in fifteen guides in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
 - `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` reaches Django now (merged, live). His curls
   against the live names and the Results are left;
@@ -99,11 +99,24 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
     Claude's settings, the couch test ([[claude-skill]]).
   - 11 `style-rules` (deployed by the AI at his request): per-user writing rules (Account → Personality), followed by
     jac's writer, the editor's AI tools and Claude; jac checks dashes and "not X but Y" on save, on a run and live in
-    the letter editor, as warnings. Also: a skill's years count from `first_used` whenever it's set.
+    the letter editor, as warnings.
   - 12 `connector-only` (deployed by the AI at his request): the connector is the only way Claude reaches jac. File
     mode, the script and the Claude imports are gone; the rules live on the server (`jac/resources/rules/`), the
     uploaded skill is one file that points at the connector, and the Claude page is a Connectors section on Account
     → LLM. His steps: re-upload the skill in Claude, the couch test. ChatGPT later ([[claude-skill]]).
+- `13` to `17`: coded by the AI at his request (2026-11-23), from the Claude app's review of his career through the
+  connector. Summary guides, merged into `main` on his word ("we test live"), suites green first, **not pushed or
+  deployed**. His to test live and log:
+  - 13 `skill-years`: a skill's years are the time its linked jobs, projects and educations ran (overlaps once,
+    from `first_used` on, the time from `first_used` to the first link counted), no longer the years since the
+    earliest start; the override still wins and the connector shows it;
+  - 14 `skill-certification-link`: one link, the certification's `skills`; `Skill.certification` is gone
+    (migration `jac.0006` moves the links);
+  - 15 `review-noise`: fewer false findings, an empty bio or website is one, dry runs name new skills `new:<ref>`;
+  - 16 `change-log-keep`: Keep / Keep all / Remove in the change log, older batches collapsed;
+  - 17 `domain-manager`: rename, merge and delete his own domains (CV pages, the domain filter).
+  - Later: review dismissals (a "no" to a `consider` finding that sticks). Parked in guide 04's spirit: draft
+    entries Claude proposes and he confirms.
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
@@ -113,8 +126,9 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  guides 02 and 05 to 12, all deployed (2026-11-22). After that deploy, one commit on `main` is neither pushed nor
-  deployed: the privacy page drops its menu paths (2026-11-22).
+  guides 02 and 05 to 12, all deployed (2026-11-22). Since that deploy, on `main` but neither pushed nor deployed:
+  the privacy page drops its menu paths (2026-11-22), and guides 13 to 17 (2026-11-23; the deploy runs migration
+  `jac.0006`, which moves every skill's certification link into the certification).
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
   data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the

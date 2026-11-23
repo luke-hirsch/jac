@@ -121,6 +121,22 @@ def freeze_link(application) -> None:
     link.save(update_fields=["content", "updated_at"])
 
 
+def carry_domain_rename(owner, old: str, new: str) -> None:
+    """A renamed or merged domain, carried into the owner's links. A link keeps its explore-more
+    scope by name (`content["domains"]`), so without this a rename would quietly drop the page
+    back to the favourites; a frozen link keeps the selection the recruiter saw."""
+    key = old.strip().lower()
+    for link in owner.portfolio_links.filter(content__has_key="domains"):
+        names = link.content.get("domains") or []
+        if not any(isinstance(n, str) and n.strip().lower() == key for n in names):
+            continue
+        swapped = [
+            new if isinstance(n, str) and n.strip().lower() == key else n for n in names
+        ]
+        link.content = {**link.content, "domains": list(dict.fromkeys(swapped))}
+        link.save(update_fields=["content", "updated_at"])
+
+
 def site_owner() -> User | None:
     """The site owner: the single configured user (`PORTFOLIO_OWNER_USERNAME`) the apex landing
     presents and who answers for the legal pages. Case-insensitive; never the system

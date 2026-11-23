@@ -143,6 +143,8 @@ Pass the batch to `apply_career_changes` as `changes`:
   - `skills`, `related_skills` and `builds_on` take skill ids, or `new:<ref>` for a skill this
     batch creates;
   - `domains` takes names, from the `domains` list in the career (jac doesn't create domains).
+    A misspelt or duplicate domain is the user's to rename or merge in jac (Manage domains, in
+    the domain filter on the CV pages); meanwhile a batch can re-tag entries.
 - **`why`:** one line. The user sees it in jac's change log.
 - **`new: "skill"`** with a `ref` that's unique in the batch creates a skill. Other changes link
   it as `new:<ref>`, and the answer maps each `new:<ref>` to the new skill's id.

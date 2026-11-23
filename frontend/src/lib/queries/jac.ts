@@ -15,6 +15,7 @@ export type DomainRow = {
   name: string;
   description: string;
   is_default: boolean;
+  uses: number; // how many of the user's entries carry it
 };
 
 export type LocationRow = {
@@ -277,6 +278,81 @@ export function useBulkDestroy(key: ResourceKey) {
         body: JSON.stringify({ action: "delete", ids }),
       }),
     onSuccess: () => invalidateResource(qc, key),
+  });
+}
+
+/* ---------- domains: rename, merge, delete ---------- */
+
+/** The resources whose rows hold domain ids. */
+const DOMAIN_TAGGED: ResourceKey[] = [
+  "jobs",
+  "projects",
+  "education",
+  "certifications",
+  "skills",
+];
+
+export type DomainWrite = "rename" | "merge" | "delete";
+
+/** A domain write reaches past the domain lists. A merge or a delete re-tags entries and
+ *  portfolio blocks, which hold domain ids; a rename or a merge changes the portfolio links,
+ *  which scope by name. */
+export function invalidateAfterDomainWrite(
+  qc: QueryClient,
+  write: DomainWrite,
+) {
+  const keys: (readonly unknown[])[] = [["jac", "domains"]];
+  if (write !== "delete") keys.push(["portfolio", "links"]);
+  if (write !== "rename") {
+    for (const key of DOMAIN_TAGGED) keys.push(["jac", key]);
+    keys.push(CV_ENTRIES_KEY, ["portfolio", "blocks"]);
+  }
+  return Promise.all(
+    keys.map((queryKey) => qc.invalidateQueries({ queryKey })),
+  );
+}
+
+export function useRenameDomain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api<DomainRow>(`${R.domains.url}${id}/`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => invalidateAfterDomainWrite(qc, "rename"),
+  });
+}
+
+/** Called with a domain that's gone, and where a merge took it (null for a delete). Before the
+ *  refetch: a list still filtered on the gone id would come back a 400. */
+export type OnDomainGone = (id: number, replacement: number | null) => void;
+
+/** Answers with the target: the source is gone. */
+export function useMergeDomain(onGone?: OnDomainGone) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, into }: { id: number; into: number }) =>
+      api<DomainRow>(`${R.domains.url}${id}/merge/`, {
+        method: "POST",
+        body: JSON.stringify({ into }),
+      }),
+    onSuccess: (target, { id }) => {
+      onGone?.(id, target.id);
+      return invalidateAfterDomainWrite(qc, "merge");
+    },
+  });
+}
+
+export function useDeleteDomain(onGone?: OnDomainGone) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<void>(`${R.domains.url}${id}/`, { method: "DELETE" }),
+    onSuccess: (_data, id) => {
+      onGone?.(id, null);
+      return invalidateAfterDomainWrite(qc, "delete");
+    },
   });
 }
 

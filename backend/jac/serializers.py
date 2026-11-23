@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import TypeVar
 
 from django.conf import settings
+from django.db.models import Value
+from django.db.models.functions import Lower, Trim
 from django.urls import reverse
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
@@ -140,11 +142,12 @@ class ScopeDomainsToUserMixin(ScopeRelatedToUserMixin):
 class DomainSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     is_default = serializers.SerializerMethodField()
+    uses = serializers.SerializerMethodField()
 
     class Meta:
         model = Domain
-        fields = ["id", "name", "description", "is_default", "user"]
-        read_only_fields = ["id", "is_default"]
+        fields = ["id", "name", "description", "is_default", "uses", "user"]
+        read_only_fields = ["id", "is_default", "uses"]
         validators = [
             UniqueTogetherValidator(
                 queryset=Domain.objects.all(),
@@ -154,6 +157,45 @@ class DomainSerializer(serializers.ModelSerializer):
 
     def get_is_default(self, obj) -> bool:
         return obj.user.username == settings.SYSTEM_USER_USERNAME
+
+    def get_uses(self, obj) -> int:
+        # The view annotates it (`domain_uses`); a domain just created has no entries yet.
+        return getattr(obj, "uses", 0)
+
+    def validate_name(self, value):
+        """Refuse a name the user already sees, their own or a default, in any case. Two domains
+        of one name would show twice in every picker, and the connector picks domains by name,
+        so one of them would be out of its reach. Renaming onto an existing domain is what
+        merging is for."""
+        user = self.context["request"].user
+        seen = (
+            Domain.objects.for_user(user)
+            .annotate(key=Lower(Trim("name")))
+            .filter(key=Lower(Value(value)))
+        )
+        if self.instance is not None:
+            seen = seen.exclude(pk=self.instance.pk)
+        clash = seen.first()
+        if clash is None:
+            return value
+        own = clash.user_id == user.pk
+        where = "already exists" if own else "is one of jac's defaults"
+        then = "merge into it instead" if self.instance else "pick it instead"
+        raise serializers.ValidationError(f'"{clash.name}" {where}: {then}.')
+
+
+class DomainMergeSerializer(ScopeDomainsToUserMixin, serializers.Serializer):
+    """`into`: where a merge moves the tags. Any domain the user sees, a default too, but not
+    the one being merged (the view passes it as `source`)."""
+
+    domain_scoped_fields = ("into",)
+
+    into = serializers.PrimaryKeyRelatedField(queryset=Domain.objects.none())
+
+    def validate_into(self, target):
+        if target.pk == self.context["source"].pk:
+            raise serializers.ValidationError("A domain can't be merged into itself.")
+        return target
 
 
 class LocationSerializer(serializers.ModelSerializer):
