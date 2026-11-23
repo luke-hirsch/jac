@@ -184,9 +184,6 @@ def _skill(s) -> dict:
         # Skill-to-skill links, by id: what this one is related to, and what it builds on.
         "related_skills": [f"skill:{o.pk}" for o in s.related_skills.all()],
         "builds_on": [f"skill:{o.pk}" for o in s.builds_on.all()],
-        "certification": (
-            f"certification:{s.certification_id}" if s.certification_id else None
-        ),
         "favourite": s.favourite,
         "updated_at": _stamp(s),
     }

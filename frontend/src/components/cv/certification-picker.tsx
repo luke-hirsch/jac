@@ -17,32 +17,42 @@ import {
 } from "@/components/ui/popover";
 
 /**
- * Single-select FK picker over the user's certifications — replaces the raw
- * numeric id input on the skill editor. No inline create: a certification needs
- * name + issuer (more than a combobox should ask), so create them on
+ * Multi-select picker over the user's certifications, for the skill editor. It
+ * writes the skill's `certifications`: the same link as a certification's
+ * `skills`, edited from the skill's side. No inline create: a certification
+ * needs name + issuer (more than a combobox should ask), so create them on
  * `/cv/certifications`.
  */
 export function CertificationPicker({
   value,
   onChange,
 }: {
-  value: number | null;
-  onChange: (next: number | null) => void;
+  value: number[];
+  onChange: (next: number[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const options = useList<CertificationRow>("certifications", { search });
   const base = useList<CertificationRow>("certifications", {});
   const rows = options.data?.results ?? [];
-  const current = (base.data?.results ?? []).find((r) => r.id === value);
+  const chosen = (base.data?.results ?? []).filter((r) => value.includes(r.id));
+
+  const toggle = (id: number) =>
+    onChange(
+      value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
+    );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="justify-start w-full">
-          {current
-            ? `${current.name} — ${current.issuer}`
-            : "Pick certification…"}
+        <Button
+          type="button"
+          variant="outline"
+          className="h-auto min-h-9 w-full justify-start whitespace-normal text-left"
+        >
+          {chosen.length
+            ? chosen.map((r) => r.name).join(", ")
+            : "Pick certifications…"}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-0">
@@ -55,28 +65,12 @@ export function CertificationPicker({
           <CommandList>
             <CommandEmpty>No matches.</CommandEmpty>
             <CommandGroup>
-              {value !== null && (
-                <CommandItem
-                  onSelect={() => {
-                    onChange(null);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="text-muted-foreground">Clear</span>
-                </CommandItem>
-              )}
               {rows.map((r) => (
-                <CommandItem
-                  key={r.id}
-                  onSelect={() => {
-                    onChange(r.id);
-                    setOpen(false);
-                  }}
-                >
+                <CommandItem key={r.id} onSelect={() => toggle(r.id)}>
                   <Check
                     className={
                       "size-4 mr-2 " +
-                      (r.id === value ? "opacity-100" : "opacity-0")
+                      (value.includes(r.id) ? "opacity-100" : "opacity-0")
                     }
                   />
                   {r.name} — {r.issuer}

@@ -75,11 +75,7 @@ class CV:
         }
 
     def _get_skills(self) -> list[Skill]:
-        qs = (
-            Skill.objects.filter(user=self.user)
-            .prefetch_related("domains")
-            .select_related("certification")
-        )
+        qs = Skill.objects.filter(user=self.user).prefetch_related("domains")
         if self.domains:
             qs = qs.filter(domains__name__in=self.domains)
         if self.min_skill_proficiency in self.PROFICIENCY_ORDER:
@@ -157,15 +153,14 @@ class CV:
                 text += f" | domains: {domains}"
             if s.description:
                 text += f" — {s.description[:200]}"
-            refs = []
-            if s.certification_id:
-                refs.append(f"certification:{s.certification_id}")
             out.append(
                 {
                     "id": f"skill:{s.pk}",
                     "type": "skill",
                     "text": text,
-                    "refs": refs,
+                    # A skill's certifications ref it from their side (`Certification.skills`);
+                    # the selection reads every ref both ways.
+                    "refs": [],
                     "favourite": s.favourite,
                 }
             )

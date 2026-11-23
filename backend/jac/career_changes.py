@@ -81,10 +81,10 @@ FIELDS = {
         "first_used",
         "description",
         "favourite",
-        "certification",
     },
     "language": {"name", "fluency", "description", "favourite", "certification"},
 }
+# A skill's certifications are set from the certification (its `skills`), the one link.
 LINKS = {"job": "job", "certification": "certification"}
 # The lists add / remove may touch, per type: skill ids, or domain names.
 LISTS = {

@@ -248,7 +248,7 @@ def _check_skills(e: dict, user) -> list[dict]:
     backed = {
         s.pk for section in _LINKING for obj in e[section] for s in obj.skills.all()
     }
-    unbacked = [s for s in e["skills"] if s.pk not in backed and not s.certification_id]
+    unbacked = [s for s in e["skills"] if s.pk not in backed]
     if unbacked:
         out.append(
             _finding(

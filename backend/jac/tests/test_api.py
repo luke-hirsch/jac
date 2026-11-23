@@ -1435,6 +1435,57 @@ class SkillYearsApiTests(APITestCase):
         self.assertEqual(r.data["count"], 4)
 
 
+class SkillCertificationLinkApiTests(APITestCase):
+    """One link between a skill and a certification: the certification's `skills`, which the
+    skill editor writes from its side as `certifications`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        cls.shell = Skill.objects.create(user=cls.user, name="Shell")
+        cls.cert = Certification.objects.create(
+            user=cls.user, name="Shell Scripting", issuer="Udemy"
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_the_skill_page_and_the_certification_page_show_the_same_link(self):
+        r = self.client.patch(
+            f"/api/jac/skills/{self.shell.pk}/",
+            {"certifications": [self.cert.pk]},
+            format="json",
+        )
+        self.assertEqual(r.data["certifications"], [self.cert.pk])
+        cert = self.client.get(f"/api/jac/certifications/{self.cert.pk}/").data
+        self.assertEqual(cert["skills"], [self.shell.pk])
+        self.client.patch(
+            f"/api/jac/certifications/{self.cert.pk}/", {"skills": []}, format="json"
+        )
+        skill = self.client.get(f"/api/jac/skills/{self.shell.pk}/").data
+        self.assertEqual(skill["certifications"], [])
+
+    def test_a_new_skill_takes_its_certifications(self):
+        r = self.client.post(
+            "/api/jac/skills/",
+            {"name": "Bash", "certifications": [self.cert.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIn(r.data["id"], self.cert.skills.values_list("pk", flat=True))
+
+    def test_someone_elses_certification_is_refused(self):
+        theirs = Certification.objects.create(user=self.other, name="X", issuer="Y")
+        r = self.client.patch(
+            f"/api/jac/skills/{self.shell.pk}/",
+            {"certifications": [theirs.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(theirs.skills.exists())
+
+
 class SectionsOffApiTests(APITestCase):
     """Whole sections switched off for one application. Unknown keys are a 400, not a
     silent no-op: a typo that quietly does nothing is the worst failure mode here."""
@@ -2621,6 +2672,29 @@ class ConnectorReviewTests(_McpCase):
         )
         self.assertNotIn("Theirs", json.dumps(self._review()))
 
+    def test_a_skill_linked_from_its_certification_page_is_one_link(self):
+        """HTML pointed at its Udemy certificate from the skill, the certificate listed no
+        skills, and the review flagged both. Set from the skill's side, it's the
+        certification's own list now."""
+        html = Skill.objects.create(user=self.user, name="HTML")
+        udemy = Certification.objects.create(
+            user=self.user,
+            name="Web Development",
+            issuer="Udemy",
+            url="https://udemy.com/c/1",
+        )
+        self.client.force_login(self.user)
+        r = self.client.patch(
+            f"/api/jac/skills/{html.pk}/",
+            {"certifications": [udemy.pk]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(list(udemy.skills.all()), [html])
+        data = self._review()
+        self.assertFalse(self._about(data, f"skill:{html.pk}", "skill_unbacked"))
+        self.assertFalse(self._about(data, f"certification:{udemy.pk}", "no_skills"))
+
 
 class ConnectorCareerChangeTests(_McpCase):
     """Edits the user agreed to: all or nothing, through the entries' own serializers, logged
@@ -2749,6 +2823,33 @@ class ConnectorCareerChangeTests(_McpCase):
         data, _ = self._apply(bad["type"])
         self.assertIn("job_type", data["changes"]["0"]["type"][0])
         self.assertFalse(CareerChange.objects.exists())
+
+    def test_a_skills_certification_is_linked_from_the_certification(self):
+        """One link: `certification` on a skill is gone, and the certification's `skills`
+        takes it."""
+        cert = Certification.objects.create(
+            user=self.user, name="Python Basics", issuer="Udemy"
+        )
+        skill = self._career()["entries"]["skills"][0]
+        self.assertNotIn("certification", skill)
+        data, is_error = self._apply(
+            {
+                "id": f"skill:{self.python.pk}",
+                "seen": self._seen(self.python),
+                "set": {"certification": f"certification:{cert.pk}"},
+            }
+        )
+        self.assertTrue(is_error, data)
+        self.assertIn("certification", data["changes"]["0"])
+        data, is_error = self._apply(
+            {
+                "id": f"certification:{cert.pk}",
+                "seen": self._seen(cert),
+                "add": {"skills": [f"skill:{self.python.pk}"]},
+            }
+        )
+        self.assertFalse(is_error, data)
+        self.assertEqual(list(self.python.certifications.all()), [cert])
 
     def test_a_dry_run_answers_and_changes_nothing(self):
         data, is_error = self._apply(self._describe(), dry_run=True)
