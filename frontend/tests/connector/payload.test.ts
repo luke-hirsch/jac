@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   applicationIdOf,
   errorText,
-  fileStem,
   previewNotices,
   previewPayload,
   refusalOf,
@@ -140,10 +139,6 @@ describe("the notes under the pages", () => {
 });
 
 describe("the download", () => {
-  it("is named like the export card's file", () => {
-    expect(fileStem(7, "complete")).toBe("application-7-complete");
-  });
-
   it("hands over standard base64, also past one chunk", () => {
     const small = new TextEncoder().encode("%PDF-1.7");
     expect(toBase64(small)).toBe(Buffer.from(small).toString("base64"));

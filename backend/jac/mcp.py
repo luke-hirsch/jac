@@ -217,11 +217,13 @@ def _layout_template(application: JobApplication):
         ) from err
 
 
-# What the renderer reads of the profile: the sender block, the bio, two display settings. No
-# more goes through Anthropic than `get_career` already sends (privacy §8); the signature image
-# stays in jac, and the page says the export adds it.
+# What the renderer reads of the profile: the sender block, the bio, two display settings, and
+# the full name the download is named with (lib/export.ts `exportStem`). Contact details, which
+# privacy §8 lists; the signature image stays in jac, and the page says the export adds it.
 PREVIEW_PROFILE = (
     "name",
+    "first_name",
+    "last_name",
     "email",
     "phone",
     "street",

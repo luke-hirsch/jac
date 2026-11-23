@@ -33,6 +33,7 @@ import {
   downloadText,
   exportBlocker,
   exportJson,
+  exportStem,
   letterToMarkdown,
   type ExportFormat,
   type ExportScope,
@@ -67,7 +68,7 @@ export function ExportCard({
 
   // Blank sender fields fall back to the user profile (same rule as the editor).
   const metaOf = (row: ApplicationRow) => exportMeta(row, profile.data);
-  const stem = `application-${app.id}-${scope}`;
+  const stem = exportStem(scope, app, profile.data);
 
   /** The row an export reads: the server copy, saved first if the editor is ahead of it, so
    *  the file holds what's on screen. The save's answer, not the `app` prop: that belongs to
