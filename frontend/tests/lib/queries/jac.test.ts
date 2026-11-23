@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   hasSampleEntries,
+  invalidateAfterDomainWrite,
   invalidateResource,
   isCareerEmpty,
   type CvEntriesResponse,
+  type DomainWrite,
   type JobRow,
   type ResourceKey,
 } from "@/lib/queries/jac";
@@ -48,6 +50,48 @@ describe("invalidateResource", () => {
     );
     const keys = invalidateQueries.mock.calls.map(([f]) => f.queryKey);
     expect(keys).not.toContainEqual(["jac", "skills"]);
+  });
+});
+
+describe("invalidateAfterDomainWrite", () => {
+  async function invalidated(write: DomainWrite) {
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    await invalidateAfterDomainWrite(
+      { invalidateQueries } as unknown as QueryClient,
+      write,
+    );
+    return invalidateQueries.mock.calls.map(([f]) => f.queryKey);
+  }
+  const TAGGED = [
+    ["jac", "jobs"],
+    ["jac", "projects"],
+    ["jac", "education"],
+    ["jac", "certifications"],
+    ["jac", "skills"],
+    ["jac", "cv-entries"],
+    ["portfolio", "blocks"],
+  ];
+
+  it.each<DomainWrite>(["merge", "delete"])(
+    "a %s reaches every row that holds domain ids",
+    async (write) => {
+      const keys = await invalidated(write);
+      expect(keys).toContainEqual(["jac", "domains"]);
+      for (const key of TAGGED) expect(keys).toContainEqual(key);
+    },
+  );
+
+  it("a rename leaves the entries alone: they hold ids, not names", async () => {
+    const keys = await invalidated("rename");
+    expect(keys).toContainEqual(["jac", "domains"]);
+    for (const key of TAGGED) expect(keys).not.toContainEqual(key);
+  });
+
+  it("a rename or a merge reaches the portfolio links, which scope by name", async () => {
+    const links = ["portfolio", "links"];
+    expect(await invalidated("rename")).toContainEqual(links);
+    expect(await invalidated("merge")).toContainEqual(links);
+    expect(await invalidated("delete")).not.toContainEqual(links);
   });
 });
 

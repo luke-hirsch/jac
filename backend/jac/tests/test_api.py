@@ -68,7 +68,7 @@ from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
-from spa.models import PersonalityProfile
+from spa.models import PersonalityProfile, PortfolioBlock, PortfolioLink
 
 from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
 
@@ -2144,6 +2144,172 @@ class BulkActionShapeTests(APITestCase):
         r = self._patch_domains(add=[self.domain.pk])
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(list(self.skill.domains.all()), [self.domain])
+
+
+# --- [fullstack]-domain-manager: rename, merge and delete a domain -------------------------
+
+DOMAINS_URL = "/api/jac/domains/"
+
+
+class DomainManageApiTests(APITestCase):
+    """The user's own domains can be renamed (PATCH), merged into another (`merge/`) or deleted;
+    a default is at most a merge's target. `uses` is what makes a typo stand out in the list."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+        system, _ = User.objects.get_or_create(
+            username=dj_settings.SYSTEM_USER_USERNAME, defaults={"is_active": False}
+        )
+        cls.fashion = Domain.objects.create(user=cls.user, name="fashion")
+        cls.typo = Domain.objects.create(user=cls.user, name="fahio")
+        cls.music = Domain.objects.create(user=system, name="music")
+        cls.theirs = Domain.objects.create(user=cls.other, name="audio")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _tag_everything(self, domain):
+        """One entry of every kind that carries domains, each tagged with `domain`."""
+        entries = [
+            Job.objects.create(
+                user=self.user, title="Dev", company="Acme", started="2020-01-01"
+            ),
+            Project.objects.create(user=self.user, name="Shop"),
+            Education.objects.create(
+                user=self.user, institution="FU Berlin", started="2012-10-01"
+            ),
+            Certification.objects.create(user=self.user, name="AWS SAA", issuer="AWS"),
+            Skill.objects.create(user=self.user, name="Python"),
+            PortfolioBlock.objects.create(user=self.user, kind="text", body="hi"),
+        ]
+        for entry in entries:
+            entry.domains.add(domain)
+        return entries
+
+    def _merge(self, source, into):
+        return self.client.post(
+            f"{DOMAINS_URL}{source.pk}/merge/", {"into": into}, format="json"
+        )
+
+    def _rename(self, domain, name):
+        return self.client.patch(
+            f"{DOMAINS_URL}{domain.pk}/", {"name": name}, format="json"
+        )
+
+    def _uses(self):
+        r = self.client.get(DOMAINS_URL)
+        self.assertEqual(r.status_code, 200, r.data)
+        return {d["name"]: d["uses"] for d in r.data["results"]}
+
+    # merge
+
+    def test_a_merge_moves_every_link_and_deletes_the_source(self):
+        entries = self._tag_everything(self.typo)
+        entries[0].domains.add(self.fashion)  # had both: keeps one link
+        r = self._merge(self.typo, self.fashion.pk)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["id"], self.fashion.pk)
+        self.assertEqual(r.data["uses"], len(entries))
+        self.assertFalse(Domain.objects.filter(pk=self.typo.pk).exists())
+        for entry in entries:
+            with self.subTest(entry=type(entry).__name__):
+                self.assertEqual(list(entry.domains.all()), [self.fashion])
+
+    def test_a_merge_into_a_default_works(self):
+        job, *_ = self._tag_everything(self.typo)
+        r = self._merge(self.typo, self.music.pk)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertTrue(r.data["is_default"])
+        self.assertEqual(list(job.domains.all()), [self.music])
+        self.assertFalse(Domain.objects.filter(pk=self.typo.pk).exists())
+
+    def test_a_default_or_someone_elses_domain_cant_be_merged(self):
+        for source in (self.music, self.theirs):
+            with self.subTest(source=source.name):
+                self.assertEqual(self._merge(source, self.fashion.pk).status_code, 404)
+        self.assertEqual(
+            Domain.objects.filter(pk__in=[self.music.pk, self.theirs.pk]).count(), 2
+        )
+
+    def test_a_merge_into_itself_is_a_400(self):
+        r = self._merge(self.typo, self.typo.pk)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("into", r.data)
+        self.assertTrue(Domain.objects.filter(pk=self.typo.pk).exists())
+
+    def test_a_merge_into_a_domain_the_user_cant_see_is_a_400(self):
+        for into in (self.theirs.pk, 0, "x", None, True):
+            with self.subTest(into=into):
+                self.assertEqual(self._merge(self.typo, into).status_code, 400)
+        self.assertTrue(Domain.objects.filter(pk=self.typo.pk).exists())
+
+    def test_a_merge_carries_the_name_into_portfolio_links(self):
+        link = PortfolioLink.objects.create(
+            user=self.user, slug="for-acme", content={"domains": ["Fahio", "fashion"]}
+        )
+        self._merge(self.typo, self.fashion.pk)
+        link.refresh_from_db()
+        self.assertEqual(link.content["domains"], ["fashion"])
+
+    # rename
+
+    def test_a_rename_answers_with_the_new_name_and_its_uses(self):
+        self._tag_everything(self.typo)
+        r = self._rename(self.typo, "fashion design")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual((r.data["name"], r.data["uses"]), ("fashion design", 6))
+
+    def test_a_rename_to_a_name_the_user_already_sees_is_a_400(self):
+        for name in ("Fashion", " MUSIC "):
+            with self.subTest(name=name):
+                r = self._rename(self.typo, name)
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("merge into it", r.data["name"][0])
+        self.typo.refresh_from_db()
+        self.assertEqual(self.typo.name, "fahio")
+
+    def test_a_rename_may_change_its_own_case_and_take_someone_elses_name(self):
+        self.assertEqual(self._rename(self.typo, "Fahio").status_code, 200)
+        self.assertEqual(self._rename(self.typo, "Audio").status_code, 200)
+
+    def test_a_new_domain_with_a_name_the_user_already_sees_is_a_400(self):
+        r = self.client.post(DOMAINS_URL, {"name": "Music"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("pick it", r.data["name"][0])
+
+    def test_a_rename_carries_the_name_into_portfolio_links(self):
+        link = PortfolioLink.objects.create(
+            user=self.user, slug="for-acme", content={"domains": ["fahio", "music"]}
+        )
+        self._rename(self.typo, "fashion design")
+        link.refresh_from_db()
+        self.assertEqual(link.content["domains"], ["fashion design", "music"])
+
+    # delete and uses
+
+    def test_a_delete_untags_every_entry(self):
+        entries = self._tag_everything(self.typo)
+        r = self.client.delete(f"{DOMAINS_URL}{self.typo.pk}/")
+        self.assertEqual(r.status_code, 204)
+        for entry in entries:
+            with self.subTest(entry=type(entry).__name__):
+                self.assertFalse(entry.domains.exists())
+
+    def test_uses_counts_the_users_own_entries_across_every_kind(self):
+        self._tag_everything(self.typo)
+        # A second job: per-kind counts add up, they don't multiply.
+        ops = Job.objects.create(
+            user=self.user, title="Ops", company="Acme", started="2021-01-01"
+        )
+        ops.domains.add(self.typo, self.music)
+        theirs = Job.objects.create(
+            user=self.other, title="Dev", company="Beta", started="2020-01-01"
+        )
+        theirs.domains.add(self.music)
+        uses = self._uses()
+        self.assertEqual((uses["fahio"], uses["music"], uses["fashion"]), (7, 1, 0))
 
 
 # --- [fullstack]-claude-connector: the jac connector, the only way Claude reaches jac ---------

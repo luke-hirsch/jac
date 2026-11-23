@@ -5,9 +5,9 @@ from uuid import uuid4
 from django.conf import settings
 from django.contrib.postgres.aggregates import JSONBAgg
 from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models import OuterRef, Subquery, UniqueConstraint
-from django.db.models.functions import JSONObject
+from django.db import models, transaction
+from django.db.models import Count, OuterRef, Subquery, UniqueConstraint, Value
+from django.db.models.functions import Coalesce, JSONObject
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -189,6 +189,64 @@ class Domain(models.Model):
 
     def __str__(self):
         return self.name
+
+    def merge_into(self, target: "Domain") -> None:
+        """Give the owner's entries tagged with this domain `target` instead, then delete this
+        one. Through the M2M tables, so it's one read and one insert per relation however many
+        entries there are; an entry that already had both keeps one link (the through table's
+        unique pair, `ignore_conflicts`). Raises DoesNotExist when either one is gone by the
+        time both are locked."""
+        with transaction.atomic():
+            # Locked in pk order: a merge the other way round from a second tab waits here
+            # instead of deadlocking, then finds its source gone.
+            locked = (
+                Domain.objects.select_for_update()
+                .filter(pk__in=[self.pk, target.pk])
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            if set(locked) != {self.pk, target.pk}:
+                raise Domain.DoesNotExist
+            for through, entry, domain in domain_links():
+                tagged = through.objects.filter(
+                    **{domain: self, f"{entry}__user": self.user_id}
+                ).values_list(f"{entry}_id", flat=True)
+                through.objects.bulk_create(
+                    [
+                        through(**{f"{entry}_id": pk, f"{domain}_id": target.pk})
+                        for pk in tagged
+                    ],
+                    ignore_conflicts=True,
+                )
+            self.delete()
+
+
+def domain_links() -> list[tuple[type[models.Model], str, str]]:
+    """Every M2M that tags with a Domain, as (through model, entry field, domain field): the five
+    career entry types and spa's portfolio blocks. Read off the model, so a merge or a count can't
+    miss a relation that a model gains later."""
+    return [
+        (rel.through, rel.field.m2m_field_name(), rel.field.m2m_reverse_field_name())
+        for rel in Domain._meta.related_objects
+        if rel.many_to_many
+    ]
+
+
+def domain_uses(user):
+    """How many of `user`'s entries carry the outer Domain, over every relation in
+    `domain_links`. A count per relation, summed: one Count across all of them would join them
+    together and multiply."""
+    total = Value(0)
+    for through, entry, domain in domain_links():
+        tagged = (
+            through.objects.filter(**{domain: OuterRef("pk"), f"{entry}__user": user})
+            .order_by()
+            .values(domain)
+            .annotate(n=Count("pk"))
+            .values("n")
+        )
+        total = total + Coalesce(Subquery(tagged), 0)
+    return total
 
 
 class Location(models.Model):

@@ -26,7 +26,7 @@ from celery import current_app as celery_current_app
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
+from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
@@ -82,6 +82,7 @@ from jac.models import (
     Project,
     Skill,
     TransitionError,
+    domain_uses,
 )
 from jac.queues import (
     count_generations,
@@ -98,6 +99,7 @@ from jac.serializers import (
     CertificationSerializer,
     CvAttachmentSerializer,
     CvSerializer,
+    DomainMergeSerializer,
     DomainSerializer,
     EducationSerializer,
     GenerationRunCreateSerializer,
@@ -131,7 +133,7 @@ from lukehirsch.permissions import IsOwner, IsOwnerOrReadOnly
 from lukehirsch.private_media import private_file_response
 from lukehirsch.throttling import ChatDailyThrottle, UploadThrottle
 from spa.models import PersonalityProfile
-from spa.portfolio import freeze_link, link_for_application
+from spa.portfolio import carry_domain_rename, freeze_link, link_for_application
 from spa.serializers import PortfolioLinkSerializer
 
 logger = logging.getLogger(__name__)
@@ -279,15 +281,60 @@ class BulkActionMixin:
 
 
 class DomainViewSet(BulkActionMixin, viewsets.ModelViewSet):
+    """Rename is the PATCH, delete the DELETE (it untags every entry), and `merge` folds one
+    domain into another. All three work on the user's own domains only; a default can be a
+    merge's target, never its source."""
+
     serializer_class = DomainSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
     search_fields = ["name"]
     ordering_fields = ["name"]
 
     def get_queryset(self):
+        user = self.request.user
         if self.action in ("list", "retrieve"):
-            return Domain.objects.for_user(self.request.user).order_by("name")
-        return Domain.objects.filter(user=self.request.user).order_by("name")
+            qs = Domain.objects.for_user(user)
+        else:
+            qs = Domain.objects.filter(user=user)
+        if self.action in ("list", "retrieve", "update", "partial_update"):
+            # How many of the user's entries carry each one: a typo stands out by its 1.
+            qs = qs.annotate(uses=domain_uses(user))
+        # `is_default` reads the owner's username, once per row without this.
+        return qs.select_related("user").order_by("name")
+
+    def perform_update(self, serializer):
+        old = serializer.instance.name
+        with transaction.atomic():
+            domain = serializer.save()
+            if domain.name != old:
+                carry_domain_rename(self.request.user, old, domain.name)
+
+    @extend_schema(request=DomainMergeSerializer, responses=DomainSerializer)
+    @action(detail=True, methods=["post"])
+    def merge(self, request, pk=None):
+        """Move this domain's tags onto `into` and delete it; answers with `into`."""
+        source = self.get_object()
+        ser = DomainMergeSerializer(
+            data=request.data, context={"request": request, "source": source}
+        )
+        ser.is_valid(raise_exception=True)
+        target = ser.validated_data["into"]
+        name = source.name
+        try:
+            with transaction.atomic():
+                source.merge_into(target)
+                carry_domain_rename(request.user, name, target.name)
+        except Domain.DoesNotExist:
+            # Merged or deleted from another tab since this request read it.
+            raise Http404 from None
+        target = (
+            Domain.objects.select_related("user")
+            .annotate(uses=domain_uses(request.user))
+            .get(pk=target.pk)
+        )
+        return Response(
+            DomainSerializer(target, context=self.get_serializer_context()).data
+        )
 
 
 class LocationViewSet(BulkActionMixin, viewsets.ModelViewSet):
