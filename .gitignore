@@ -33,6 +33,8 @@ dump.*
 backend/media/
 backend/private_media/
 backend/staticfiles/
+# The connector's preview page: `npm run build` writes it, the image builds its own
+backend/jac/resources/connector/
 /files/
 
 # The board's exports name lab addresses: they stay on this machine

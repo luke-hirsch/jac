@@ -29,6 +29,9 @@ COPY backend/ ./
 COPY deploy/image/ ./
 # Not ./spa: that's the Django app, and nginx would serve its source from the web root.
 COPY --from=spa /spa/dist ./webroot
+# The connector's PDF preview, one file the connector serves (jac/mcp.py). Its build writes it
+# to ../backend/…, which is /backend/… from the spa stage's /spa.
+COPY --from=spa /backend/jac/resources/connector/ ./jac/resources/connector/
 
 # Static files are baked in. DEBUG=1 only so the prod guard lets this one command pass: no secret
 # is needed for it, and none enters the image. Its RELEASE, SECRET_KEY and the rest come at run time.
