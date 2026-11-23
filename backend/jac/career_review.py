@@ -30,6 +30,17 @@ MIN_WORDS = {"job": 25, "project": 15}
 GAP_DAYS = 183
 # What a letter's sender block can't do without. Name and email come from the account itself.
 SENDER_FIELDS = ("street", "zip", "city", "phone")
+# The profile fields the CV and the portfolio print, and what each one is for.
+PROFILE_FIELDS = {
+    "bio": "bio (the CV's summary and the portfolio's intro)",
+    "website": "website (the contact line of the CV and the letters)",
+}
+# A status written where the degree's name goes ("Not completed", "Drop Out", "abgebrochen").
+_STATUS = re.compile(
+    r"not\s+completed|incomplete|unfinished|drop(?:ped)?[\s-]*out|abgebrochen|"
+    r"ohne\s+abschluss|nicht\s+abgeschlossen",
+    re.IGNORECASE,
+)
 # The entries that link skills, and so can back one.
 _LINKING = ("jobs", "projects", "educations", "certifications")
 
@@ -194,7 +205,10 @@ def _check_links(e: dict, today) -> list[dict]:
                         "backs, and they get no years of use from it.",
                     )
                 )
-            elif section == "certifications" or obj.is_degree:
+            elif section == "certifications" or (
+                obj.degree_level > Education.DegreeLevel.secondary
+            ):
+                # A school-leaving certificate (Abitur) taught no skill a CV names.
                 out.append(
                     _finding(
                         "consider",
@@ -208,8 +222,14 @@ def _check_links(e: dict, today) -> list[dict]:
         if p.job_id or not p.started:
             continue
         end = p.ended or today
+        # Dates alone matched every project to a long-running side job (a co-founder role
+        # since 2016): the project has to share a skill or a domain with the job too.
         hosts = [
-            j for j in e["jobs"] if j.started <= p.started and end <= (j.ended or today)
+            j
+            for j in e["jobs"]
+            if j.started <= p.started
+            and end <= (j.ended or today)
+            and _shares_skill_or_domain(p, j)
         ]
         if len(hosts) == 1:
             out.append(
@@ -225,16 +245,11 @@ def _check_links(e: dict, today) -> list[dict]:
     return out
 
 
-def _linked_skill_pks(user) -> set[int]:
-    """Skills with at least one skill-to-skill link, either end of it."""
-    pks: set[int] = set()
-    for through in (Skill.related_skills.through, Skill.builds_on.through):
-        rows = through.objects.filter(from_skill__user=user).values_list(
-            "from_skill_id", "to_skill_id"
-        )
-        for a, b in rows:
-            pks.update((a, b))
-    return pks
+def _shares_skill_or_domain(a, b) -> bool:
+    return bool(
+        {s.pk for s in a.skills.all()} & {s.pk for s in b.skills.all()}
+        or {d.pk for d in a.domains.all()} & {d.pk for d in b.domains.all()}
+    )
 
 
 def _years_source(skill) -> str:
@@ -243,7 +258,7 @@ def _years_source(skill) -> str:
     return "the linked jobs, projects and educations, from first used on"
 
 
-def _check_skills(e: dict, user) -> list[dict]:
+def _check_skills(e: dict) -> list[dict]:
     out = []
     backed = {
         s.pk for section in _LINKING for obj in e[section] for s in obj.skills.all()
@@ -300,20 +315,6 @@ def _check_skills(e: dict, user) -> list[dict]:
                     "Keep one, move the links over, and delete the other in jac.",
                 )
             )
-    technical = [s for s in e["skills"] if s.category == Skill.Category.technical]
-    linked = _linked_skill_pks(user)
-    alone = [s for s in technical if s.pk not in linked]
-    if len(technical) >= 2 and alone:
-        out.append(
-            _finding(
-                "consider",
-                "skill_without_relations",
-                [entry_id(s) for s in alone],
-                f"{len(alone)} technical skill(s) have no related skill and no "
-                f"prerequisite: {', '.join(s.name for s in alone)}. These links are your "
-                "own map in jac's skills page; jac's selection doesn't read them.",
-            )
-        )
     return out
 
 
@@ -367,17 +368,22 @@ def _check_timeline(e: dict, today) -> list[dict]:
 def _check_credentials(e: dict, today) -> list[dict]:
     out = []
     for edu in e["educations"]:
-        if edu.degree and not edu.is_degree and edu.ended and edu.ended <= today:
-            out.append(
-                _finding(
-                    "consider",
-                    "degree_not_completed",
-                    [entry_id(edu)],
-                    f"{_named(edu)} names a degree ({edu.degree}) but is recorded as not "
-                    "completed (degree_level none). If you finished it, set the level: jac "
-                    "puts the highest completed degree on every CV.",
-                )
+        if not (edu.degree and not edu.is_degree and edu.ended and edu.ended <= today):
+            continue
+        if _STATUS.search(edu.degree):
+            say = (
+                f"{_named(edu)} has a status in its degree ({edu.degree}). The CV marks a "
+                'study without a degree "(no degree)" by itself, so the degree is the '
+                "place for what it aimed at (Master of Science), or leave it empty."
             )
+        else:
+            say = (
+                f"{_named(edu)} names a degree ({edu.degree}) but is recorded as not "
+                'completed (degree_level none), so the CV adds "(no degree)". If you '
+                "finished it, set the level: jac puts the highest completed degree on every "
+                "CV."
+            )
+        out.append(_finding("consider", "degree_not_completed", [entry_id(edu)], say))
     for c in e["certifications"]:
         if c.expires_on and c.expires_on < today:
             out.append(
@@ -418,6 +424,28 @@ def _check_sender(user) -> list[dict]:
     ]
 
 
+def _check_profile(user) -> list[dict]:
+    """The profile fields the CV and the portfolio print. Claude can't change them: the user
+    fills them in jac."""
+    p = getattr(user, "profile", None)
+    missing = [
+        why
+        for field, why in PROFILE_FIELDS.items()
+        if not (getattr(p, field, "") or "").strip()
+    ]
+    if not missing:
+        return []
+    return [
+        _finding(
+            "consider",
+            "profile_incomplete",
+            [],
+            f"Your profile has no {' and no '.join(missing)}. Fill "
+            f"{'it' if len(missing) == 1 else 'them'} in under Account → Profile in jac.",
+        )
+    ]
+
+
 def review_career(user) -> dict:
     """Every finding for `user`'s career, the data errors first, then the gaps that cost the
     CV, then the judgment calls; within a level in the career's own order."""
@@ -427,10 +455,11 @@ def review_career(user) -> dict:
         *_check_dates(e, today),
         *_check_descriptions(e),
         *_check_links(e, today),
-        *_check_skills(e, user),
+        *_check_skills(e),
         *_check_timeline(e, today),
         *_check_credentials(e, today),
         *_check_sender(user),
+        *_check_profile(user),
     ]
     findings.sort(key=lambda f: LEVELS.index(f["level"]))
     return {

@@ -2695,6 +2695,92 @@ class ConnectorReviewTests(_McpCase):
         self.assertFalse(self._about(data, f"skill:{html.pk}", "skill_unbacked"))
         self.assertFalse(self._about(data, f"certification:{udemy.pk}", "no_skills"))
 
+    def test_a_project_inside_a_job_it_shares_nothing_with_isnt_that_jobs(self):
+        """A co-founder role since 2016 spans every later project: dates alone proposed
+        linking a music EP to it."""
+        founder = Job.objects.create(
+            user=self.user,
+            title="Co-founder",
+            company="Label",
+            job_type="pt",
+            started="2016-01-01",
+        )
+        ep = Project.objects.create(user=self.user, name="EP", started="2023-03-01")
+        ep.skills.add(Skill.objects.create(user=self.user, name="Mixing"))
+        self.assertFalse(
+            self._about(self._review(), f"project:{ep.pk}", "project_during_job")
+        )
+        founder.skills.add(*ep.skills.all())
+        found = self._about(self._review(), f"project:{ep.pk}", "project_during_job")
+        self.assertIn(f"job:{founder.pk}", found[0]["ids"])
+
+    def test_a_shared_domain_is_enough(self):
+        label = Job.objects.create(
+            user=self.user, title="A&R", company="Label", started="2016-01-01"
+        )
+        music = Domain.objects.create(user=self.user, name="Music")
+        label.domains.add(music)
+        ep = Project.objects.create(user=self.user, name="EP", started="2023-03-01")
+        ep.domains.add(music)
+        found = self._about(self._review(), f"project:{ep.pk}", "project_during_job")
+        self.assertIn(f"job:{label.pk}", found[0]["ids"])
+
+    def test_skill_to_skill_links_are_no_finding(self):
+        """The review's own sentence said selection doesn't read them: noise on a CV review."""
+        Skill.objects.create(user=self.user, name="Kotlin")
+        checks = {f["check"] for f in self._review()["findings"]}
+        self.assertNotIn("skill_without_relations", checks)
+
+    def test_a_school_leaving_certificate_needs_no_skills(self):
+        abitur = Education.objects.create(
+            user=self.user,
+            institution="Gymnasium",
+            started="2000-08-01",
+            ended="2008-06-30",
+            degree="Abitur",
+            degree_level=Education.DegreeLevel.secondary,
+        )
+        data = self._review()
+        self.assertFalse(self._about(data, f"education:{abitur.pk}", "no_skills"))
+        # The master (no skills either) still gets one.
+        self.assertTrue(self._about(data, f"education:{self.master.pk}", "no_skills"))
+
+    def test_an_unfinished_study_gets_no_description_or_skills_finding(self):
+        tu = Education.objects.create(
+            user=self.user, institution="TU", started="2017-10-01", ended="2019-09-30"
+        )
+        found = self._about(self._review(), f"education:{tu.pk}")
+        self.assertEqual(
+            {f["check"] for f in found} & {"no_description", "no_skills"}, set()
+        )
+
+    def test_a_status_in_the_degree_says_where_it_belongs(self):
+        edu = Education.objects.create(
+            user=self.user,
+            institution="TU",
+            started="2012-10-01",
+            ended="2016-09-30",
+            degree="Not completed",
+        )
+        (found,) = self._about(
+            self._review(), f"education:{edu.pk}", "degree_not_completed"
+        )
+        self.assertIn("status", found["say"])
+        self.assertIn("(no degree)", found["say"])
+        self.assertNotIn("names a degree", found["say"])
+
+    def test_an_empty_bio_and_website_are_named(self):
+        (found,) = [
+            f for f in self._review()["findings"] if f["check"] == "profile_incomplete"
+        ]
+        self.assertIn("bio", found["say"])
+        self.assertIn("website", found["say"])
+        self.user.profile.bio = "Backend developer."
+        self.user.profile.website = "https://example.org"
+        self.user.profile.save()
+        checks = {f["check"] for f in self._review()["findings"]}
+        self.assertNotIn("profile_incomplete", checks)
+
 
 class ConnectorCareerChangeTests(_McpCase):
     """Edits the user agreed to: all or nothing, through the entries' own serializers, logged
@@ -2850,6 +2936,29 @@ class ConnectorCareerChangeTests(_McpCase):
         )
         self.assertFalse(is_error, data)
         self.assertEqual(list(self.python.certifications.all()), [cert])
+
+    def test_a_dry_run_names_a_new_skill_by_its_ref(self):
+        """A rolled-back skill's id is gone: the real apply gets another. The check showed
+        skill:130, the apply made skill:135."""
+        change = {**self._describe(), "add": {"skills": ["new:k8s"]}}
+        new = {
+            "new": "skill",
+            "ref": "k8s",
+            "why": "Named in the job.",
+            "set": {"name": "Kubernetes", "category": "technical"},
+        }
+        data, is_error = self._apply(change, new, dry_run=True)
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["created"], {})
+        ids = [c["id"] for c in data["changes"]]
+        self.assertIn("new:k8s", ids)
+        job = next(c for c in data["changes"] if c["id"] == f"job:{self.job.pk}")
+        self.assertEqual(job["after"]["skills"], [f"skill:{self.python.pk}", "new:k8s"])
+        self.assertEqual(data["labels"]["new:k8s"], "Kubernetes")
+        self.assertNotIn(
+            "skill:", json.dumps(data).replace(f"skill:{self.python.pk}", "")
+        )
+        self.assertFalse(Skill.objects.filter(name="Kubernetes").exists())
 
     def test_a_dry_run_answers_and_changes_nothing(self):
         data, is_error = self._apply(self._describe(), dry_run=True)

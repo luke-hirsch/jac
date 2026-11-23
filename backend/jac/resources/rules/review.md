@@ -12,7 +12,9 @@ and the public portfolio, which renders from the same entries.
    career as a whole), a `check`, a `level` (`fix`, then `improve`, then `consider`) and one
    sentence. Treat it as a checklist, not the verdict. Check each finding against the career, drop
    the ones that don't hold (a skill name matched by accident), and add what a machine pass can't
-   see (below).
+   see (below). Some entries it skips on purpose, and so do you: a study that ended without a
+   degree (`completed: false`) gets no description or skills finding, since a CV prints it as
+   one line; a school-leaving certificate (`degree_level` `secondary`) gets no skills finding.
 2. **Report.** Open with a short verdict, two or three sentences: what's strong, and what holds the
    CVs back most. Then the findings grouped by theme, most costly first:
    1. data errors;
@@ -32,10 +34,10 @@ and the public portfolio, which renders from the same entries.
    and what's added and removed for links. Give one line on why. Five to fifteen changes keep a
    batch reviewable.
 5. **Apply only after the user says yes to that batch.** First check it (`apply_career_changes`
-   with `dry_run: true`); fix what it refuses; then apply it (`apply_career_changes`). The ids the
-   check shows for new skills are placeholders: keep linking them as `new:<ref>` until the real
-   apply answers with their ids. Tell the user what changed and that every batch can be undone,
-   with `undo_career_changes` here or in jac (Account → LLM, under Connectors).
+   with `dry_run: true`); fix what it refuses; then apply it (`apply_career_changes`). The check
+   names a new skill `new:<ref>`, as the batch does; the real apply answers with its id. Tell the
+   user what changed and that every batch can be undone, with `undo_career_changes` here or in
+   jac (Account → LLM, under Connectors).
 6. Go on with the next theme, or stop when the user has had enough.
 
 ## What to look for beyond the machine review
