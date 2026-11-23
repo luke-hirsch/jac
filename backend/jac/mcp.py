@@ -14,13 +14,23 @@ always the deployed ones. The skill the user uploads only points here (jac/resou
 Tool failures Claude can fix (a field the import refuses, a stale read, an id that isn't the
 user's) are tool results with `isError`, so Claude reads them and tries again. Protocol mistakes
 (an unknown method or tool, arguments that aren't an object) are JSON-RPC errors.
+
+The PDF preview is an MCP App (the `io.modelcontextprotocol/ui` extension): `save_application`
+and `show_application` name the page `ui://jac/preview`, and the Claude app (web, desktop, phone)
+renders it beside the tool call. The page is the frontend's own renderer, built into one
+self-contained file (`frontend/vite.connector.config.ts`). It runs in Claude's sandbox with no
+session and no network: its only way to jac is `application_preview`, a tool only the page can
+call, through this same connector and token. Clients without MCP Apps ignore the `_meta`.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 from functools import cache
+from pathlib import Path
 
 from django.conf import settings
 
@@ -34,8 +44,10 @@ from jac.career_changes import (
     undo_batch,
 )
 from jac.career_review import review_career
-from jac.models import CareerChange, JobApplication
+from jac.cv import CV
+from jac.models import CareerChange, CvAttachment, JobApplication
 from jac.serializers import (
+    CvSerializer,
     JobApplicationSerializer,
     SkillApplicationSerializer,
     SkillCareerChangesSerializer,
@@ -44,10 +56,12 @@ from jac.skill import (
     RULES_DIR,
     application_payload,
     application_summary,
+    application_url,
     career_payload,
     save_application,
 )
-from spa.models import PersonalityProfile
+from spa.models import PersonalityProfile, UserProfile
+from spa.serializers import UserProfileSerializer
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +73,21 @@ INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
+RESOURCE_NOT_FOUND = -32002  # MCP's own code for resources/read
+
+# The preview page (an MCP App). `npm run build` writes it here; it isn't tracked.
+PREVIEW_URI = "ui://jac/preview"
+PREVIEW_MIME = "text/html;profile=mcp-app"
+PREVIEW_HTML = (
+    Path(__file__).resolve().parent / "resources" / "connector" / "preview.html"
+)
+# What a checkout without the frontend build serves instead: the page says so, not a blank box.
+PREVIEW_MISSING = (
+    '<!doctype html><meta charset="utf-8"><p style="font: 14px sans-serif">'
+    "jac's preview isn't built on this server. Run <code>npm run build</code> in "
+    "<code>frontend/</code>, or open the application in jac.</p>"
+)
+_PREVIEW_UI = {"ui": {"resourceUri": PREVIEW_URI}, "ui/resourceUri": PREVIEW_URI}
 
 # What the list tools show.
 APPLICATIONS_SHOWN = 50
@@ -72,7 +101,8 @@ INSTRUCTIONS = (
     "using it, and you follow those rules. To check or improve the career data, call "
     "`get_career_review`, which brings its own rules. Nothing is saved until the user says so; "
     "after `save_application`, give them the link it returns: they look at the result and "
-    "export the PDF in jac."
+    "export the PDF in jac. In the Claude app, `save_application` and `show_application` "
+    "also show the PDF preview in the chat."
 )
 
 
@@ -85,6 +115,10 @@ class ToolError(Exception):
 
 
 class InvalidParams(Exception):
+    pass
+
+
+class ResourceNotFound(Exception):
     pass
 
 
@@ -160,6 +194,65 @@ def save_application_tool(request, args):
         request.user, serializer.validated_data, application
     )
     return {**application_payload(application), "warnings": warnings}
+
+
+def show_application(request, args):
+    # The preview does the showing (its page reads `application_preview`); Claude gets the
+    # summary, so it can still name the application and give the link.
+    return application_summary(_application(request, _pk(args, "application")))
+
+
+def _layout_template(application: JobApplication):
+    """The layout's JSON spec as stored (the frontend parses and falls back), None without one."""
+    template = application.layout.template
+    if not template:
+        return None
+    try:
+        with template.open("rb") as fh:
+            return json.loads(fh.read())
+    except (OSError, ValueError) as err:
+        log.warning("connector preview: layout %s unreadable: %s", template.name, err)
+        raise ToolError(
+            {"detail": "jac can't read this application's layout."}
+        ) from err
+
+
+def _signature_data_url(profile: UserProfile) -> str:
+    """The signature inline: in Claude's sandbox the page can't fetch the owner-only URL."""
+    signature = profile.signature
+    if not signature:
+        return ""
+    try:
+        with signature.open("rb") as fh:
+            data = fh.read()
+    except OSError as err:
+        log.warning("connector preview: signature unreadable: %s", err)
+        return ""
+    mime = mimetypes.guess_type(signature.name)[0] or "image/png"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def application_preview(request, args):
+    """What the export card renders from, in the shapes the SPA's own endpoints answer
+    (applications/<id>/, cv/entries/, profile/), so the page reuses the export's renderer as is.
+    Attachments stay in jac: the page only says how many the export would add."""
+    application = _application(request, _pk(args, "application"))
+    context = {"request": request}
+    profile = UserProfile.objects.select_related("user").get(user=request.user)
+    return {
+        "application": JobApplicationSerializer(application, context=context).data,
+        "layout": _layout_template(application),
+        "career": CvSerializer(CV(request.user.pk).entries, context=context).data,
+        "profile": {
+            **UserProfileSerializer(profile, context=context).data,
+            "signature": _signature_data_url(profile),
+        },
+        # The export skips ids whose file is gone; so does the count.
+        "attachments": CvAttachment.objects.filter(
+            user=request.user, pk__in=application.attachments or []
+        ).count(),
+        "url": application_url(application),
+    }
 
 
 def _stale(request, err: StaleError, redo: str) -> ToolError:
@@ -381,9 +474,44 @@ TOOLS = {
             "To create one, `posting.text`, `entries` and `letter.body` are required. With "
             "an `id`, it updates that application instead. Answers with the application, "
             "its `url` (give it to the user: they check it and export the PDF in jac) and "
-            "`warnings` worth fixing (fix them, then save again with the id).",
+            "`warnings` worth fixing (fix them, then save again with the id). In the Claude "
+            "app the user sees the PDF preview below the call.",
             "inputSchema": _APPLICATION,
             "annotations": _hints(read_only=False),
+            "_meta": _PREVIEW_UI,
+        },
+    ),
+    "show_application": (
+        show_application,
+        {
+            "title": "Show the PDF preview",
+            "description": "Show a saved application's PDF preview to the user, as jac "
+            "renders it: when they ask to see it without changing it. In the Claude app the "
+            "preview appears below the call; elsewhere give them the `url`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"id": _ID},
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+            "annotations": _hints(read_only=True),
+            "_meta": _PREVIEW_UI,
+        },
+    ),
+    "application_preview": (
+        application_preview,
+        {
+            "title": "Preview data",
+            "description": "What jac's PDF preview renders from. Only the preview itself "
+            "calls it; to show the user a preview, call `show_application`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"id": _ID},
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+            "annotations": _hints(read_only=True),
+            "_meta": {"ui": {"resourceUri": PREVIEW_URI, "visibility": ["app"]}},
         },
     ),
     "apply_career_changes": (
@@ -438,7 +566,10 @@ def _initialize(request, params):
         "protocolVersion": asked
         if asked in PROTOCOL_VERSIONS
         else PROTOCOL_VERSIONS[0],
-        "capabilities": {"tools": {"listChanged": False}},
+        "capabilities": {
+            "tools": {"listChanged": False},
+            "resources": {"listChanged": False},
+        },
         "serverInfo": {"name": "jac", "title": "jac", "version": settings.RELEASE},
         "instructions": INSTRUCTIONS,
     }
@@ -463,11 +594,48 @@ def _tools_call(request, params):
     return {"content": [{"type": "text", "text": _text(payload)}], "isError": is_error}
 
 
+_PREVIEW_RESOURCE = {
+    "uri": PREVIEW_URI,
+    "name": "preview",
+    "title": "PDF preview",
+    "description": "The application as jac renders the PDF: CV and letter, page by page.",
+    "mimeType": PREVIEW_MIME,
+}
+
+
+def _resources_list(request, params):
+    return {"resources": [_PREVIEW_RESOURCE]}
+
+
+def _resources_read(request, params):
+    if params.get("uri") != PREVIEW_URI:
+        raise ResourceNotFound(f"Resource not found: {params.get('uri')}")
+    try:
+        html = PREVIEW_HTML.read_text()
+    except FileNotFoundError:
+        log.warning("connector: %s isn't built", PREVIEW_HTML)
+        html = PREVIEW_MISSING
+    return {
+        "contents": [
+            {
+                "uri": PREVIEW_URI,
+                "mimeType": PREVIEW_MIME,
+                "text": html,
+                # No origins: the page is one file and reaches jac only through the host.
+                "_meta": {"ui": {"csp": {}, "prefersBorder": True}},
+            }
+        ]
+    }
+
+
 METHODS = {
     "initialize": _initialize,
     "ping": lambda request, params: {},
     "tools/list": _tools_list,
     "tools/call": _tools_call,
+    "resources/list": _resources_list,
+    "resources/templates/list": lambda request, params: {"resourceTemplates": []},
+    "resources/read": _resources_read,
 }
 
 
@@ -495,6 +663,8 @@ def _answer(request, message) -> dict | None:
         return {"jsonrpc": "2.0", "id": mid, "result": handler(request, params)}
     except InvalidParams as err:
         return _error(mid, INVALID_PARAMS, str(err))
+    except ResourceNotFound as err:
+        return _error(mid, RESOURCE_NOT_FOUND, str(err))
     except Exception:
         log.exception("connector: %s failed", message["method"])
         return _error(mid, INTERNAL_ERROR, "jac failed on this request.")

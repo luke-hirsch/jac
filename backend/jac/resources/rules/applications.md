@@ -6,10 +6,10 @@ tailoring: you pick the CV entries, write the letter body and talk it through wi
 Nothing reaches jac until the user wants it saved.
 
 You reach jac through its tools: `get_career` (these rules came with it), `save_application`,
-`list_applications`, `get_application`, and for the career itself `get_career_review`,
-`apply_career_changes`, `list_career_changes` and `undo_career_changes`. **When the user wants
-their career data checked or improved, call `get_career_review` first**: it brings the rules for
-that. The rest of this file is about applications.
+`show_application`, `list_applications`, `get_application`, and for the career itself
+`get_career_review`, `apply_career_changes`, `list_career_changes` and `undo_career_changes`.
+**When the user wants their career data checked or improved, call `get_career_review` first**:
+it brings the rules for that. The rest of this file is about applications.
 
 ## The flow
 
@@ -29,7 +29,7 @@ that. The rest of this file is about applications.
    don't paper over a gap with wording. Suggest what to lead with. Keep every correction the user
    makes for the rest of the conversation.
 6. **Save** when the user says so (see Saving), and give them the link: they review the result and
-   export the PDF in jac.
+   export the PDF in jac. In the Claude app they also see the PDF preview right below the save.
 
 ## Picking the CV entries
 
@@ -122,6 +122,14 @@ one, and only what you send changes. Give the user the `url`: it opens the appli
 where they check the layout and export the PDF. To continue with an existing application:
 `list_applications`, then `get_application`, change what the conversation changed, and save it
 with its `id`.
+
+**The preview.** In the Claude app (web, desktop, phone), `save_application` shows the PDF as jac
+renders it, page by page, below the call: the page fit included, so it shows what the layout
+dropped or shortened. Its notes name what the fit did; take them up with the user (an entry they
+want back, a letter that runs over a page). When the user wants to see a saved application again
+without changing it, call `show_application` with its `id`. The preview can download the PDF;
+attachments and the portfolio QR come only with the export in jac. Where no preview appears (an
+app without it), the `url` is the way.
 
 **If jac refuses the token**, it was revoked: the user creates a new one in jac (Account → LLM,
 under Connectors) and adds the connector again with it.

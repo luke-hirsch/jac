@@ -6,11 +6,13 @@ Celery is always mocked (apply_async must return a STRING id — a Mock poisons
 the task_id CharField); the tower probe is mocked wherever resolution consults it.
 """
 
+import base64
 import io
 import json
 import threading
 import zipfile
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import redis
@@ -18,6 +20,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings as dj_settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
@@ -25,6 +28,7 @@ from django.utils import timezone
 from kombu.exceptions import OperationalError
 from rest_framework.test import APIClient, APITestCase
 
+from jac import mcp
 from jac import views as jac_views
 from jac.career_changes import FIELDS, LISTS
 from jac.career_export import export_career
@@ -37,8 +41,10 @@ from jac.career_import import (
 from jac.llm_prompts import LetterChat, ParagraphRewrite
 from jac.models import (
     AccessToken,
+    ApplicationLayout,
     CareerChange,
     Certification,
+    CvAttachment,
     DailyGenerationCount,
     Domain,
     Education,
@@ -68,6 +74,7 @@ from llm_connector.executor import Executor
 from llm_connector.models import AiJob, LLMConfig
 from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
+from lukehirsch.test_media import own_media_roots
 from spa.models import PersonalityProfile, PortfolioBlock, PortfolioLink
 
 from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
@@ -2728,6 +2735,152 @@ class ConnectorApplicationTests(_McpCase):
         self.assertEqual([row["id"] for row in listed], [own])
 
 
+# A valid 1x1 PNG, for the signature the preview carries inline.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@override_settings(**own_media_roots(), PRIVATE_MEDIA_ACCEL=False)
+class ConnectorPreviewTests(_McpCase):
+    """The PDF preview in the Claude app (an MCP App): `save_application` and `show_application`
+    name the page, the page is served as a resource, and `application_preview`, which only the
+    page may call, hands it what the export card renders from, in the SPA's own shapes."""
+
+    def _tools(self):
+        return {t["name"]: t for t in self._rpc("tools/list").json()["result"]["tools"]}
+
+    def _preview(self, app_id):
+        data, is_error = self._call("application_preview", {"id": app_id})
+        self.assertFalse(is_error, data)
+        return data
+
+    def _as_session(self, url):
+        """The SPA's own answer for the same user, to compare shapes with."""
+        client = APIClient()
+        client.force_login(self.user)
+        r = client.get(url)
+        self.assertEqual(r.status_code, 200, r.content)
+        return json.loads(r.content)
+
+    def test_save_and_show_name_the_preview_page(self):
+        tools = self._tools()
+        for name in ("save_application", "show_application"):
+            with self.subTest(tool=name):
+                meta = tools[name]["_meta"]
+                self.assertEqual(meta["ui"]["resourceUri"], mcp.PREVIEW_URI)
+                self.assertEqual(meta["ui/resourceUri"], mcp.PREVIEW_URI)
+        # A read to continue working pops no render.
+        self.assertNotIn("_meta", tools["get_application"])
+
+    def test_the_preview_data_is_for_the_page_alone(self):
+        tool = self._tools()["application_preview"]
+        self.assertEqual(tool["_meta"]["ui"]["visibility"], ["app"])
+        self.assertTrue(tool["annotations"]["readOnlyHint"])
+
+    def test_initialize_names_the_resources_capability(self):
+        result = self._rpc("initialize", {"protocolVersion": "2025-06-18"}).json()
+        self.assertIn("resources", result["result"]["capabilities"])
+
+    def test_resources_list_offers_the_page(self):
+        (resource,) = self._rpc("resources/list").json()["result"]["resources"]
+        self.assertEqual(resource["uri"], "ui://jac/preview")
+        self.assertEqual(resource["mimeType"], "text/html;profile=mcp-app")
+        templates = self._rpc("resources/templates/list").json()["result"]
+        self.assertEqual(templates, {"resourceTemplates": []})
+
+    def test_resources_read_serves_the_built_page(self):
+        page = Path(dj_settings.MEDIA_ROOT) / "preview.html"
+        page.write_text("<!doctype html><title>probe</title>")
+        with patch.object(mcp, "PREVIEW_HTML", page):
+            body = self._rpc("resources/read", {"uri": "ui://jac/preview"}).json()
+        (content,) = body["result"]["contents"]
+        self.assertEqual(content["uri"], "ui://jac/preview")
+        self.assertEqual(content["mimeType"], "text/html;profile=mcp-app")
+        self.assertEqual(content["text"], "<!doctype html><title>probe</title>")
+        # One self-contained file: it needs no origin opened.
+        self.assertEqual(content["_meta"]["ui"]["csp"], {})
+
+    def test_an_unbuilt_page_says_so(self):
+        missing = Path(dj_settings.MEDIA_ROOT) / "nowhere.html"
+        with (
+            patch.object(mcp, "PREVIEW_HTML", missing),
+            self.assertLogs("jac.mcp", "WARNING"),
+        ):
+            body = self._rpc("resources/read", {"uri": "ui://jac/preview"}).json()
+        self.assertIn("npm run build", body["result"]["contents"][0]["text"])
+
+    def test_an_unknown_resource_is_not_found(self):
+        body = self._rpc("resources/read", {"uri": "ui://jac/other"}).json()
+        self.assertEqual(body["error"]["code"], -32002)
+
+    def test_show_application_answers_the_summary(self):
+        app_id = self._save()[0]["id"]
+        data, is_error = self._call("show_application", {"id": app_id})
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["id"], app_id)
+        self.assertTrue(data["url"].endswith(f"/applications/{app_id}"))
+
+    def test_someone_elses_application_shows_nothing(self):
+        theirs = make_application(self.other)
+        for name in ("show_application", "application_preview"):
+            with self.subTest(tool=name):
+                data, is_error = self._call(name, {"id": theirs.pk})
+                self.assertTrue(is_error)
+                self.assertIn("no application", data["detail"])
+
+    def test_the_preview_data_is_what_the_spa_reads(self):
+        """The page runs the export card's renderer: the application, the career and the profile
+        come in the shapes of the SPA's endpoints, or the preview drifts from the export."""
+        app_id = self._save()[0]["id"]
+        data = self._preview(app_id)
+        self.assertEqual(data["application"], self._as_session(f"{APPS_URL}{app_id}/"))
+        self.assertEqual(data["career"], self._as_session("/api/jac/cv/entries/"))
+        profile = self._as_session("/api/spa/profile/")
+        self.assertEqual(data["profile"], {**profile, "signature": ""})
+        self.assertIsNone(
+            data["layout"]
+        )  # the system default here has no template file
+        self.assertEqual(data["attachments"], 0)
+        self.assertTrue(data["url"].endswith(f"/applications/{app_id}"))
+
+    def test_the_signature_comes_inline(self):
+        profile = self.user.profile
+        profile.signature.save("sig.png", ContentFile(_PNG))
+        data = self._preview(self._save()[0]["id"])
+        prefix = "data:image/png;base64,"
+        self.assertTrue(data["profile"]["signature"].startswith(prefix))
+        self.assertEqual(
+            base64.b64decode(data["profile"]["signature"][len(prefix) :]), _PNG
+        )
+
+    def test_the_layout_template_comes_parsed(self):
+        spec = {"version": 1, "cv": {"pages": 2}}
+        layout = ApplicationLayout.objects.create(user=self.user, name="mine")
+        layout.template.save("mine.json", ContentFile(json.dumps(spec).encode()))
+        app_id = self._save()[0]["id"]
+        JobApplication.objects.filter(pk=app_id).update(layout=layout)
+        self.assertEqual(self._preview(app_id)["layout"], spec)
+
+    def test_a_broken_layout_is_said_in_the_page(self):
+        layout = ApplicationLayout.objects.create(user=self.user, name="broken")
+        layout.template.save("broken.json", ContentFile(b"{nope"))
+        app_id = self._save()[0]["id"]
+        JobApplication.objects.filter(pk=app_id).update(layout=layout)
+        with self.assertLogs("jac.mcp", "WARNING"):
+            data, is_error = self._call("application_preview", {"id": app_id})
+        self.assertTrue(is_error)
+        self.assertIn("layout", data["detail"])
+
+    def test_only_attachments_that_exist_are_counted(self):
+        kept = CvAttachment.objects.create(
+            user=self.user, file=ContentFile(b"%PDF-1.5\n", name="a.pdf")
+        )
+        app_id = self._save()[0]["id"]
+        JobApplication.objects.filter(pk=app_id).update(attachments=[kept.pk, 999999])
+        self.assertEqual(self._preview(app_id)["attachments"], 1)
+
+
 def _words(n, word="built"):
     return " ".join([word] * n)
 
@@ -3408,7 +3561,7 @@ class McpProtocolTests(_McpCase):
         self.assertEqual(self._rpc("ping").json()["result"], {})
 
     def test_an_unknown_method_is_a_jsonrpc_error(self):
-        body = self._rpc("resources/list").json()
+        body = self._rpc("prompts/list").json()
         self.assertEqual(body["error"]["code"], -32601)
         self.assertEqual(body["id"], self._next_id)
 
@@ -3455,6 +3608,8 @@ class McpProtocolTests(_McpCase):
                 "list_applications",
                 "get_application",
                 "save_application",
+                "show_application",
+                "application_preview",
                 "apply_career_changes",
                 "list_career_changes",
                 "undo_career_changes",
@@ -3473,6 +3628,8 @@ class McpProtocolTests(_McpCase):
                 "get_career_review",
                 "list_applications",
                 "get_application",
+                "show_application",
+                "application_preview",
                 "list_career_changes",
             },
         )
@@ -3495,9 +3652,13 @@ class McpProtocolTests(_McpCase):
         text = "".join(path.read_text() for path in sorted(RULES_DIR.glob("*.md")))
         tools = self._rpc("tools/list").json()["result"]["tools"]
         for tool in tools:
+            app_only = tool.get("_meta", {}).get("ui", {}).get("visibility") == ["app"]
             with self.subTest(tool=tool["name"]):
-                self.assertTrue(
-                    f"`{tool['name']}`" in text, f"the rules never name {tool['name']}"
+                # A tool only the preview page calls is none of Claude's business.
+                self.assertEqual(
+                    f"`{tool['name']}`" in text,
+                    not app_only,
+                    f"the rules {'name' if app_only else 'never name'} {tool['name']}",
                 )
 
     def test_the_rules_speak_of_the_connector_alone(self):

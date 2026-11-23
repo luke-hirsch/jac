@@ -17,32 +17,16 @@ import {
 import { type ApplicationRow } from "@/lib/queries/applications";
 import { useAttachments } from "@/lib/queries/attachments";
 import { mergePdfs } from "@/lib/render/attachments";
-import { activeContent } from "@/lib/cv-doc";
 import {
-  contactLine,
-  fillBlanks,
-  normalizeLetterMeta,
-  senderFromProfile,
-  stripSoftStub,
-} from "@/lib/letter-doc";
+  buildPdf as buildApplicationPdf,
+  exportMeta,
+} from "@/lib/render/build";
+import { activeContent } from "@/lib/cv-doc";
 import { useCvEntries, useFullList, type LayoutRow } from "@/lib/queries/jac";
 import { useProfile } from "@/lib/queries/profile";
-import {
-  capContent,
-  effectiveCaps,
-  fitContent,
-  preflightKey,
-} from "@/lib/render/fit";
+import { capContent, effectiveCaps } from "@/lib/render/fit";
 import { readPreflightCache } from "./use-preflight";
-import { isFavouriteLookup } from "@/lib/render/parts";
 import { useRenderSpec } from "@/lib/render/spec";
-import {
-  ApplicationDocument,
-  CvDocument,
-  LetterDocument,
-  pdfPages,
-  renderPdfBlob,
-} from "@/lib/render/templates";
 import {
   cvToMarkdown,
   downloadBlob,
@@ -54,9 +38,7 @@ import {
   type ExportScope,
 } from "@/lib/export";
 
-import { docMetadata, hiddenPayload } from "@/lib/render/hidden";
 import { PortfolioLinkSection } from "@/components/applications/portfolio-link-section";
-import { qrDataUrl } from "@/lib/portfolio/qr";
 import { type PortfolioLinkRow } from "@/lib/queries/portfolio";
 
 export function ExportCard({
@@ -83,20 +65,9 @@ export function ExportCard({
     info: BuiltPdf;
   } | null>(null);
 
-  // Blank sender fields fall back to the user profile (same rule as the editor),
-  // so an export never goes out with an empty sender block.
-  function metaOf(row: ApplicationRow) {
-    const stored = normalizeLetterMeta(row.letter_meta);
-    return profile.data
-      ? {
-          ...stored,
-          sender: fillBlanks(stored.sender, senderFromProfile(profile.data)),
-        }
-      : stored;
-  }
+  // Blank sender fields fall back to the user profile (same rule as the editor).
+  const metaOf = (row: ApplicationRow) => exportMeta(row, profile.data);
   const stem = `application-${app.id}-${scope}`;
-  // Per-user uploaded signature image, rendered in the letter closing when present.
-  const signatureUrl = profile.data?.signature || undefined;
 
   /** The row an export reads: the server copy, saved first if the editor is ahead of it, so
    *  the file holds what's on screen. The save's answer, not the `app` prop: that belongs to
@@ -105,136 +76,18 @@ export function ExportCard({
     return dirty ? onSave() : app;
   }
 
+  // The same build the connector's preview in the Claude app runs (lib/render/build.tsx).
   async function buildPdf(row: ApplicationRow): Promise<BuiltPdf> {
     if (!spec.data) throw new Error("layout spec not loaded");
-    const s = spec.data;
-    const db = careerDb.data;
-    const meta = metaOf(row);
-    const name = meta.sender.name || "CV";
-    const socials = profile.data?.show_socials ?? false;
-    const portfolioUrl = includeQr && link ? link.url : undefined;
-    const contact = contactLine(meta.sender, { socials, portfolioUrl });
-    // Raster QR for react-pdf's <Image> (absolute block, layout-invariant); included in
-    // the fit-measuring render below too, for measure/export parity.
-    const portfolio = portfolioUrl
-      ? { qr: await qrDataUrl(portfolioUrl) }
-      : undefined;
-    const summary = profile.data?.bio ?? "";
-    // Template entry budget first (hard editorial cap), page fit second. `full` (pre-cap)
-    // sticks around: everything it has that the fitted content lacks — cap cuts and page
-    // drops alike — goes into the hidden layer as cut_for_space.
-    const off = row.sections_off ?? [];
-    const full = activeContent(row.cv_content ?? {}, off);
-    const cached = readPreflightCache(
-      preflightKey({
-        spec: s,
-        db,
-        content: full,
-        sectionsOff: off,
-        cvHeader: { name, contact, summary },
-        letterBody: row.cover_letter,
-        letterMeta: meta,
-      }),
-    );
-    const fit =
-      scope === "letter"
-        ? null
-        : (cached?.result ??
-          (await fitContent(
-            full,
-            effectiveCaps(s.cv.max_entries, off),
-            s.cv.detailed,
-            s.cv.pages,
-            (c, demoted) =>
-              pdfPages(
-                <CvDocument
-                  spec={s}
-                  name={name}
-                  content={c}
-                  db={db}
-                  demoted={demoted}
-                  contact={contact}
-                  summary={summary}
-                  portfolio={portfolio}
-                />,
-              ),
-            isFavouriteLookup(db),
-          )));
-    const demoted = new Set(fit?.demotedIds ?? []);
-
-    const letterPages =
-      scope === "cv"
-        ? null
-        : await pdfPages(
-            <LetterDocument
-              spec={s}
-              meta={meta}
-              body={stripSoftStub(row.cover_letter)}
-            />,
-          );
-
-    // The machine-readable layer: built from the fit *result* (which is why the fit's
-    // measuring renders above go without it — an absolute block has zero layout impact).
-    const hidden = hiddenPayload(scope, {
-      fitted: fit?.content ?? {},
-      full,
-      meta,
-      body: row.cover_letter,
-      db,
+    return buildApplicationPdf({
+      row,
+      spec: spec.data,
+      db: careerDb.data,
+      profile: profile.data,
+      scope,
+      portfolioUrl: includeQr && link ? link.url : undefined,
+      cachedFit: (key) => readPreflightCache(key)?.result,
     });
-    const docMeta = docMetadata(scope, {
-      name,
-      subject: meta.subject,
-      content: fit?.content ?? {},
-      db,
-    });
-
-    const doc =
-      scope === "cv" ? (
-        <CvDocument
-          docMeta={docMeta}
-          spec={s}
-          name={name}
-          content={fit!.content}
-          db={db}
-          contact={contact}
-          summary={summary}
-          hidden={hidden}
-          portfolio={portfolio}
-          demoted={demoted}
-        />
-      ) : scope === "letter" ? (
-        <LetterDocument
-          docMeta={docMeta}
-          spec={s}
-          meta={meta}
-          body={stripSoftStub(row.cover_letter)}
-          signatureUrl={signatureUrl}
-          hidden={hidden}
-        />
-      ) : (
-        <ApplicationDocument
-          docMeta={docMeta}
-          cv={{
-            spec: s,
-            name,
-            content: fit!.content,
-            db,
-            contact,
-            summary,
-            hidden,
-            portfolio,
-            demoted,
-          }}
-          letter={{
-            spec: s,
-            meta,
-            body: stripSoftStub(row.cover_letter),
-            signatureUrl,
-          }}
-        />
-      );
-    return { blob: await renderPdfBlob(doc), fit, letterPages };
   }
 
   // Client-side pdf-lib merge: resolve the application's selected attachment ids to file URLs

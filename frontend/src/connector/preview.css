@@ -1,0 +1,149 @@
+/* The preview in the Claude app. The host's own variables first (applyHostStyleVariables),
+   fallbacks for a host that sends none. The page itself is always paper-white. */
+:root {
+  color-scheme: light dark;
+  --fg: var(--color-text-primary, #1c1c1c);
+  --muted: var(--color-text-secondary, #6b6b6b);
+  --danger: var(--color-text-danger, #b42318);
+  --warning: var(--color-text-warning, #9a6700);
+  --line: var(--color-border-primary, #d9d9d9);
+  --surface: var(--color-background-secondary, #f4f4f4);
+  --radius: var(--border-radius-md, 8px);
+}
+:root[data-theme="dark"] {
+  --fg: var(--color-text-primary, #ececec);
+  --muted: var(--color-text-secondary, #a3a3a3);
+  --danger: var(--color-text-danger, #f97066);
+  --warning: var(--color-text-warning, #f0b400);
+  --line: var(--color-border-primary, #3a3a3a);
+  --surface: var(--color-background-secondary, #262626);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: transparent;
+}
+body {
+  color: var(--fg);
+  font-family: var(
+    --font-sans,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif
+  );
+  font-size: var(--font-text-sm-size, 14px);
+  line-height: var(--font-text-sm-line-height, 1.45);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+.preview.fullscreen {
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.title {
+  min-width: 0;
+  font-weight: var(--font-weight-semibold, 600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.segmented {
+  display: inline-flex;
+}
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.segmented button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+  margin-left: 0;
+}
+.segmented button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.segmented button[aria-pressed="true"] {
+  background: var(--fg);
+  color: var(--color-text-inverse, #fff);
+  border-color: var(--fg);
+}
+:root[data-theme="dark"] .segmented button[aria-pressed="true"] {
+  color: var(--color-text-inverse, #111);
+}
+.pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.frame {
+  display: flex;
+  justify-content: center;
+  min-height: 120px;
+}
+.fullscreen .frame {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.page {
+  display: block;
+  background: #fff;
+  box-shadow: var(--shadow-sm, 0 1px 3px rgb(0 0 0 / 0.18));
+}
+
+.message {
+  align-self: center;
+  margin: 24px 8px;
+  color: var(--muted);
+  text-align: center;
+}
+.message.error {
+  color: var(--danger);
+}
+
+.notes p {
+  margin: 2px 0;
+  font-size: var(--font-text-xs-size, 12px);
+  color: var(--muted);
+}
+.notes p.warning {
+  color: var(--warning);
+}

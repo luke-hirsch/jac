@@ -506,29 +506,9 @@ class CVEntryListView(APIView):
 
     @extend_schema(responses=CvSerializer)
     def get(self, request):
-        cv = CV(request.user.pk)
-        context = {"request": request}
+        # The connector's preview (`mcp.application_preview`) answers the same shape.
         return Response(
-            {
-                "skills": SkillSerializer(
-                    cv.entries["skills"], many=True, context=context
-                ).data,
-                "jobs": JobSerializer(
-                    cv.entries["jobs"], many=True, context=context
-                ).data,
-                "educations": EducationSerializer(
-                    cv.entries["educations"], many=True, context=context
-                ).data,
-                "certifications": CertificationSerializer(
-                    cv.entries["certifications"], many=True, context=context
-                ).data,
-                "projects": ProjectSerializer(
-                    cv.entries["projects"], many=True, context=context
-                ).data,
-                "languages": LanguageSerializer(
-                    cv.entries["languages"], many=True, context=context
-                ).data,
-            }
+            CvSerializer(CV(request.user.pk).entries, context={"request": request}).data
         )
 
 
