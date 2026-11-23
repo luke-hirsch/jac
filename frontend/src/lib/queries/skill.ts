@@ -179,6 +179,14 @@ export function staleLines(
   ];
 }
 
+/** The batch the change log starts expanded: the newest one that isn't undone, since that's the
+ *  one to check. `batches` come newest first; null when none is open. */
+export function expandedBatch(
+  batches: Pick<CareerChangeBatch, "id" | "undone_at">[],
+): number | null {
+  return batches.find((b) => !b.undone_at)?.id ?? null;
+}
+
 /* ---------- query hooks ---------- */
 
 const SKILL_API = "/api/jac/skill/";
@@ -265,5 +273,36 @@ export function useUndoCareerChange() {
       }),
     // On a 409 too: then another tab undid it first, and this list is the one behind.
     onSettled: () => qc.invalidateQueries({ queryKey: ["jac"] }),
+  });
+}
+
+/** DELETE one batch: keep it. A 404 resolves too: another tab kept it first, which is what
+ *  keeping wanted. */
+export async function keepCareerChange(id: number): Promise<void> {
+  try {
+    await api<void>(`${SKILL_API}career/changes/${id}/`, { method: "DELETE" });
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 404)) throw e;
+  }
+}
+
+/** Keep a batch, open or undone: it leaves the log and can't be undone any more, here or by
+ *  Claude. The edits stay, so only the log is behind. */
+export function useKeepCareerChange() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: keepCareerChange,
+    // On a failure too: the list shows what the server holds.
+    onSettled: () => qc.invalidateQueries({ queryKey: CHANGES_KEY }),
+  });
+}
+
+/** Keep every batch: the log empties. */
+export function useKeepAllCareerChanges() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<void>(`${SKILL_API}career/changes/`, { method: "DELETE" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: CHANGES_KEY }),
   });
 }

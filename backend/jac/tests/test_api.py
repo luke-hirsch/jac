@@ -2246,14 +2246,22 @@ class ConnectorTokenTests(_McpCase):
         self.assertEqual(self._rpc("ping").status_code, 401)
 
     def test_the_token_does_not_open_the_rest_of_the_api(self):
-        for url in (
-            APPS_URL,
-            "/api/jac/cv/entries/",
-            "/api/llm/configs/",
-            f"{SKILL_URL}career/changes/",
+        """The change log's undo and keep are the user's, in jac: Claude undoes over the
+        connector, and can't keep (delete) a batch at all."""
+        batch = CareerChange.objects.create(user=self.user, changes=[], stamps={})
+        for method, url in (
+            ("get", APPS_URL),
+            ("get", "/api/jac/cv/entries/"),
+            ("get", "/api/llm/configs/"),
+            ("get", f"{SKILL_URL}career/changes/"),
+            ("post", f"{SKILL_URL}career/changes/{batch.pk}/undo/"),
+            ("delete", f"{SKILL_URL}career/changes/{batch.pk}/"),
+            ("delete", f"{SKILL_URL}career/changes/"),
         ):
-            with self.subTest(url=url):
-                self.assertIn(self.client.get(url).status_code, (401, 403))
+            with self.subTest(method=method, url=url):
+                r = getattr(self.client, method)(url)
+                self.assertIn(r.status_code, (401, 403))
+        self.assertTrue(CareerChange.objects.filter(pk=batch.pk).exists())
 
     def test_a_token_cannot_mint_tokens_or_download(self):
         r = self.client.post(f"{SKILL_URL}tokens/", {"name": "more"}, format="json")
@@ -3135,6 +3143,54 @@ class ConnectorCareerChangeTests(_McpCase):
         self.assertEqual(self.client.get(self.LOG_URL).data, [])
         r = self.client.post(f"{self.LOG_URL}{theirs.pk}/undo/")
         self.assertEqual(r.status_code, 404)
+        r = self.client.delete(f"{self.LOG_URL}{theirs.pk}/")
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(CareerChange.objects.filter(pk=theirs.pk).exists())
+
+    def test_the_spa_keeps_a_batch(self):
+        """Keep: the batch leaves the list, in jac and over the connector alike, and can't be
+        undone any more. Its edits stay."""
+        kept = self._apply(self._describe("- first"))[0]["id"]
+        left = self._apply(self._describe("- second"))[0]["id"]
+        self.client.credentials()
+        self.client.force_login(self.user)
+        r = self.client.delete(f"{self.LOG_URL}{kept}/")
+        self.assertEqual(r.status_code, 204, r.content)
+        self.assertEqual([b["id"] for b in self.client.get(self.LOG_URL).data], [left])
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "- second")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.key}")
+        listed, _ = self._call("list_career_changes")
+        self.assertEqual([b["id"] for b in listed], [left])
+        data, is_error = self._undo(kept)
+        self.assertTrue(is_error, data)
+
+    def test_an_undone_batch_can_be_removed(self):
+        batch = self._apply(self._describe())[0]["id"]
+        self.client.credentials()
+        self.client.force_login(self.user)
+        undone = self.client.post(f"{self.LOG_URL}{batch}/undo/")
+        self.assertEqual(undone.status_code, 200, undone.data)
+        r = self.client.delete(f"{self.LOG_URL}{batch}/")
+        self.assertEqual(r.status_code, 204, r.content)
+        self.assertEqual(self.client.get(self.LOG_URL).data, [])
+        self.assertFalse(CareerChange.objects.filter(pk=batch).exists())
+
+    def test_the_spa_keeps_them_all_and_only_the_users_own(self):
+        self._apply(self._describe("- first"))
+        self._apply(self._describe("- second"))
+        theirs = CareerChange.objects.create(user=self.other, changes=[], stamps={})
+        self.client.credentials()
+        self.client.force_login(self.user)
+        r = self.client.delete(self.LOG_URL)
+        self.assertEqual(r.status_code, 204, r.content)
+        self.assertEqual(self.client.get(self.LOG_URL).data, [])
+        self.assertFalse(CareerChange.objects.filter(user=self.user).exists())
+        self.assertTrue(CareerChange.objects.filter(pk=theirs.pk).exists())
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.description, "- second")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.key}")
+        self.assertEqual(self._call("list_career_changes")[0], [])
 
     def test_the_log_keeps_the_latest_batches(self):
         for n in range(CareerChange.KEEP + 2):

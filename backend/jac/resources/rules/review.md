@@ -37,7 +37,8 @@ and the public portfolio, which renders from the same entries.
    with `dry_run: true`); fix what it refuses; then apply it (`apply_career_changes`). The check
    names a new skill `new:<ref>`, as the batch does; the real apply answers with its id. Tell the
    user what changed and that every batch can be undone, with `undo_career_changes` here or in
-   jac (Account → LLM, under Connectors).
+   jac (Account → LLM, under Connectors), until they keep it in jac. A kept batch is gone from
+   `list_career_changes` and can't be undone.
 6. Go on with the next theme, or stop when the user has had enough.
 
 ## What to look for beyond the machine review
@@ -153,4 +154,7 @@ change, by its position in the list (from 0); then nothing was applied.
 **Undo:** `list_career_changes` lists the batches, and `undo_career_changes` puts a batch's
 entries back and deletes the skills it created. The user can do the same in jac (Account → LLM,
 under Connectors → Career changes). Either way it's refused once an entry in the batch has been
-edited again since.
+edited again since. In jac the user can also keep a batch: its edits stay, it's gone from
+`list_career_changes`, and it can't be undone any more. When `undo_career_changes` finds no
+such batch, it was kept or is too old: say so, and offer a new batch that changes the entries
+back.

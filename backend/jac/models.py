@@ -845,7 +845,8 @@ class CareerChange(models.Model):
     `imported` marks the batches the SPA took from a file before file mode went (2026-11). Each
     change keeps the touched fields as they were before and after, so the batch can be undone;
     `stamps` holds every touched entry's `updated_at` after the batch, so an undo can tell when
-    the user has edited one since."""
+    the user has edited one since. A batch the user keeps (the SPA's change log) is deleted: the
+    edits stay, the undo goes, for Claude too."""
 
     KEEP = 50
 

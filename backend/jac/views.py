@@ -1208,7 +1208,7 @@ class CvAttachmentViewSet(viewsets.ModelViewSet):
 class _CareerChangeView(APIView):
     """The career edits Claude made over the connector, as the SPA shows them (Account → LLM,
     under Connectors): on the session only. Claude lists and undoes them with the connector's own
-    tools."""
+    tools; keeping them is the user's alone."""
 
     permission_classes = [IsAuthenticated]
     throttle_classes = [_LiveScopedRateThrottle]
@@ -1216,7 +1216,8 @@ class _CareerChangeView(APIView):
 
 
 class CareerChangeListView(_CareerChangeView):
-    """GET the latest batches of career edits (`jac.career_changes`), newest first."""
+    """GET the latest batches of career edits (`jac.career_changes`), newest first. DELETE keeps
+    them all: every batch of the user's goes, and with it the undo. The edits stay."""
 
     LIMIT = 20
 
@@ -1224,6 +1225,22 @@ class CareerChangeListView(_CareerChangeView):
     def get(self, request):
         rows = CareerChange.objects.filter(user=request.user)[: self.LIMIT]
         return Response([batch_payload(b) for b in rows])
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request):
+        CareerChange.objects.filter(user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CareerChangeKeepView(_CareerChangeView):
+    """DELETE keeps one batch, open or undone: its row goes, so the list stops growing, and
+    neither the SPA nor Claude can undo it any more. A deletion, not a flag: it's an undo list,
+    not an audit log. Someone else's batch is a 404."""
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request, pk):
+        get_object_or_404(CareerChange, pk=pk, user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CareerChangeUndoView(_CareerChangeView):

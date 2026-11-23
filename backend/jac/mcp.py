@@ -391,8 +391,8 @@ TOOLS = {
         {
             "title": "Change career entries",
             "description": "Apply a batch of career edits the user agreed to, all or "
-            "nothing; with `dry_run` only check it. Every batch can be undone. Follow the "
-            "rules from `get_career_review`.",
+            "nothing; with `dry_run` only check it. Every batch can be undone until the "
+            "user keeps it in jac. Follow the rules from `get_career_review`.",
             "inputSchema": _CHANGES,
             "annotations": _hints(read_only=False, destructive=True),
         },
