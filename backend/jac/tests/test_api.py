@@ -2845,9 +2845,11 @@ class ConnectorPreviewTests(_McpCase):
         self.assertTrue(data["url"].endswith(f"/applications/{app_id}"))
 
     def test_the_profile_is_what_the_render_reads_and_no_more(self):
-        """It goes through Anthropic: no more than get_career already sends (privacy §8)."""
+        """It goes through Anthropic: contact details and display settings, which privacy §8
+        covers. The full name names the download (cv_<title>_<first last>.pdf)."""
         data = self._preview(self._save()[0]["id"])
         self.assertEqual(set(data["profile"]), set(mcp.PREVIEW_PROFILE))
+        self.assertLessEqual({"first_name", "last_name"}, set(data["profile"]))
         profile = self._as_session("/api/spa/profile/")
         self.assertEqual(data["profile"], {k: profile[k] for k in mcp.PREVIEW_PROFILE})
 

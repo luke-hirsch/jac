@@ -5,6 +5,7 @@
 import type { ExportScope } from "@/lib/export";
 import type { ApplicationRow } from "@/lib/queries/applications";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
+import type { ProfileRow } from "@/lib/queries/profile";
 import type { RenderProfile } from "@/lib/render/build";
 import { fitNotices, type BuiltPdf, type Notice } from "@/lib/render/preview";
 
@@ -20,7 +21,8 @@ export type PreviewPayload = {
   application: ApplicationRow;
   layout: unknown; // the layout's JSON spec as stored, null without a template file
   career: CvEntriesResponse;
-  profile: RenderProfile; // what the render reads, no signature
+  // what the render reads, no signature, and the full name the download is named with
+  profile: RenderProfile & Pick<ProfileRow, "first_name" | "last_name">;
   attachments: number; // what the export in jac appends, which the preview can't
   signature: boolean; // the export in jac signs the letter; the preview can't
   url: string;
@@ -89,11 +91,6 @@ export function previewNotices(
     });
   }
   return out;
-}
-
-/** The file name the export card gives the same PDF. */
-export function fileStem(id: number, scope: ExportScope): string {
-  return `application-${id}-${scope}`;
 }
 
 /** Standard base64, no data: prefix: what `ui/download-file` takes as a resource's `blob`.

@@ -13,7 +13,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { exportBlocker, type ExportScope } from "@/lib/export";
+import { exportBlocker, exportStem, type ExportScope } from "@/lib/export";
 import { applyAccent } from "@/lib/render/accent";
 import { buildPdf, exportMeta } from "@/lib/render/build";
 import { PAGE_ASPECT, type BuiltPdf } from "@/lib/render/preview";
@@ -27,7 +27,6 @@ import { drawPage, openPdf, type PdfDoc, type RenderTask } from "./pages";
 import {
   applicationIdOf,
   errorText,
-  fileStem,
   previewNotices,
   previewPayload,
   NO_WASM,
@@ -274,7 +273,7 @@ export function PreviewApp({ app, host }: { app: App; host: HostStore }) {
   }
 
   async function download() {
-    if (!rendered?.built || id == null) return;
+    if (!rendered?.built || !payload) return;
     setStatus("Preparing the download…");
     try {
       const bytes = new Uint8Array(await rendered.built.blob.arrayBuffer());
@@ -284,7 +283,7 @@ export function PreviewApp({ app, host }: { app: App; host: HostStore }) {
             {
               type: "resource",
               resource: {
-                uri: `file:///${fileStem(id, scope)}.pdf`,
+                uri: `file:///${exportStem(scope, payload.application, payload.profile)}.pdf`,
                 mimeType: "application/pdf",
                 blob: toBase64(bytes),
               },

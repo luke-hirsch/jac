@@ -10,7 +10,9 @@ import {
   type CvContent,
 } from "@/lib/cv-doc";
 import { hasStub, stripSoftStub, type LetterMeta } from "@/lib/letter-doc";
+import type { ApplicationRow } from "@/lib/queries/applications";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
+import type { ProfileRow } from "@/lib/queries/profile";
 import { entryParts } from "@/lib/render/parts";
 
 export function cvToMarkdown(
@@ -82,6 +84,71 @@ export function letterToMarkdown(meta: LetterMeta, body: string): string {
 
 export type ExportScope = "complete" | "cv" | "letter";
 export type ExportFormat = "pdf" | "md" | "json";
+
+/* ---------- file names ---------- */
+
+const SCOPE_WORD: Record<ExportScope, string> = {
+  complete: "application",
+  cv: "cv",
+  letter: "letter",
+};
+
+// The gender marker German titles carry, "(m/w/d)", "(w/m/d)", "(m/f/x)", "(all genders)", "(gn)".
+const GENDER_MARKER =
+  /\(\s*(?:(?:[mwfdxi]|div)(?:\s*[/|,]\s*(?:[mwfdxi]|div))+|all\s+genders?|gn\*?)\s*\)/gi;
+const SPELLED_OUT: Record<string, string> = {
+  ä: "ae",
+  ö: "oe",
+  ü: "ue",
+  Ä: "Ae",
+  Ö: "Oe",
+  Ü: "Ue",
+  ß: "ss",
+};
+const PART_MAX = 60;
+
+/** One part of a file name: ASCII letters, digits and `+`, words joined by hyphens, since the
+ *  underscore separates the parts. Umlauts spelled out (upload portals choke on them), other
+ *  accents dropped, the gender marker left out; cut at a word boundary past 60 characters. */
+export function fileNamePart(text: string): string {
+  const word = text
+    .replace(GENDER_MARKER, " ")
+    .replace(/[äöüÄÖÜß]/g, (c) => SPELLED_OUT[c])
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9+]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (word.length <= PART_MAX) return word;
+  const cut = word.slice(0, PART_MAX + 1);
+  const end = cut.lastIndexOf("-");
+  return (end > 0 ? cut.slice(0, end) : word.slice(0, PART_MAX)).replace(
+    /-+$/,
+    "",
+  );
+}
+
+/** What every export of an application is called, without the extension:
+ *  `cv_<posting title>_<your name>`, `letter_…`, `application_…` for the complete one. The name
+ *  is the full name from the profile, else the name jac signs with (display name or username).
+ *  A posting without a title falls back to the company, then the application's number. */
+export function exportStem(
+  scope: ExportScope,
+  row: Pick<ApplicationRow, "id" | "posting_detail" | "letter_meta">,
+  profile: Pick<ProfileRow, "first_name" | "last_name" | "name"> | undefined,
+): string {
+  const full = [profile?.first_name, profile?.last_name]
+    .map((s) => (s ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const person = fileNamePart(
+    full || profile?.name || row.letter_meta?.sender?.name || "",
+  );
+  const subject =
+    fileNamePart(row.posting_detail?.title ?? "") ||
+    fileNamePart(row.letter_meta?.recipient?.company ?? "") ||
+    String(row.id);
+  return [SCOPE_WORD[scope], subject, person].filter(Boolean).join("_");
+}
 
 /**
  * Send-time stub safeguard: a letter-bearing pdf/md export with the PERSONAL_STUB still in

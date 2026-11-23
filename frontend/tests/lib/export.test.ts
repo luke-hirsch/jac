@@ -5,6 +5,8 @@ import {
   downloadBlob,
   exportBlocker,
   exportJson,
+  exportStem,
+  fileNamePart,
   letterToMarkdown,
   type ExportFormat,
   type ExportScope,
@@ -50,7 +52,13 @@ const db = {
 
 const content: CvContent = {
   jobs: [{ id: "job:12", label: "stored label", relevance_score: 0.9 }],
-  skills: [{ id: "skill:1", label: "Python (expert, technical)", relevance_score: null }],
+  skills: [
+    {
+      id: "skill:1",
+      label: "Python (expert, technical)",
+      relevance_score: null,
+    },
+  ],
 };
 
 const meta = {
@@ -166,7 +174,9 @@ describe("exportJson", () => {
 
   it("scopes to cv / letter / complete", () => {
     expect(Object.keys(JSON.parse(exportJson("cv", args)))).toEqual(["cv"]);
-    expect(Object.keys(JSON.parse(exportJson("letter", args)))).toEqual(["letter"]);
+    expect(Object.keys(JSON.parse(exportJson("letter", args)))).toEqual([
+      "letter",
+    ]);
     expect(Object.keys(JSON.parse(exportJson("complete", args)))).toEqual([
       "cv",
       "letter",
@@ -239,5 +249,88 @@ describe("downloadBlob", () => {
     expect(revoke).not.toHaveBeenCalled();
     vi.runAllTimers();
     expect(revoke).toHaveBeenCalledWith("blob:x");
+  });
+});
+
+describe("exportStem", () => {
+  const row = (title: string, extra: object = {}) => ({
+    id: 8,
+    posting_detail: { title } as never,
+    letter_meta: {},
+    ...extra,
+  });
+  const lukas = { first_name: "Lukas", last_name: "Muster", name: "Luke" };
+
+  it("names each scope: cv_, letter_, application_ + the title + the full name", () => {
+    expect(exportStem("cv", row("AI Program Lead"), lukas)).toBe(
+      "cv_AI-Program-Lead_Lukas-Muster",
+    );
+    expect(exportStem("letter", row("AI Program Lead"), lukas)).toBe(
+      "letter_AI-Program-Lead_Lukas-Muster",
+    );
+    expect(exportStem("complete", row("AI Program Lead"), lukas)).toBe(
+      "application_AI-Program-Lead_Lukas-Muster",
+    );
+  });
+
+  it("falls back to the name jac signs with, then the letter's sender", () => {
+    const named = { first_name: " ", last_name: "", name: "Luke Hirsch" };
+    expect(exportStem("cv", row("Lead"), named)).toBe("cv_Lead_Luke-Hirsch");
+    expect(exportStem("cv", row("Lead"), { ...lukas, first_name: "" })).toBe(
+      "cv_Lead_Muster",
+    );
+    const signed = row("Lead", { letter_meta: { sender: { name: "Eva" } } });
+    expect(exportStem("cv", signed, undefined)).toBe("cv_Lead_Eva");
+    expect(exportStem("cv", row("Lead"), undefined)).toBe("cv_Lead");
+  });
+
+  it("falls back to the company, then the number, without a title", () => {
+    const company = row("", {
+      letter_meta: { recipient: { company: "Hays AG" } },
+    });
+    expect(exportStem("letter", company, lukas)).toBe(
+      "letter_Hays-AG_Lukas-Muster",
+    );
+    expect(exportStem("letter", row(" (m/w/d) "), lukas)).toBe(
+      "letter_8_Lukas-Muster",
+    );
+  });
+});
+
+describe("fileNamePart", () => {
+  it("keeps letters, digits and +, joins words with hyphens, never an underscore", () => {
+    expect(fileNamePart("Senior Full_Stack Dev / C++ & C#")).toBe(
+      "Senior-Full-Stack-Dev-C++-C",
+    );
+    expect(fileNamePart("  --Lead--  ")).toBe("Lead");
+  });
+
+  it("drops the gender marker German titles carry", () => {
+    for (const marker of [
+      "(m/w/d)",
+      "(w/m/d)",
+      "(M/F/X)",
+      "(m|w|d)",
+      "(all genders)",
+      "(gn*)",
+    ]) {
+      expect(fileNamePart(`Data Engineer ${marker} Berlin`)).toBe(
+        "Data-Engineer-Berlin",
+      );
+    }
+  });
+
+  it("spells umlauts out and drops other accents", () => {
+    expect(fileNamePart("Geschäftsführer Süß Öl")).toBe(
+      "Geschaeftsfuehrer-Suess-Oel",
+    );
+    expect(fileNamePart("Chloé Núñez")).toBe("Chloe-Nunez");
+  });
+
+  it("cuts a long title at a word boundary", () => {
+    const long = fileNamePart("Werkstudent Softwareentwicklung ".repeat(4));
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long).toBe("Werkstudent-Softwareentwicklung-Werkstudent");
+    expect(fileNamePart("x".repeat(80))).toBe("x".repeat(60));
   });
 });
