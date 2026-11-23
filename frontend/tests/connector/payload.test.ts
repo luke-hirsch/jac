@@ -77,6 +77,7 @@ describe("the preview payload", () => {
     career: { jobs: [] },
     profile: { name: "Ada" },
     attachments: 0,
+    signature: false,
     url: "https://jac.example/applications/3",
   };
 
@@ -98,24 +99,43 @@ describe("the preview payload", () => {
 });
 
 describe("the notes under the pages", () => {
+  const none = { attachments: 0, signature: false };
+
   it("are the export card's fit notices", () => {
-    const notes = previewNotices(built({ letterPages: 2 }), 1, "complete", 0);
+    const notes = previewNotices(
+      built({ letterPages: 2 }),
+      1,
+      "complete",
+      none,
+    );
     expect(notes.map((n) => n.text)).toEqual([
       "The cover letter exceeds one page — shorten the body.",
     ]);
   });
 
   it("say how many attachments only the export in jac adds", () => {
-    expect(previewNotices(built(), 1, "complete", 1).at(-1)?.text).toBe(
-      "1 attachment is added when you export in jac.",
-    );
-    expect(previewNotices(built(), 1, "cv", 3).at(-1)?.text).toBe(
-      "3 attachments are added when you export in jac.",
-    );
+    expect(
+      previewNotices(built(), 1, "complete", { ...none, attachments: 1 }).at(-1)
+        ?.text,
+    ).toBe("1 attachment is added when you export in jac.");
+    expect(
+      previewNotices(built(), 1, "cv", { ...none, attachments: 3 }).at(-1)
+        ?.text,
+    ).toBe("3 attachments are added when you export in jac.");
   });
 
   it("leave attachments out of a letter on its own, as the export does", () => {
-    expect(previewNotices(built(), 1, "letter", 2)).toEqual([]);
+    expect(
+      previewNotices(built(), 1, "letter", { ...none, attachments: 2 }),
+    ).toEqual([]);
+  });
+
+  it("say the export signs the letter, where there is a letter", () => {
+    const signed = { ...none, signature: true };
+    expect(
+      previewNotices(built(), 1, "letter", signed).map((n) => n.text),
+    ).toEqual(["Your signature is added when you export in jac."]);
+    expect(previewNotices(built(), 1, "cv", signed)).toEqual([]);
   });
 });
 

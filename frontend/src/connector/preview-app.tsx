@@ -358,12 +358,10 @@ export function PreviewApp({ app, host }: { app: App; host: HostStore }) {
 
   const notices =
     rendered?.built && rendered.spec && payload
-      ? previewNotices(
-          rendered.built,
-          rendered.spec.cv.pages,
-          scope,
-          payload.attachments,
-        )
+      ? previewNotices(rendered.built, rendered.spec.cv.pages, scope, {
+          attachments: payload.attachments,
+          signature: payload.signature,
+        })
       : [];
 
   return (

@@ -2735,7 +2735,7 @@ class ConnectorApplicationTests(_McpCase):
         self.assertEqual([row["id"] for row in listed], [own])
 
 
-# A valid 1x1 PNG, for the signature the preview carries inline.
+# A valid 1x1 PNG: a signature the preview must leave in jac.
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
@@ -2745,7 +2745,8 @@ _PNG = base64.b64decode(
 class ConnectorPreviewTests(_McpCase):
     """The PDF preview in the Claude app (an MCP App): `save_application` and `show_application`
     name the page, the page is served as a resource, and `application_preview`, which only the
-    page may call, hands it what the export card renders from, in the SPA's own shapes."""
+    page may call, hands it what the export card renders from, in the SPA's own shapes, and no
+    more of the profile than the render reads."""
 
     def _tools(self):
         return {t["name"]: t for t in self._rpc("tools/list").json()["result"]["tools"]}
@@ -2830,29 +2831,32 @@ class ConnectorPreviewTests(_McpCase):
                 self.assertIn("no application", data["detail"])
 
     def test_the_preview_data_is_what_the_spa_reads(self):
-        """The page runs the export card's renderer: the application, the career and the profile
-        come in the shapes of the SPA's endpoints, or the preview drifts from the export."""
+        """The page runs the export card's renderer: the application and the career come in the
+        shapes of the SPA's endpoints, or the preview drifts from the export."""
         app_id = self._save()[0]["id"]
         data = self._preview(app_id)
         self.assertEqual(data["application"], self._as_session(f"{APPS_URL}{app_id}/"))
         self.assertEqual(data["career"], self._as_session("/api/jac/cv/entries/"))
-        profile = self._as_session("/api/spa/profile/")
-        self.assertEqual(data["profile"], {**profile, "signature": ""})
         self.assertIsNone(
             data["layout"]
         )  # the system default here has no template file
         self.assertEqual(data["attachments"], 0)
+        self.assertFalse(data["signature"])
         self.assertTrue(data["url"].endswith(f"/applications/{app_id}"))
 
-    def test_the_signature_comes_inline(self):
-        profile = self.user.profile
-        profile.signature.save("sig.png", ContentFile(_PNG))
+    def test_the_profile_is_what_the_render_reads_and_no_more(self):
+        """It goes through Anthropic: no more than get_career already sends (privacy §8)."""
         data = self._preview(self._save()[0]["id"])
-        prefix = "data:image/png;base64,"
-        self.assertTrue(data["profile"]["signature"].startswith(prefix))
-        self.assertEqual(
-            base64.b64decode(data["profile"]["signature"][len(prefix) :]), _PNG
-        )
+        self.assertEqual(set(data["profile"]), set(mcp.PREVIEW_PROFILE))
+        profile = self._as_session("/api/spa/profile/")
+        self.assertEqual(data["profile"], {k: profile[k] for k in mcp.PREVIEW_PROFILE})
+
+    def test_the_signature_stays_in_jac(self):
+        self.user.profile.signature.save("sig.png", ContentFile(_PNG))
+        data = self._preview(self._save()[0]["id"])
+        self.assertNotIn("signature", data["profile"])
+        self.assertTrue(data["signature"])  # the page says the export adds it
+        self.assertNotIn(base64.b64encode(_PNG).decode()[:24], json.dumps(data))
 
     def test_the_layout_template_comes_parsed(self):
         spec = {"version": 1, "cv": {"pages": 2}}

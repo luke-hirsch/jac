@@ -39,11 +39,31 @@ import {
   renderPdfBlob,
 } from "./templates";
 
+/** What the build reads of the profile. The connector's preview gets exactly these fields
+ *  (backend/jac/mcp.py `PREVIEW_PROFILE`), without the signature, which stays in jac. */
+export type RenderProfile = Pick<
+  ProfileRow,
+  | "name"
+  | "email"
+  | "phone"
+  | "street"
+  | "address_line2"
+  | "zip"
+  | "city"
+  | "country"
+  | "website"
+  | "linkedin_url"
+  | "github_url"
+  | "bio"
+  | "show_socials"
+  | "accent_color"
+> & { signature?: string };
+
 /** The row's letter meta, with blank sender fields filled from the profile (the editor's rule),
  *  so an export never goes out with an empty sender block. */
 export function exportMeta(
   row: Pick<ApplicationRow, "letter_meta">,
-  profile: ProfileRow | undefined,
+  profile: RenderProfile | undefined,
 ): LetterMeta {
   const stored = normalizeLetterMeta(row.letter_meta);
   return profile
@@ -58,7 +78,7 @@ export type BuildArgs = {
   row: ApplicationRow;
   spec: LayoutSpec; // the accent applied (useRenderSpec, or applyAccent by hand)
   db: CvEntriesResponse | undefined;
-  profile: ProfileRow | undefined;
+  profile: RenderProfile | undefined;
   scope: ExportScope;
   /** The portfolio link behind the QR, when this export carries one. */
   portfolioUrl?: string;
@@ -79,8 +99,8 @@ export async function buildPdf({
   const name = meta.sender.name || "CV";
   const socials = profile?.show_socials ?? false;
   const contact = contactLine(meta.sender, { socials, portfolioUrl });
-  // Per-user signature image in the letter closing: the owner-only URL in jac, a data URL in
-  // the connector's sandbox.
+  // Per-user signature image in the letter closing (the owner-only URL); the connector's
+  // preview has none.
   const signatureUrl = profile?.signature || undefined;
   // Raster QR for react-pdf's <Image> (absolute block, layout-invariant); included in
   // the fit-measuring render below too, for measure/export parity.
