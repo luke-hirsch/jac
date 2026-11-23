@@ -459,7 +459,11 @@ def apply_changes(
 ) -> dict:
     """Apply a batch all or nothing and log it. A dry run validates and answers the same, then
     rolls everything back. Returns the batch as `batch_payload` shapes it, plus `created`: the
-    ids the new skills got (`{"new:docker": "skill:44"}`)."""
+    ids the new skills got (`{"new:docker": "skill:44"}`).
+
+    A dry run names a new skill `new:<ref>` throughout and creates nothing in `created`: the
+    ids its rolled-back skills got are gone with them, and the real apply gets others (Postgres
+    doesn't hand a rolled-back id out again)."""
     with transaction.atomic():
         log, stamps, refs = _apply(request, changes)
         batch = CareerChange(
@@ -478,7 +482,23 @@ def apply_changes(
         }
         if dry_run:
             transaction.set_rollback(True)
+            payload = _as_refs(
+                {**payload, "created": {}},
+                {f"skill:{pk}": f"new:{ref}" for ref, pk in refs.items()},
+            )
     return payload
+
+
+def _as_refs(value, names: dict[str, str]):
+    """`value` with every id in `names` (keys and strings alike) put back as the `new:<ref>`
+    the batch wrote."""
+    if isinstance(value, dict):
+        return {names.get(k, k): _as_refs(v, names) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_as_refs(v, names) for v in value]
+    if isinstance(value, str):
+        return names.get(value, value)
+    return value
 
 
 def _restore(etype: str, before: dict, user, domains: dict[str, int]) -> dict:
