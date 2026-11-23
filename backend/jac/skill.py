@@ -174,7 +174,10 @@ def _skill(s) -> dict:
         "name": s.name,
         "proficiency": s.proficiency,
         "category": s.category,
+        # What jac shows and checks: the user's own number when they set one in jac
+        # (`years_override`), else counted from first_used and the linked entries' dates.
         "years": s.years_of_experience,
+        "years_override": s.years_of_experience_override,
         "first_used": _iso(s.first_used),
         "description": s.description,
         "domains": _names(s.domains),

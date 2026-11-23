@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  hierarchy,
-  pack,
-  type HierarchyCircularNode,
-} from "d3-hierarchy";
+import { hierarchy, pack, type HierarchyCircularNode } from "d3-hierarchy";
 import type { SkillRow } from "@/lib/queries/jac";
+import { yearsLabel } from "@/lib/cv-doc";
 
 /**
  * Packed-circle "bubble cloud" of the user's skills, clustered into one circle
@@ -127,7 +124,8 @@ export function SkillBubbles({
           className="block"
         >
           {root?.descendants().map((node) => {
-            if (node.depth === 1) return <CategoryCircle key={categoryKey(node)} node={node} />;
+            if (node.depth === 1)
+              return <CategoryCircle key={categoryKey(node)} node={node} />;
             if (node.depth === 2) {
               const skill = node.data.skill!;
               return (
@@ -204,7 +202,7 @@ function SkillCircle({
     >
       <title>
         {skill.name} · {skill.proficiency}
-        {exp != null ? ` · ${exp}y` : ""}
+        {exp != null ? ` · ${yearsLabel(exp)}` : ""}
       </title>
       <circle
         cx={node.x}

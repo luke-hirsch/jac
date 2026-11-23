@@ -174,7 +174,12 @@ def _check_links(e: dict, today) -> list[dict]:
                         [entry_id(obj), *(entry_id(s) for s in named)],
                         f"{_named(obj)} names {names} but doesn't link "
                         f"{'it' if len(named) == 1 else 'them'}. Linked skills feed this "
-                        "entry's ranking against a posting and the skill's years of use.",
+                        "entry's ranking against a posting"
+                        + (
+                            "."
+                            if section == "certifications"
+                            else " and the skill's years of use."
+                        ),
                     )
                 )
             if linked:
@@ -232,6 +237,12 @@ def _linked_skill_pks(user) -> set[int]:
     return pks
 
 
+def _years_source(skill) -> str:
+    if skill.years_of_experience_override is not None:
+        return "the number set in jac"
+    return "the linked jobs, projects and educations, from first used on"
+
+
 def _check_skills(e: dict, user) -> list[dict]:
     out = []
     backed = {
@@ -260,8 +271,8 @@ def _check_skills(e: dict, user) -> list[dict]:
                     "level_vs_years",
                     [entry_id(s)],
                     f"{s.name} says expert, but the record shows {years} year(s) of use "
-                    "(first used, plus the linked jobs and projects). Either the level is "
-                    "high or an earlier use is missing.",
+                    f"({_years_source(s)}). Either the level is high or an earlier use is "
+                    "missing.",
                 )
             )
         elif s.proficiency == Skill.Proficiency_Choices.beginner and years >= 5:
@@ -270,8 +281,9 @@ def _check_skills(e: dict, user) -> list[dict]:
                     "consider",
                     "level_vs_years",
                     [entry_id(s)],
-                    f"{s.name} says beginner, but the record shows {years} years of use. "
-                    "Either the level undersells it or a link is wrong.",
+                    f"{s.name} says beginner, but the record shows {years} years of use "
+                    f"({_years_source(s)}). Either the level undersells it or a link is "
+                    "wrong.",
                 )
             )
     same = defaultdict(list)

@@ -15,11 +15,12 @@ from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from jac.career_import import SAMPLE_CAREER, import_career
 from jac.models import (
+    Certification,
     Education,
     GenerationRun,
     Job,
@@ -27,8 +28,10 @@ from jac.models import (
     Language,
     Location,
     Mode,
+    Project,
     Skill,
     TransitionError,
+    days_of_use,
     normalize_mode,
 )
 
@@ -173,33 +176,150 @@ class EducationDegreeTests(TestCase):
         self.assertFalse(e.is_degree)
 
 
+TODAY = date(2026, 11, 21)
+
+
+class DaysOfUseTests(SimpleTestCase):
+    """The rule itself, without a database: spans in, days out."""
+
+    def test_overlaps_count_once(self):
+        spans = [
+            (date(2015, 1, 1), date(2020, 1, 1)),
+            (date(2012, 1, 1), date(2016, 1, 1)),
+        ]
+        self.assertEqual(
+            days_of_use(None, spans, TODAY), (date(2020, 1, 1) - date(2012, 1, 1)).days
+        )
+
+    def test_a_gap_between_entries_doesnt_count(self):
+        spans = [
+            (date(2010, 1, 1), date(2011, 1, 1)),
+            (date(2020, 1, 1), date(2021, 1, 1)),
+        ]
+        self.assertEqual(days_of_use(None, spans, TODAY), 365 + 366)
+
+    def test_an_open_end_runs_to_today_and_a_future_end_stops_there(self):
+        for ended in (None, date(2030, 1, 1)):
+            with self.subTest(ended=ended):
+                spans = [(date(2026, 11, 1), ended)]
+                self.assertEqual(days_of_use(None, spans, TODAY), 20)
+
+    def test_nothing_to_count_is_none(self):
+        self.assertIsNone(days_of_use(None, [], TODAY))
+        # A job that hasn't begun, and one that ends before it starts (a data error).
+        spans = [(date(2027, 1, 1), None), (date(2020, 1, 1), date(2019, 1, 1))]
+        self.assertIsNone(days_of_use(None, spans, TODAY))
+
+    def test_first_used_alone_runs_to_today(self):
+        self.assertEqual(
+            days_of_use(date(2025, 11, 21), [], TODAY),
+            (TODAY - date(2025, 11, 21)).days,
+        )
+
+    def test_first_used_cuts_what_came_before_it(self):
+        spans = [(date(2010, 1, 1), date(2020, 1, 1))]
+        self.assertEqual(
+            days_of_use(date(2018, 1, 1), spans, TODAY),
+            (date(2020, 1, 1) - date(2018, 1, 1)).days,
+        )
+        # A span over before the skill was picked up adds nothing.
+        self.assertEqual(
+            days_of_use(
+                date(2026, 1, 1), [(date(2010, 1, 1), date(2012, 1, 1))], TODAY
+            ),
+            (TODAY - date(2026, 1, 1)).days,
+        )
+
+    def test_first_used_bridges_to_the_first_linked_entry_only(self):
+        """Python since 2015, a job 2015 to 2018, a project since 2024: the years in between
+        don't count."""
+        spans = [(date(2015, 9, 1), date(2018, 9, 1)), (date(2024, 9, 1), None)]
+        days = days_of_use(date(2015, 9, 1), spans, TODAY)
+        self.assertEqual(days // 365, 5)
+
+
 class SkillYearsTests(TestCase):
-    """The computed years: when `first_used` is set it wins, whatever the linked entries say."""
+    """The computed years, as every reader gets them from `Skill.objects`: the spans of the
+    linked jobs, projects and educations, from `first_used` on; the user's override wins."""
+
+    def setUp(self):
+        self.user = make_user()
+
+    def _years(self, skill):
+        with patch("django.utils.timezone.localdate", return_value=TODAY):
+            return Skill.objects.get(pk=skill.pk).years_of_experience
+
+    def _job(self, started, ended=None, *skills):
+        job = Job.objects.create(
+            user=self.user, title="Dev", company="Acme", started=started, ended=ended
+        )
+        job.skills.add(*skills)
+        return job
 
     def test_first_used_wins_over_an_earlier_linked_job(self):
-        user = make_user()
         django = Skill.objects.create(
-            user=user, name="Django", first_used=date(2020, 2, 1)
+            user=self.user, name="Django", first_used=date(2020, 2, 1)
         )
-        job = Job.objects.create(
-            user=user, title="Developer", company="Acme", started=date(2016, 4, 15)
-        )
-        job.skills.add(django)
-        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
-            # It showed 10, counted from the job.
-            self.assertEqual(Skill.objects.get(pk=django.pk).years_of_experience, 6)
+        self._job(date(2016, 4, 15), None, django)
+        # It showed 10, counted from the job.
+        self.assertEqual(self._years(django), 6)
 
     def test_first_used_wins_over_a_later_linked_job(self):
-        user = make_user()
         python = Skill.objects.create(
-            user=user, name="Python", first_used=date(2015, 9, 1)
+            user=self.user, name="Python", first_used=date(2015, 9, 1)
         )
-        job = Job.objects.create(
-            user=user, title="Developer", company="Acme", started=date(2018, 4, 15)
+        self._job(date(2018, 4, 15), None, python)
+        self.assertEqual(self._years(python), 11)
+
+    def test_a_job_that_ended_stops_counting(self):
+        """C++ from a job 2015 to mid-2020 showed 11 years: the end date was ignored."""
+        cpp = Skill.objects.create(user=self.user, name="C++")
+        self._job(date(2015, 1, 1), date(2020, 6, 30), cpp)
+        self.assertEqual(self._years(cpp), 5)
+
+    def test_an_education_counts_and_an_overlap_counts_once(self):
+        cpp = Skill.objects.create(user=self.user, name="C++")
+        self._job(date(2015, 1, 1), date(2020, 6, 30), cpp)
+        edu = Education.objects.create(
+            user=self.user,
+            institution="TU",
+            started=date(2012, 10, 1),
+            ended=date(2016, 9, 30),
         )
-        job.skills.add(python)
-        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
-            self.assertEqual(Skill.objects.get(pk=python.pk).years_of_experience, 11)
+        edu.skills.add(cpp)
+        # 2012-10 to 2020-06, not 5.5 + 4.
+        self.assertEqual(self._years(cpp), 7)
+
+    def test_a_project_counts_and_one_without_a_start_doesnt(self):
+        llm = Skill.objects.create(user=self.user, name="Local LLMs")
+        Project.objects.create(
+            user=self.user, name="JAC", started=date(2025, 6, 1)
+        ).skills.add(llm)
+        Project.objects.create(user=self.user, name="Undated").skills.add(llm)
+        self.assertEqual(self._years(llm), 1)
+
+    def test_months_of_use_are_zero_years_not_none(self):
+        llm = Skill.objects.create(user=self.user, name="Local LLMs")
+        Project.objects.create(
+            user=self.user, name="JAC", started=date(2026, 6, 1)
+        ).skills.add(llm)
+        self.assertEqual(self._years(llm), 0)
+
+    def test_a_certification_adds_no_years(self):
+        aws = Skill.objects.create(user=self.user, name="AWS")
+        Certification.objects.create(
+            user=self.user, name="SAA", issuer="AWS", issued_on=date(2015, 1, 1)
+        ).skills.add(aws)
+        self.assertIsNone(self._years(aws))
+
+    def test_the_users_own_number_wins(self):
+        piano = Skill.objects.create(
+            user=self.user,
+            name="Piano",
+            first_used=date(1994, 8, 1),
+            years_of_experience_override=20,
+        )
+        self.assertEqual(self._years(piano), 20)
 
 
 class SeedSystemDefaultsTests(TestCase):
@@ -242,7 +362,12 @@ class CvImportCommandTests(TestCase):
         self.assertEqual(Skill.objects.filter(user=self.user).count(), 8)
 
     def test_an_unknown_reference_is_a_command_error_and_writes_nothing(self):
-        job = {"title": "x", "company": "y", "started": "2020-01-01", "skills": ["Nope"]}
+        job = {
+            "title": "x",
+            "company": "y",
+            "started": "2020-01-01",
+            "skills": ["Nope"],
+        }
         data = {"jobs": [job]}
         with self.assertRaisesMessage(CommandError, "Unknown skill"):
             self._import(data)
@@ -252,7 +377,9 @@ class CvImportCommandTests(TestCase):
         Language.objects.create(user=self.user, name="French")
         self._import({"languages": [{"name": "German"}]}, "--replace")
         self.assertEqual(
-            list(Language.objects.filter(user=self.user).values_list("name", flat=True)),
+            list(
+                Language.objects.filter(user=self.user).values_list("name", flat=True)
+            ),
             ["German"],
         )
 

@@ -19,6 +19,7 @@ import {
   toggleDeselect,
   togglePin,
   toggleSection,
+  yearsLabel,
   type CvContent,
 } from "@/lib/cv-doc";
 import type {
@@ -516,5 +517,21 @@ describe("activeContent / toggleSection — whole sections", () => {
     expect(on1).toEqual(["languages"]);
     expect(off).toEqual([]);
     expect(toggleSection(on1, "languages")).toEqual([]);
+  });
+});
+
+describe("yearsLabel", () => {
+  it("says under a year for a skill in use for months", () => {
+    // A project since June shows 0 whole years: "0 yrs" read as never used.
+    expect(yearsLabel(0)).toBe("<1 yr");
+  });
+
+  it("counts whole years, singular for one", () => {
+    expect(yearsLabel(1)).toBe("1 yr");
+    expect(yearsLabel(7)).toBe("7 yrs");
+  });
+
+  it("shows a dash when there's nothing to count", () => {
+    expect(yearsLabel(null)).toBe("—");
   });
 });

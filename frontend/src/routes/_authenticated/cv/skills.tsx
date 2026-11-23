@@ -66,6 +66,7 @@ import { FavouriteField } from "@/components/cv/favourite-field";
 import { favouriteColumn } from "@/components/cv/favourite-column";
 import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { useLineSave } from "@/components/cv/use-line-save";
+import { yearsLabel } from "@/lib/cv-doc";
 const PROFICIENCY: { value: SkillRow["proficiency"]; label: string }[] = [
   { value: "beginner", label: "Beginner" },
   { value: "intermediate", label: "Intermediate" },
@@ -110,11 +111,9 @@ function SkillPage() {
   );
   const [category, setCategory] = useState<SkillRow["category"] | "">("");
   const [domain, setDomain] = useState<number | "">("");
-  // "" = default (name), "experience_since" = most experience first,
-  // "-experience_since" = least first.
-  const [expSort, setExpSort] = useState<
-    "" | "experience_since" | "-experience_since"
-  >("");
+  // "" = default (name), "-years_of_experience" = most experience first,
+  // "years_of_experience" = least first.
+  const [expSort, setExpSort] = useState<ExpSort>("");
   const [favFirst, setFavFirst] = useState(false);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [editing, setEditing] = useState<SkillRow | null>(null);
@@ -149,9 +148,9 @@ function SkillPage() {
   const cycleExpSort = () =>
     setExpSort((o) =>
       o === ""
-        ? "experience_since"
-        : o === "experience_since"
-          ? "-experience_since"
+        ? "-years_of_experience"
+        : o === "-years_of_experience"
+          ? "years_of_experience"
           : "",
     );
 
@@ -270,92 +269,95 @@ function SkillPage() {
             onSelect={openEditor}
           />
         ) : (
-        <>
-          <BulkBar
-            count={selectedIds.length}
-            onDelete={() => {
-              if (!confirm(`Delete ${selectedIds.length} skills?`)) return;
-              bulkDestroy.mutate(selectedIds, {
-                onSuccess: () => {
-                  toast.success("Deleted");
-                  setSelection({});
-                },
-                onError: () => toast.error("Bulk delete failed"),
-              });
-            }}
-            onAssignDomains={(add, remove) =>
-              bulkDomains.mutate(
-                { ids: selectedIds, add, remove },
-                {
+          <>
+            <BulkBar
+              count={selectedIds.length}
+              onDelete={() => {
+                if (!confirm(`Delete ${selectedIds.length} skills?`)) return;
+                bulkDestroy.mutate(selectedIds, {
                   onSuccess: () => {
-                    toast.success("Domains updated");
+                    toast.success("Deleted");
                     setSelection({});
                   },
-                  onError: () => toast.error("Bulk domain update failed"),
-                },
-              )
-            }
-          />
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((h) => (
-                      <TableHead key={h.id} style={{ width: h.getSize() }}>
-                        {flexRender(h.column.columnDef.header, h.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {list.isLoading && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={columns.length}
-                      className="text-center text-muted-foreground"
-                    >
-                      Loading…
-                    </TableCell>
-                  </TableRow>
-                )}
-                {list.isError && rows.length === 0 && (
-                  <TableLoadError
-                    list={list}
-                    what="your skills"
-                    colSpan={columns.length}
-                  />
-                )}
-                {!list.isLoading && !list.isError && rows.length === 0 && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={columns.length}
-                      className="text-center text-muted-foreground"
-                    >
-                      No skills yet — click <strong>New</strong> to add one.
-                    </TableCell>
-                  </TableRow>
-                )}
-                {table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() ? "selected" : undefined}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext(),
-                        )}
+                  onError: () => toast.error("Bulk delete failed"),
+                });
+              }}
+              onAssignDomains={(add, remove) =>
+                bulkDomains.mutate(
+                  { ids: selectedIds, add, remove },
+                  {
+                    onSuccess: () => {
+                      toast.success("Domains updated");
+                      setSelection({});
+                    },
+                    onError: () => toast.error("Bulk domain update failed"),
+                  },
+                )
+              }
+            />
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  {table.getHeaderGroups().map((hg) => (
+                    <TableRow key={hg.id}>
+                      {hg.headers.map((h) => (
+                        <TableHead key={h.id} style={{ width: h.getSize() }}>
+                          {flexRender(
+                            h.column.columnDef.header,
+                            h.getContext(),
+                          )}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableHeader>
+                <TableBody>
+                  {list.isLoading && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={columns.length}
+                        className="text-center text-muted-foreground"
+                      >
+                        Loading…
                       </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </>
+                    </TableRow>
+                  )}
+                  {list.isError && rows.length === 0 && (
+                    <TableLoadError
+                      list={list}
+                      what="your skills"
+                      colSpan={columns.length}
+                    />
+                  )}
+                  {!list.isLoading && !list.isError && rows.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={columns.length}
+                        className="text-center text-muted-foreground"
+                      >
+                        No skills yet — click <strong>New</strong> to add one.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {table.getRowModel().rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      data-state={row.getIsSelected() ? "selected" : undefined}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
         )
       }
       pagination={
@@ -383,12 +385,14 @@ function SkillPage() {
 }
 
 const col = createColumnHelper<SkillRow>();
+// The experience column's sort, as the API's `ordering` takes it.
+type ExpSort = "" | "-years_of_experience" | "years_of_experience";
 const rowName = (r: SkillRow) => r.name;
 
 function buildColumns(opts: {
   onEdit: (r: SkillRow) => void;
   onDelete: (r: SkillRow) => void;
-  expSort: "" | "experience_since" | "-experience_since";
+  expSort: ExpSort;
   onToggleExpSort: () => void;
   favFirst: boolean;
   onToggleFav: () => void;
@@ -445,19 +449,16 @@ function buildColumns(opts: {
           className="flex items-center gap-1 hover:text-foreground"
         >
           Experience
-          {opts.expSort === "experience_since" ? (
+          {opts.expSort === "-years_of_experience" ? (
             <ArrowDown className="size-3" />
-          ) : opts.expSort === "-experience_since" ? (
+          ) : opts.expSort === "years_of_experience" ? (
             <ArrowUp className="size-3" />
           ) : (
             <ArrowDownUp className="size-3 opacity-50" />
           )}
         </button>
       ),
-      cell: ({ getValue }) => {
-        const years = getValue();
-        return years == null ? "—" : `${years} yr${years === 1 ? "" : "s"}`;
-      },
+      cell: ({ getValue }) => yearsLabel(getValue()),
     }),
 
     col.display({
@@ -562,7 +563,9 @@ function SkillEditor({
               id={f.name}
               value={f.state.value}
               onChange={(e) => f.handleChange(e.target.value)}
-              onBlur={() => line.save(f.name, f.state.value, f.state.meta.errors)}
+              onBlur={() =>
+                line.save(f.name, f.state.value, f.state.meta.errors)
+              }
             />
             <FieldError errors={f.state.meta.errors} />
             <LineSaveHint s={line.fields[f.name]} />
@@ -662,9 +665,11 @@ function SkillEditor({
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Leave blank to auto-compute from first use / job history
+                Leave blank to count it from the jobs, projects and educations
+                that use this skill, from first use on
                 {row?.years_of_experience != null &&
-                  ` (currently ${row.years_of_experience}y)`}
+                  row.years_of_experience_override == null &&
+                  ` (now ${yearsLabel(row.years_of_experience)})`}
                 .
               </p>
               <FieldError errors={f.state.meta.errors} />
@@ -740,8 +745,8 @@ function SkillEditor({
               excludeId={row?.id}
             />
             <p className="text-xs text-muted-foreground">
-              Prerequisite skills this one rests on (directed, e.g. DRF builds on
-              Django + Python).
+              Prerequisite skills this one rests on (directed, e.g. DRF builds
+              on Django + Python).
             </p>
             <LineSaveHint s={line.fields[f.name]} />
           </div>

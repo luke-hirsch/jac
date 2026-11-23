@@ -1,10 +1,13 @@
+from datetime import date
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.postgres.aggregates import JSONBAgg
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import OuterRef, Subquery, UniqueConstraint
+from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -12,29 +15,35 @@ from lukehirsch.managers import SystemScopedManager
 from lukehirsch.storage import PrivateStorage
 
 
-def _earliest_started_subquery(related_model):
-    """Subquery returning the smallest non-null `started` date among rows of
-    `related_model` (Job or Project) whose `skills` M2M includes the outer
-    Skill row. Used by `SkillManager` below.
-    """
+def _spans_subquery(related_model):
+    """Subquery returning, for the outer Skill row, a JSON list of `{started, ended}` of every
+    `related_model` row (Job, Project or Education) that links the skill and has a start. Read
+    through the M2M's own table, which joins each entry once. Used by `SkillManager` below."""
+    entry = related_model._meta.model_name
     return Subquery(
-        related_model.objects.filter(skills=OuterRef("pk"), started__isnull=False)
-        .order_by("started")
-        .values("started")[:1]
+        related_model.skills.through.objects.filter(
+            skill=OuterRef("pk"), **{f"{entry}__started__isnull": False}
+        )
+        .order_by()
+        .values("skill")
+        .annotate(
+            spans=JSONBAgg(
+                JSONObject(started=f"{entry}__started", ended=f"{entry}__ended")
+            )
+        )
+        .values("spans")
     )
 
 
-def _min_ignoring_none(*values):
-    """min() of the args, skipping None. Returns None if every arg is None."""
-    valid = [v for v in values if v is not None]
-    return min(valid) if valid else None
+# What `SkillManager` annotates: the spans of the jobs, projects and educations that link the
+# skill. A certification is a date, not a span: it adds no years.
+_SPAN_ANNOTATIONS = ("_job_spans", "_project_spans", "_education_spans")
 
 
 class SkillManager(models.Manager):
-    """Default Skill manager. Annotates every queryset with the earliest
-    related Job/Project start date so `Skill.years_of_experience` resolves
-    without per-row aggregate queries — important for list endpoints, where
-    serializing N skills would otherwise issue 2N extra queries.
+    """Default Skill manager. Annotates every queryset with the spans of the entries that link
+    the skill, so `Skill.years_of_experience` resolves without per-row queries: important for
+    list endpoints, where serializing N skills would otherwise issue 3N extra queries.
     """
 
     def get_queryset(self):
@@ -42,10 +51,41 @@ class SkillManager(models.Manager):
             super()
             .get_queryset()
             .annotate(
-                _earliest_job_started=_earliest_started_subquery(Job),
-                _earliest_project_started=_earliest_started_subquery(Project),
+                _job_spans=_spans_subquery(Job),
+                _project_spans=_spans_subquery(Project),
+                _education_spans=_spans_subquery(Education),
             )
         )
+
+
+def days_of_use(first_used, spans, today) -> int | None:
+    """Days a skill was in use: the union of its linked entries' spans, each from `started` to
+    `ended` (or today), overlaps counted once.
+
+    `first_used` says when the user picked it up. Nothing before it counts (a job that started
+    earlier didn't use the skill from its first day), and the time from it to the first linked
+    entry counts as use (to today, when nothing is linked). None when there's nothing to count:
+    no link and no `first_used`, or only ones that start in the future.
+    """
+    kept = []
+    for started, ended in spans:
+        end = min(ended or today, today)
+        start = max(started, first_used) if first_used else started
+        if start <= end:
+            kept.append((start, end))
+    if first_used and first_used <= today:
+        kept.append((first_used, min((s for s, _ in kept), default=today)))
+    if not kept:
+        return None
+    days, reach = 0, None
+    for start, end in sorted(kept):
+        if reach is None or start > reach:
+            days += (end - start).days
+            reach = end
+        elif end > reach:
+            days += (end - reach).days
+            reach = end
+    return days
 
 
 class Mode(models.TextChoices):
@@ -329,32 +369,27 @@ class Skill(CvEntry):
 
     @property
     def years_of_experience(self) -> int | None:
-        """Whole years since the skill has been in use.
+        """Whole years of use, as `days_of_use` counts them from `first_used` and the spans of
+        the jobs, projects and educations that link the skill. The user's own
+        `years_of_experience_override` wins over both.
 
-        Counts from `first_used` when it's set: the user's own date wins, earlier or later than
-        the linked entries (a job that started before they picked the skill up didn't use it
-        from its first day; a skill from before any listed job is older than the CV). Without
-        it, from the earliest `started` among the Jobs and Projects that include this skill.
-
-        is overridden by the `years_of_experience_override` field
-
-        The two related-model dates are precomputed by `SkillManager`, so
-        reading this property issues zero extra queries — *provided* the
-        instance came from `Skill.objects.…`. A freshly-created Skill (one
-        you just `.create()`'d in the same scope) won't carry the annotations
-        yet; refetch via `Skill.objects.get(pk=skill.pk)` if you need them.
+        The spans are precomputed by `SkillManager`, so reading this property issues zero
+        extra queries, *provided* the instance came from `Skill.objects.…`. A freshly-created
+        Skill (one you just `.create()`'d in the same scope) won't carry the annotations yet;
+        refetch via `Skill.objects.get(pk=skill.pk)` if you need them.
         """
         if self.years_of_experience_override is not None:
             return self.years_of_experience_override
-
-        earliest = self.first_used or _min_ignoring_none(
-            getattr(self, "_earliest_job_started", None),
-            getattr(self, "_earliest_project_started", None),
-        )
-        if earliest is None:
-            return None
-
-        return (timezone.localdate() - earliest).days // 365
+        spans = [
+            (
+                date.fromisoformat(span["started"]),
+                date.fromisoformat(span["ended"]) if span["ended"] else None,
+            )
+            for name in _SPAN_ANNOTATIONS
+            for span in getattr(self, name, None) or []
+        ]
+        days = days_of_use(self.first_used, spans, timezone.localdate())
+        return None if days is None else days // 365
 
 
 class Job(CvEntry):
