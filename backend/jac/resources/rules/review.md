@@ -55,7 +55,11 @@ and the public portfolio, which renders from the same entries.
   - a skill that comes from a certification (the skill's `certification`).
 - **Skill hygiene:**
   - near-duplicates;
-  - a level the record doesn't support;
+  - a level the record doesn't support. A skill's `years` count the time the jobs, projects
+    and educations that link it ran, each from start to end (or today), overlaps once. Nothing
+    before `first_used` counts, and the time from `first_used` to the first linked entry does.
+    0 means under a year. When `years_override` is set, `years` is the number the user typed in
+    jac: ask before calling it wrong;
   - soft skills claimed but backed by nothing;
   - the wrong category (a tool filed as `domain`).
 - **Consistency:**
@@ -82,7 +86,8 @@ and the public portfolio, which renders from the same entries.
   move its links to the one that stays and tell the user to delete the other in jac.
 - **Which links count.** These change CVs:
   - entry → skill: `skills` on jobs, projects, educations and certifications. They feed an
-    entry's ranking against a posting and the skill's years of use;
+    entry's ranking against a posting. On jobs, projects and educations they also give the
+    skill its years of use: a certification is a date, not a span, and adds none;
   - project → job;
   - skill or language → certification.
 
@@ -129,9 +134,8 @@ Pass the batch to `apply_career_changes` as `changes`:
     "certification:2"` on a skill or language;
   - read-only, so never in a change: `id`, `updated_at`, `location` (the user sets it in jac),
     a job's `projects` (set `job` on the project instead), an education's `completed` (it
-    follows from `degree_level`) and a skill's `years` (jac counts them from `first_used` and
-    the entries that link the skill). jac refuses any other name, and its answer lists the ones
-    the entry takes.
+    follows from `degree_level`) and a skill's `years` and `years_override` (see skill
+    hygiene above). jac refuses any other name, and its answer lists the ones the entry takes.
 - **`add` / `remove`:** lists.
   - `skills`, `related_skills` and `builds_on` take skill ids, or `new:<ref>` for a skill this
     batch creates;

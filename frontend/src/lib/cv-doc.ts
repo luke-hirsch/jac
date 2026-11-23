@@ -106,6 +106,14 @@ export function dateRange(
   return `${from} – ${to}`;
 }
 
+/** A skill's years of use as the skills page shows them. 0 is a skill in use for less than a
+ * year (the backend counts whole years), null one with nothing to count. */
+export function yearsLabel(years: number | null): string {
+  if (years == null) return "—";
+  if (years < 1) return "<1 yr";
+  return `${years} yr${years === 1 ? "" : "s"}`;
+}
+
 /** One ordered field, one meaning: anything above `none` is a formal qualification. */
 export const isDegree = (e: EducationRow) => e.degree_level > 0;
 

@@ -19,14 +19,13 @@ import json
 import logging
 import time
 from dataclasses import replace
-from datetime import date
+from functools import partial
 
 from asgiref.sync import sync_to_async
 from celery import current_app as celery_current_app
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models.functions import Coalesce, Least
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
@@ -343,6 +342,11 @@ class CertificationViewSet(BulkActionMixin, viewsets.ModelViewSet):
 
 
 class SkillViewSet(BulkActionMixin, viewsets.ModelViewSet):
+    """`?ordering=` also takes `years_of_experience` (most first with `-`): the years are counted
+    in Python (`Skill.years_of_experience`), so that order is sorted in Python too, over the
+    user's whole filtered list, before the page is cut. A user has dozens of skills, not
+    thousands."""
+
     serializer_class = SkillSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     search_fields = ["name"]
@@ -351,25 +355,51 @@ class SkillViewSet(BulkActionMixin, viewsets.ModelViewSet):
         "name",
         "first_used",
         "proficiency",
-        "experience_since",
         "favourite",
         "created_at",
         "updated_at",
     ]
+    YEARS = "years_of_experience"
 
     def get_queryset(self):
-        far_future = date(9999, 12, 31)
-        return (
-            Skill.objects.filter(user=self.request.user)
-            .annotate(
-                experience_since=Least(
-                    Coalesce("first_used", far_future),
-                    Coalesce("_earliest_job_started", far_future),
-                    Coalesce("_earliest_project_started", far_future),
-                )
-            )
-            .order_by("name")
+        return Skill.objects.filter(user=self.request.user).order_by("name")
+
+    def list(self, request, *args, **kwargs):
+        terms = [
+            t.strip()
+            for t in request.query_params.get("ordering", "").split(",")
+            if t.strip()
+        ]
+        if not any(t.lstrip("-") == self.YEARS for t in terms):
+            return super().list(request, *args, **kwargs)
+        rows = sorted(
+            self.filter_queryset(self.get_queryset()), key=lambda s: s.name.lower()
         )
+        # Stable sorts, last term first, give the same order as one multi-key ORDER BY.
+        for term in reversed(terms):
+            field = term.lstrip("-")
+            if field == self.YEARS:
+                key = _years_key
+            elif field in self.ordering_fields:
+                key = partial(_field_key, field=field)
+            else:
+                continue
+            rows.sort(key=key, reverse=term.startswith("-"))
+        page = self.paginate_queryset(rows)
+        if page is None:
+            return Response(self.get_serializer(rows, many=True).data)
+        return self.get_paginated_response(self.get_serializer(page, many=True).data)
+
+
+def _years_key(skill) -> int:
+    """No years sorts as the least experience, as an unset date used to."""
+    years = skill.years_of_experience
+    return -1 if years is None else years
+
+
+def _field_key(obj, field):
+    value = getattr(obj, field)
+    return (value is None, value)
 
 
 class JobViewSet(BulkActionMixin, viewsets.ModelViewSet):

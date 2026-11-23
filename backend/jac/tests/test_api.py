@@ -10,7 +10,7 @@ import io
 import json
 import threading
 import zipfile
-from datetime import timedelta
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import redis
@@ -1370,6 +1370,71 @@ class EducationDegreeApiTests(APITestCase):
 # --- [fullstack]-cv-section-toggles -------------------------------------------------
 
 
+class SkillYearsApiTests(APITestCase):
+    """The skills page reads the years from the list and sorts by them on the server: the
+    years are counted in Python, so that sort is too, before the page is cut."""
+
+    URL = "/api/jac/skills/"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        job = Job.objects.create(
+            user=cls.user,
+            title="Dev",
+            company="Acme",
+            started="2015-01-01",
+            ended="2020-06-30",
+        )
+        cls.cpp = Skill.objects.create(user=cls.user, name="C++")
+        job.skills.add(cls.cpp)
+        cls.drums = Skill.objects.create(
+            user=cls.user, name="Drums", years_of_experience_override=1
+        )
+        cls.piano = Skill.objects.create(
+            user=cls.user, name="Piano", first_used="1994-08-01", favourite=True
+        )
+        cls.kotlin = Skill.objects.create(user=cls.user, name="Kotlin")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _names(self, ordering):
+        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
+            r = self.client.get(self.URL, {"ordering": ordering})
+        self.assertEqual(r.status_code, 200, r.data)
+        return [row["name"] for row in r.data["results"]]
+
+    def test_the_list_counts_the_end_date(self):
+        with patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)):
+            rows = self.client.get(self.URL).data["results"]
+        years = {row["name"]: row["years_of_experience"] for row in rows}
+        self.assertEqual(years, {"C++": 5, "Drums": 1, "Piano": 32, "Kotlin": None})
+
+    def test_most_years_first_and_nothing_counted_last(self):
+        self.assertEqual(
+            self._names("-years_of_experience"), ["Piano", "C++", "Drums", "Kotlin"]
+        )
+        self.assertEqual(
+            self._names("years_of_experience"), ["Kotlin", "Drums", "C++", "Piano"]
+        )
+
+    def test_favourites_first_then_years(self):
+        self.assertEqual(
+            self._names("-favourite,years_of_experience"),
+            ["Piano", "Kotlin", "Drums", "C++"],
+        )
+
+    def test_the_page_is_cut_after_the_sort(self):
+        with (
+            patch("django.utils.timezone.localdate", return_value=date(2026, 11, 21)),
+            patch("rest_framework.pagination.PageNumberPagination.page_size", 2),
+        ):
+            r = self.client.get(self.URL, {"ordering": "-years_of_experience"})
+        self.assertEqual([row["name"] for row in r.data["results"]], ["Piano", "C++"])
+        self.assertEqual(r.data["count"], 4)
+
+
 class SectionsOffApiTests(APITestCase):
     """Whole sections switched off for one application. Unknown keys are a 400, not a
     silent no-op: a typo that quietly does nothing is the worst failure mode here."""
@@ -2637,7 +2702,15 @@ class ConnectorCareerChangeTests(_McpCase):
 
     def test_every_name_career_shows_is_settable_or_read_only(self):
         # What a change can't set: jac works it out, or the user edits it elsewhere in jac.
-        read_only = {"id", "updated_at", "location", "projects", "completed", "years"}
+        read_only = {
+            "id",
+            "updated_at",
+            "location",
+            "projects",
+            "completed",
+            "years",
+            "years_override",
+        }
         cert = Certification.objects.create(
             user=self.user, name="AWS SAA", issuer="AWS"
         )
