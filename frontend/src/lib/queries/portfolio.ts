@@ -25,6 +25,8 @@ export type PortfolioItem = {
   ended?: string | null;
   url?: string;
   domains: string[];
+  /** Jobs and projects: the skills on this page they used (spa.portfolio._link_skills). */
+  skills?: string[];
   // block-only:
   kind?: "text" | "image";
   body?: string;
