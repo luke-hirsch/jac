@@ -97,6 +97,12 @@ http {
         location /media/ {
             include /app/media.inc;
         }
+        # The icons the landing links, from the SPA's build. Through the 302 below they'd come
+        # from portfolio., which says noindex, and the landing is the page search engines show.
+        location ~ ^/(favicon\.(svg|ico)|apple-touch-icon\.png)$ {
+            root /app/webroot;
+            add_header X-Content-Type-Options nosniff always;
+        }
         # Any other path is a portfolio's: luke-hirsch.de/lukas/acme/ is portfolio.…/lukas/acme/.
         location / {
             return 302 https://portfolio.@BASE_DOMAIN@$request_uri;

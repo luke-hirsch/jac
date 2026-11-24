@@ -777,6 +777,41 @@ class DeployFilesTests(SimpleTestCase):
         self.assertIsNotNone(well_known, "/.well-known/ falls through to the SPA's index.html")
         self.assertIn("return 404;", well_known.group(1))
 
+    def test_every_page_links_icons_that_ship_and_the_apex_serves_them(self):
+        """jac. and portfolio. serve the icons from the SPA's build. The apex 302s any other path
+        to portfolio., which says noindex, and the landing is the page search engines show."""
+        heads = {
+            "index.html": REPO_ROOT / "frontend" / "index.html",
+            "landing": BACKEND_DIR / "spa" / "templates" / "spa" / "landing.html",
+            "legal": BACKEND_DIR / "spa" / "templates" / "spa" / "legal" / "base.html",
+        }
+        linked = {
+            name: set(
+                re.findall(
+                    r'<link rel="(?:icon|apple-touch-icon)" href="(/[^"]+)"', path.read_text()
+                )
+            )
+            for name, path in heads.items()
+        }
+        icons = linked["index.html"]
+        self.assertTrue(icons, "regex found no icon link: fix the test")
+        for name, hrefs in linked.items():
+            with self.subTest(page=name):
+                self.assertEqual(hrefs, icons, "every page links the same icons")
+        template = (REPO_ROOT / "deploy" / "image" / "nginx.conf.template").read_text()
+        apex = next(b for n, b in _server_blocks(template).items() if n.startswith("@BASE_DOMAIN@"))
+        served = [
+            re.compile(pattern)
+            for pattern, body in re.findall(r"location ~ (\S+) \{([^}]*)\}", apex)
+            if "root /app/webroot;" in body
+        ]
+        for href in sorted(icons):
+            with self.subTest(icon=href):
+                self.assertTrue((REPO_ROOT / "frontend" / "public" / href[1:]).is_file())
+                self.assertTrue(
+                    any(p.match(href) for p in served), "the apex 302s it to portfolio."
+                )
+
     def test_a_checkout_merges_no_compose_override_on_its_own(self):
         """Compose picks up compose.override.yaml by name. The laptop's (DEBUG on, a laptop's
         database) would land on any box that clones the repo."""
