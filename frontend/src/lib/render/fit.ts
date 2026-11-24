@@ -138,6 +138,30 @@ export function effectiveCaps(
 }
 
 /**
+ * The description budget for one application: the layout's `detailed`, deepened by the
+ * `detailed_when_off` rule of each section the application switched off. `kept` is the
+ * floor the page fit may not shorten below (`reductionOrder`): only the sections a rule
+ * names are in it; the rest stay at MIN_DETAILED. Two rules naming one section: the
+ * deeper one wins. A rule never lowers a budget — it says "at least".
+ */
+export function effectiveDetail(
+  cv: Pick<LayoutSpec["cv"], "detailed" | "detailed_when_off">,
+  sectionsOff: string[] = [],
+): { detailed: Record<string, number>; kept: Record<string, number> } {
+  const detailed = { ...cv.detailed };
+  const kept: Record<string, number> = {};
+  for (const off of sectionsOff) {
+    for (const [section, n] of Object.entries(
+      cv.detailed_when_off[off] ?? {},
+    )) {
+      detailed[section] = Math.max(detailed[section] ?? 0, n);
+      kept[section] = Math.max(kept[section] ?? MIN_DETAILED, n);
+    }
+  }
+  return { detailed, kept };
+}
+
+/**
  * Page count of a rendered PDF, from its object dictionaries: one "/Type /Page" per page
  * ("/Type /Pages" is the tree node — excluded). react-pdf/pdfkit writes dictionaries
  * uncompressed, so a latin1 decode of the bytes is scannable.
@@ -155,7 +179,8 @@ export type Step = { kind: "demote" | "drop"; id: string };
  * Every reduction available, cheapest first. Two rungs, in order:
  *
  *   1. **demote** a full entry to compact (drop its description), deepest rank fraction
- *      first, never below `MIN_DETAILED` per section;
+ *      first, never below the section's floor — `MIN_DETAILED`, or what a switched-off
+ *      section's rule keeps (`kept`, from `effectiveDetail`);
  *   2. **drop** it entirely, in the existing `dropOrder`.
  *
  * All demotions come before any drop. That is an editorial decision, not an accident:
@@ -170,13 +195,14 @@ export function reductionOrder(
   content: CvContent,
   detailed: Record<string, number>,
   isFavourite: (id: string) => boolean = () => false,
+  kept: Record<string, number> = {},
 ): Step[] {
   const demotes: { id: string; frac: number; section: string }[] = [];
   for (const [section, list] of Object.entries(content)) {
-    // Only entries the layout renders in full can be demoted, and the top
-    // MIN_DETAILED of each section stay full whatever happens.
+    // Only entries the layout renders in full can be demoted, and the top of each
+    // section stays full whatever happens: MIN_DETAILED of it, or what `kept` says.
     const budget = Math.min(detailed[section] ?? 0, list.length);
-    for (let i = MIN_DETAILED; i < budget; i++) {
+    for (let i = kept[section] ?? MIN_DETAILED; i < budget; i++) {
       const e = list[i];
       if (e.detail) continue;
       demotes.push({ id: e.id, frac: (i + 1) / list.length, section });
@@ -249,8 +275,9 @@ export async function reduceCv(
   maxPages: number,
   pagesFor: PagesFor,
   isFavourite?: (id: string) => boolean,
+  kept?: Record<string, number>,
 ): Promise<ReduceResult> {
-  const steps = reductionOrder(content, detailed, isFavourite);
+  const steps = reductionOrder(content, detailed, isFavourite, kept);
   const pagesAt = (k: number) => {
     const c = applySteps(content, steps.slice(0, k));
     return pagesFor(c.content, c.demoted);
@@ -468,9 +495,17 @@ export async function fitContent(
   maxPages: number,
   pagesFor: PagesFor,
   isFavourite?: (id: string) => boolean,
+  kept?: Record<string, number>,
 ): Promise<PreflightResult> {
   const capped = capContent(full, maxEntries);
-  const fit = await reduceCv(capped, detailed, maxPages, pagesFor, isFavourite);
+  const fit = await reduceCv(
+    capped,
+    detailed,
+    maxPages,
+    pagesFor,
+    isFavourite,
+    kept,
+  );
   if (fit.droppedIds.length > 0 || fit.demotedIds.length > 0 || !fit.fits)
     return {
       ...fit,

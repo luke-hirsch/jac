@@ -88,6 +88,55 @@ describe("parseLayoutSpec", () => {
   });
 });
 
+/**
+ * Guide 24 (`[fullstack]-detail-without-certifications`): a switched-off section can
+ * deepen the description budget. The rule lives in the layout, beside `detailed`, so a
+ * user-uploaded layout states its own (or `{}` for none).
+ */
+describe("parseLayoutSpec — detailed_when_off", () => {
+  it("the fallback describes two jobs and two projects with certifications off", () => {
+    expect(FALLBACK_SPEC.cv.detailed_when_off).toEqual({
+      certifications: { jobs: 2, projects: 2 },
+    });
+  });
+
+  it("falls back to the default rule when the layout states none", () => {
+    const spec = parseLayoutSpec({ cv: { pages: 2 } });
+    expect(spec.cv.detailed_when_off).toEqual(FALLBACK_SPEC.cv.detailed_when_off);
+  });
+
+  it("reads an empty map as no rule at all", () => {
+    const spec = parseLayoutSpec({ cv: { detailed_when_off: {} } });
+    expect(spec.cv.detailed_when_off).toEqual({});
+  });
+
+  it("maps legacy names on both levels and drops junk counts", () => {
+    const spec = parseLayoutSpec({
+      cv: {
+        detailed_when_off: {
+          certifications: {
+            jobs: 3,
+            education: 2, // legacy singular, inner
+            projects: 0, // non-positive → no rule for projects
+            skills: "lots" as unknown as number, // junk
+          },
+          education: { jobs: 4 }, // legacy singular, outer
+        },
+      },
+    });
+    expect(spec.cv.detailed_when_off).toEqual({
+      certifications: { jobs: 3, educations: 2 },
+      educations: { jobs: 4 },
+    });
+  });
+
+  it("does not share the fallback's objects with the parsed spec", () => {
+    const spec = parseLayoutSpec(undefined);
+    spec.cv.detailed_when_off.certifications.jobs = 9;
+    expect(FALLBACK_SPEC.cv.detailed_when_off.certifications.jobs).toBe(2);
+  });
+});
+
 describe("templatePath", () => {
   it("rewrites an absolute media URL to a same-origin path", () => {
     expect(

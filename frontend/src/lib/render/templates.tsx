@@ -24,7 +24,7 @@ import type { ReactElement } from "react";
 import { SECTION_TITLES, type CvContent, type SectionKey } from "@/lib/cv-doc";
 import { formatLetterDate, type LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
-import { countPdfPages } from "./fit";
+import { countPdfPages, effectiveDetail } from "./fit";
 import { entryParts, skillGroups, entryDetail } from "./parts";
 import type { LayoutSpec } from "./spec";
 
@@ -405,6 +405,7 @@ export function CvPages({
   hidden,
   portfolio,
   demoted,
+  sectionsOff,
 }: {
   spec: LayoutSpec;
   name: string;
@@ -416,8 +417,12 @@ export function CvPages({
   hidden?: string;
   portfolio?: { qr: string };
   demoted?: Set<string>;
+  /** The application's switched-off sections: they can deepen the layout's
+   *  description budget (`detailed_when_off`). Already gone from `content`. */
+  sectionsOff?: string[];
 }) {
   const styles = cvStyles(spec);
+  const { detailed } = effectiveDetail(spec.cv, sectionsOff);
   return (
     <Page size={spec.page.size} style={styles.page} wrap>
       {portfolio ? (
@@ -437,7 +442,7 @@ export function CvPages({
           content={content}
           db={db}
           styles={styles}
-          detailed={spec.cv.detailed}
+          detailed={detailed}
           demoted={demoted}
         />
       ))}
