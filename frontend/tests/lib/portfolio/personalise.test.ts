@@ -20,7 +20,7 @@ const job = (over: Partial<PersonaliseStatus> = {}): PersonaliseStatus => ({
 });
 
 const input = (over: Partial<PersonaliseInput> = {}): PersonaliseInput => ({
-  lucky: false,
+  needed: true,
   hasQuery: true,
   startFailed: false,
   job: undefined,
@@ -36,8 +36,13 @@ const steps = (over: Partial<PersonaliseInput>) => {
 };
 
 describe("personaliseView", () => {
-  it("a lucky draw has nothing to wait for", () => {
-    expect(personaliseView(input({ lucky: true }))).toEqual({ phase: "off" });
+  it("a lucky draw or the standard page has nothing to wait for", () => {
+    expect(personaliseView(input({ needed: false }))).toEqual({ phase: "off" });
+    expect(
+      personaliseView(
+        input({ needed: false, job: job({ status: "done", intro: "Hi" }) }),
+      ),
+    ).toEqual({ phase: "off" });
   });
 
   it("a start that failed (throttled, server down) is the standard page", () => {

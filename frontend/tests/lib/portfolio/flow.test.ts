@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FOCUS,
   DEFAULT_TONE,
+  exploreSearchSchema,
   formToSearch,
   hasAnswer,
   luckySearch,
+  needsPersonalise,
   searchToForm,
   splitQuery,
+  standardSearch,
 } from "@/lib/portfolio/questionnaire";
 import { nativeStamp, readStamp, writeStamp } from "@/lib/portfolio/stamp";
 
@@ -80,6 +83,52 @@ describe("splitQuery", () => {
 describe("luckySearch", () => {
   it("is lucky and nothing else", () => {
     expect(luckySearch()).toEqual({ lucky: true });
+  });
+});
+
+describe("standardSearch", () => {
+  it("is the questionnaire answered with nothing picked", () => {
+    expect(standardSearch()).toEqual({
+      focus: DEFAULT_FOCUS,
+      tone: DEFAULT_TONE,
+    });
+  });
+
+  it("is an answer, so the owner's home shows the page and not the questions", () => {
+    expect(hasAnswer(standardSearch())).toBe(true);
+  });
+
+  it("is what the backend's standard address says (spa.portfolio.standard_page_url)", () => {
+    const params = new URLSearchParams("focus=balanced&tone=neutral");
+    expect(exploreSearchSchema.parse(Object.fromEntries(params))).toEqual(
+      standardSearch(),
+    );
+  });
+});
+
+describe("needsPersonalise", () => {
+  const style = { focus: "technical", tone: "personal" };
+
+  it("is false for the standard page, whatever the style", () => {
+    expect(needsPersonalise(standardSearch())).toBe(false);
+    expect(needsPersonalise(style)).toBe(false);
+    expect(needsPersonalise({ ...style, d: [] })).toBe(false);
+  });
+
+  it("is false for a blank question", () => {
+    expect(needsPersonalise({ ...style, q: "   " })).toBe(false);
+  });
+
+  it("is true once a topic is picked or a question written", () => {
+    expect(needsPersonalise({ ...style, d: ["music"] })).toBe(true);
+    expect(needsPersonalise({ ...style, q: "jazz" })).toBe(true);
+  });
+
+  it("is false for a lucky draw, picks or not", () => {
+    expect(needsPersonalise({ lucky: true })).toBe(false);
+    expect(needsPersonalise({ lucky: true, d: ["music"], q: "jazz" })).toBe(
+      false,
+    );
   });
 });
 
