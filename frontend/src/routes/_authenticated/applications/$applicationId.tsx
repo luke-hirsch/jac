@@ -72,7 +72,7 @@ function ApplicationDetailPage() {
           {app.data.posting_detail.title || "Untitled posting"}
         </h1>
         <Link to="/applications" className="text-sm hover:underline">
-          ← All applications
+          ← Applications
         </Link>
       </div>
 

@@ -120,6 +120,42 @@ export const OUTCOME_LABELS: Record<ResponseOutcome, string> = {
   rejected: "Rejected",
   other: "Other",
 };
+
+/** Every status, in lifecycle order (STATUS_LABELS' key order). */
+export const APPLICATION_STATUSES = Object.keys(
+  STATUS_LABELS,
+) as ApplicationStatus[];
+
+/** The list's `?status=`: a known status, anything else is no filter. */
+export function parseStatusFilter(raw: unknown): ApplicationStatus | undefined {
+  return APPLICATION_STATUSES.find((s) => s === raw);
+}
+
+export type ApplicationsSearch = { status?: ApplicationStatus };
+
+/** validateSearch for the applications section (the list and, retained, the detail page). */
+export function applicationsSearch(
+  search: Record<string, unknown>,
+): ApplicationsSearch {
+  return { status: parseStatusFilter(search.status) };
+}
+
+/** The filter's options: each status the list holds, in lifecycle order, with its count. */
+export function statusCounts(
+  rows: { status: ApplicationStatus }[],
+): { status: ApplicationStatus; count: number }[] {
+  return APPLICATION_STATUSES.map((status) => ({
+    status,
+    count: rows.filter((r) => r.status === status).length,
+  })).filter((s) => s.count > 0);
+}
+
+export function filterByStatus<T extends { status: ApplicationStatus }>(
+  rows: T[],
+  status: ApplicationStatus | undefined,
+): T[] {
+  return status ? rows.filter((r) => r.status === status) : rows;
+}
 /* ---------- query hooks ---------- */
 
 const URL = "/api/jac/applications/";
