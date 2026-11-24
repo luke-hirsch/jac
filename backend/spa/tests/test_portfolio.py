@@ -1485,6 +1485,63 @@ class PublicNameTests(TestCase):
         self.assertEqual(build_payload(self.owner)["owner"]["display_name"], "Max M")
 
 
+class OwnerAccentTests(TestCase):
+    """Guide 29: the public portfolio wears the owner's accent, the colour they picked for their
+    CV (`UserProfile.accent_color`). The page makes it readable on its dark ground; the payload
+    only carries it, blank when there's none. A colour is no contact detail, so it doesn't wait
+    for `show_socials`. The questionnaire has no payload yet, so its meta carries it too."""
+
+    def setUp(self):
+        cache.clear()  # the public endpoints are throttled
+        self.owner = _owner("jane")
+
+    def _pick(self, colour):
+        UserProfile.objects.filter(user=self.owner).update(accent_color=colour)
+        self.owner.refresh_from_db()
+
+    def test_blank_when_the_owner_picked_none(self):
+        self.assertEqual(build_payload(self.owner)["owner"]["accent"], "")
+
+    def test_the_owners_pick_on_every_kind_of_page(self):
+        self._pick("#1a7f56")
+        link = PortfolioLink.objects.create(
+            user=self.owner, kind=PortfolioLink.Kind.manual, slug="for-acme"
+        )
+        for payload in (
+            build_payload(self.owner),
+            build_payload(self.owner, link=link),
+            build_payload(self.owner, lucky=True, seed=1),
+        ):
+            self.assertEqual(payload["owner"]["accent"], "#1a7f56")
+
+    def test_it_doesnt_wait_for_the_socials_opt_in(self):
+        self._pick("#1a7f56")
+        UserProfile.objects.filter(user=self.owner).update(
+            website="https://example.com", show_socials=False
+        )
+        self.owner.refresh_from_db()
+        owner = build_payload(self.owner)["owner"]
+        self.assertEqual(owner["accent"], "#1a7f56")
+        self.assertNotIn("website", owner)
+
+    def test_the_public_endpoints_carry_it(self):
+        self._pick("#8f4700")
+        PortfolioLink.objects.create(
+            user=self.owner, kind=PortfolioLink.Kind.manual, slug="for-acme"
+        )
+        api = "/api/spa/public/jane/"
+        for url in (f"{api}native/", f"{api}links/for-acme/"):
+            r = self.client.get(url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertEqual(r.json()["owner"]["accent"], "#8f4700", url)
+
+    def test_the_questionnaires_meta_carries_it(self):
+        meta = "/api/spa/public/jane/native/meta/"
+        self.assertEqual(self.client.get(meta).json()["accent"], "")
+        self._pick("#8f4700")
+        self.assertEqual(self.client.get(meta).json()["accent"], "#8f4700")
+
+
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class PortfolioPrewarmTests(TestCase):
     """A visitor has started the questionnaire: wake the model server ahead of the rank and the
