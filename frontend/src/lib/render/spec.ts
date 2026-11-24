@@ -24,6 +24,10 @@ export type LayoutSpec = {
      *  to it; the editor warns beyond it. */
     max_entries: Record<string, number>;
     detailed: Record<string, number>;
+    /** Per switched-off section: how deep the sections it names are described at least,
+     *  and kept — the page fit drops entries before it shortens one of these. Resolved
+     *  per application by `effectiveDetail` (fit.ts). */
+    detailed_when_off: Record<string, Record<string, number>>;
   };
   cover_letter: { din5008: boolean };
 };
@@ -47,6 +51,7 @@ export const FALLBACK_SPEC: LayoutSpec = {
       languages: 6,
     },
     detailed: { jobs: 2, projects: 1, educations: 1 },
+    detailed_when_off: { certifications: { jobs: 2, projects: 2 } },
   },
   cover_letter: { din5008: true },
 };
@@ -88,6 +93,18 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
     }
     return out;
   };
+  /** One `sectionCounts` per switched-off section; the outer names normalised too. */
+  const whenOff = (
+    raw: Record<string, Record<string, number>> | undefined,
+    fallback: Record<string, Record<string, number>>,
+  ) => {
+    const out: Record<string, Record<string, number>> = {};
+    for (const [name, counts] of Object.entries(raw ?? fallback)) {
+      if (counts && typeof counts === "object")
+        out[LEGACY_SECTIONS[name] ?? name] = sectionCounts(counts, {});
+    }
+    return out;
+  };
   return {
     version: r.version ?? f.version,
     page: {
@@ -105,6 +122,10 @@ export function parseLayoutSpec(raw: unknown): LayoutSpec {
       sidebar: sidebarGroups(r.cv?.sidebar, f.cv.sidebar),
       max_entries: sectionCounts(r.cv?.max_entries, f.cv.max_entries),
       detailed: sectionCounts(r.cv?.detailed, f.cv.detailed),
+      detailed_when_off: whenOff(
+        r.cv?.detailed_when_off,
+        f.cv.detailed_when_off,
+      ),
     },
     cover_letter: {
       din5008: r.cover_letter?.din5008 ?? f.cover_letter.din5008,

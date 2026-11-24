@@ -23,6 +23,7 @@ import type { CvEntriesResponse } from "@/lib/queries/jac";
 import type { ProfileRow } from "@/lib/queries/profile";
 import {
   effectiveCaps,
+  effectiveDetail,
   fitContent,
   preflightKey,
   type PreflightResult,
@@ -113,6 +114,7 @@ export async function buildPdf({
   // drops alike — goes into the hidden layer as cut_for_space.
   const off = row.sections_off ?? [];
   const full = activeContent(row.cv_content ?? {}, off);
+  const detail = effectiveDetail(s.cv, off);
   const cached = cachedFit?.(
     preflightKey({
       spec: s,
@@ -131,7 +133,7 @@ export async function buildPdf({
         (await fitContent(
           full,
           effectiveCaps(s.cv.max_entries, off),
-          s.cv.detailed,
+          detail.detailed,
           s.cv.pages,
           (c, demoted) =>
             pdfPages(
@@ -141,12 +143,14 @@ export async function buildPdf({
                 content={c}
                 db={db}
                 demoted={demoted}
+                sectionsOff={off}
                 contact={contact}
                 summary={summary}
                 portfolio={portfolio}
               />,
             ),
           isFavouriteLookup(db),
+          detail.kept,
         )));
   const demoted = new Set(fit?.demotedIds ?? []);
 
@@ -190,6 +194,7 @@ export async function buildPdf({
         hidden={hidden}
         portfolio={portfolio}
         demoted={demoted}
+        sectionsOff={off}
       />
     ) : scope === "letter" ? (
       <LetterDocument
@@ -213,6 +218,7 @@ export async function buildPdf({
           hidden,
           portfolio,
           demoted,
+          sectionsOff: off,
         }}
         letter={{
           spec: s,

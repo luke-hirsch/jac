@@ -5,8 +5,10 @@ import {
   countPdfPages,
   dropOrder,
   effectiveCaps,
+  effectiveDetail,
   MAX_CAP_GROWTH,
 } from "@/lib/render/fit";
+import { MIN_DETAILED } from "@/lib/render/parts";
 import type { CvContent } from "@/lib/cv-doc";
 
 /**
@@ -190,5 +192,72 @@ describe("effectiveCaps", () => {
   it("never returns a cap below one", () => {
     const out = effectiveCaps({ jobs: 1, skills: 1 }, ["skills"]);
     expect(out.jobs).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/**
+ * Guide 24 (`[fullstack]-detail-without-certifications`). With certifications off the CV
+ * describes two jobs and two projects, and keeps them: `kept` is the floor the page fit
+ * may not shorten below (`reductionOrder`), so it drops tail entries first.
+ */
+describe("effectiveDetail", () => {
+  /** The default layout's numbers, written out so this suite doesn't move with it. */
+  const CV = {
+    detailed: { jobs: 2, projects: 1, educations: 1 },
+    detailed_when_off: { certifications: { jobs: 2, projects: 2 } },
+  };
+
+  it("changes nothing when every section is on", () => {
+    expect(effectiveDetail(CV, [])).toEqual({ detailed: CV.detailed, kept: {} });
+    expect(effectiveDetail(CV)).toEqual({ detailed: CV.detailed, kept: {} });
+  });
+
+  it("describes and keeps two jobs and two projects with certifications off", () => {
+    expect(effectiveDetail(CV, ["certifications"])).toEqual({
+      detailed: { jobs: 2, projects: 2, educations: 1 },
+      kept: { jobs: 2, projects: 2 },
+    });
+  });
+
+  it("leaves a section no rule names at the default floor", () => {
+    const { kept } = effectiveDetail(CV, ["certifications"]);
+    expect(kept).not.toHaveProperty("educations");
+    expect(MIN_DETAILED).toBe(1); // what reductionOrder falls back to for it
+  });
+
+  it("never lowers a deeper budget: the rule says 'at least'", () => {
+    // The two-page layout: four jobs described already.
+    const twoPage = { ...CV, detailed: { jobs: 4, projects: 2, educations: 1 } };
+    expect(effectiveDetail(twoPage, ["certifications"])).toEqual({
+      detailed: { jobs: 4, projects: 2, educations: 1 },
+      kept: { jobs: 2, projects: 2 },
+    });
+  });
+
+  it("changes nothing for a switched-off section without a rule", () => {
+    expect(effectiveDetail(CV, ["skills"])).toEqual({
+      detailed: CV.detailed,
+      kept: {},
+    });
+  });
+
+  it("takes the deeper of two rules naming the same section", () => {
+    const cv = {
+      detailed: { jobs: 1 },
+      detailed_when_off: {
+        certifications: { jobs: 2 },
+        skills: { jobs: 3 },
+      },
+    };
+    expect(effectiveDetail(cv, ["certifications", "skills"])).toEqual({
+      detailed: { jobs: 3 },
+      kept: { jobs: 3 },
+    });
+  });
+
+  it("does not touch the layout it was given", () => {
+    const cv = structuredClone(CV);
+    effectiveDetail(cv, ["certifications"]);
+    expect(cv).toEqual(CV);
   });
 });

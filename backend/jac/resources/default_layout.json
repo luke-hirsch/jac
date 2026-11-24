@@ -15,7 +15,8 @@
       "skills": 18,
       "languages": 6
     },
-    "detailed": { "jobs": 2, "projects": 1, "educations": 1 }
+    "detailed": { "jobs": 2, "projects": 1, "educations": 1 },
+    "detailed_when_off": { "certifications": { "jobs": 2, "projects": 2 } }
   },
   "cover_letter": { "din5008": true }
 }

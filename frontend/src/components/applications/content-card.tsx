@@ -54,7 +54,7 @@ import {
 } from "@/lib/queries/jac";
 import { contactLine } from "@/lib/letter-doc";
 import { useProfile } from "@/lib/queries/profile";
-import { effectiveCaps } from "@/lib/render/fit";
+import { effectiveCaps, effectiveDetail } from "@/lib/render/fit";
 import { entryDetail } from "@/lib/render/parts";
 import { useRenderSpec } from "@/lib/render/spec";
 import { LetterEditor } from "./letter-editor";
@@ -107,6 +107,10 @@ export function ApplicationContentCard({
     spec.data?.cv.max_entries ?? {},
     sectionsOff,
   );
+  // And the description budget: a switched-off section can deepen it.
+  const detailed = spec.data
+    ? effectiveDetail(spec.data.cv, sectionsOff).detailed
+    : {};
 
   // The real page fit, measured in the background off the live draft — not the crude
   // template cap. It is what the export will do, so the editor can show it up front.
@@ -182,7 +186,7 @@ export function ApplicationContentCard({
                 db={careerDb.data}
                 onEdit={setCvDraft}
                 cap={maxEntries[section]}
-                detailed={spec.data?.cv.detailed ?? {}}
+                detailed={detailed}
                 willCut={willCut}
                 overBudget={overBudget}
                 willShorten={willShorten}

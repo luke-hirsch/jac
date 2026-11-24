@@ -16,6 +16,7 @@ import { stripSoftStub, type LetterMeta } from "@/lib/letter-doc";
 import type { CvEntriesResponse } from "@/lib/queries/jac";
 import {
   effectiveCaps,
+  effectiveDetail,
   fitContent,
   preflightKey,
   type PreflightResult,
@@ -83,10 +84,11 @@ export function usePreflight(args: {
     const timer = setTimeout(() => {
       void (async () => {
         try {
+          const detail = effectiveDetail(spec.cv, sectionsOff);
           const result = await fitContent(
             content,
             effectiveCaps(spec.cv.max_entries, sectionsOff),
-            spec.cv.detailed,
+            detail.detailed,
             spec.cv.pages,
             (c, demoted) =>
               pdfPages(
@@ -96,11 +98,13 @@ export function usePreflight(args: {
                   content: c,
                   db,
                   demoted,
+                  sectionsOff,
                   contact,
                   summary,
                 }),
               ),
             isFavouriteLookup(db),
+            detail.kept,
           );
           const stripped = stripSoftStub(body);
           const letterPages = stripped

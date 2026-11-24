@@ -562,4 +562,58 @@ describe("CV render — detail levels", () => {
     },
     30_000,
   );
+
+  /**
+   * Guide 24: the render works the budget out from the spec and the application's
+   * switched-off sections (`effectiveDetail`), so the measuring render and the export
+   * can't disagree about it.
+   */
+  it(
+    "describes one job more when a switched-off section's rule says so",
+    async () => {
+      const second = {
+        ...db.jobs[0],
+        id: 13,
+        title: "Junior Dev",
+        company: "Initech",
+        description: "Sorted the mail.",
+      };
+      const twoJobs = { ...db, jobs: [db.jobs[0], second] } as CvEntriesResponse;
+      const printed = async (sectionsOff: string[]) =>
+        flat(
+          pdfTextRuns(
+            await renderToBuffer(
+              CvDocument({
+                spec: {
+                  ...FALLBACK_SPEC,
+                  cv: {
+                    ...FALLBACK_SPEC.cv,
+                    detailed: { jobs: 1 },
+                    detailed_when_off: { certifications: { jobs: 2 } },
+                  },
+                },
+                name: "Ada Lovelace",
+                content: {
+                  jobs: [
+                    job,
+                    { id: "job:13", label: "Junior Dev", relevance_score: null },
+                  ],
+                },
+                db: twoJobs,
+                sectionsOff,
+              } as Parameters<typeof CvDocument>[0]),
+            ),
+          ),
+        );
+
+      const on = await printed([]);
+      expect(on).toContain(flat("Ran the platform."));
+      expect(on).not.toContain(flat("Sorted the mail."));
+
+      const off = await printed(["certifications"]);
+      expect(off).toContain(flat("Ran the platform."));
+      expect(off).toContain(flat("Sorted the mail."));
+    },
+    30_000,
+  );
 });

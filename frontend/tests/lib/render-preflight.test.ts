@@ -410,6 +410,21 @@ describe("reductionOrder", () => {
     const steps = reductionOrder({ skills: full().skills }, DETAILED);
     expect(steps.every((s) => s.kind === "drop")).toBe(true);
   });
+
+  /** Guide 24: a switched-off section's rule raises the floor (`effectiveDetail`'s `kept`). */
+  it("never demotes inside a section's kept floor", () => {
+    const demotes = reductionOrder(jobs4(), DETAILED, undefined, { jobs: 2 })
+      .filter((s) => s.kind === "demote")
+      .map((s) => s.id);
+    expect(demotes).toEqual(["job:3"]);
+  });
+
+  it("keeps the MIN_DETAILED floor for a section `kept` doesn't name", () => {
+    const demotes = reductionOrder(jobs4(), DETAILED, undefined, { projects: 2 })
+      .filter((s) => s.kind === "demote")
+      .map((s) => s.id);
+    expect(demotes).toEqual(["job:3", "job:2"]);
+  });
 });
 
 describe("applySteps", () => {
@@ -506,5 +521,44 @@ describe("reduceCv — demote before drop", () => {
     const out = await reduceCv(content, DETAILED, 1, pagesByDetail(9, DETAILED));
     expect(out.demotedIds).toEqual([]);
     expect(out.droppedIds).toEqual(["job:4"]);
+  });
+
+  /**
+   * Guide 24: with certifications off the layout keeps its descriptions. Same page as
+   * above (10 lines, 9 per page): without a floor the ladder shortens job:3; with all
+   * three described jobs kept, it drops the one-liner at the bottom instead.
+   */
+  it("drops a tail entry before it shortens a kept one", async () => {
+    const without = await reduceCv(jobs4(), DETAILED, 1, pagesByDetail(9, DETAILED));
+    expect(without.demotedIds).toEqual(["job:3"]);
+
+    const out = await reduceCv(
+      jobs4(),
+      DETAILED,
+      1,
+      pagesByDetail(9, DETAILED),
+      undefined,
+      { jobs: 3 },
+    );
+    expect(out.demotedIds).toEqual([]);
+    expect(out.droppedIds).toEqual(["job:4"]);
+    expect(out.fits).toBe(true);
+  });
+});
+
+describe("fitContent — a kept floor", () => {
+  it("hands `kept` through to the ladder", async () => {
+    const out = await fitContent(
+      jobs4(),
+      { jobs: 4 },
+      DETAILED,
+      1,
+      pagesByDetail(9, DETAILED),
+      undefined,
+      { jobs: 3 },
+    );
+    expect(out.demotedIds).toEqual([]);
+    expect(out.droppedIds).toEqual(["job:4"]);
+    expect(out.cutIds).toEqual([]);
   });
 });
