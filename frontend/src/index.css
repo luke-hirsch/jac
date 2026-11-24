@@ -8,6 +8,9 @@
 @custom-variant contrast-high (&:is(.contrast-high *));
 
 :root {
+  /* The portfolio's skill network: earlier → recent (lib/portfolio/network.ts). */
+  --net-old: oklch(0.84 0.025 70);
+  --net-new: oklch(0.6 0.14 45);
   --background: oklch(1 0 0);
   --foreground: oklch(0.147 0.004 49.3);
   --card: oklch(1 0 0);
@@ -43,6 +46,8 @@
 }
 
 .dark {
+  --net-old: oklch(0.43 0.02 60);
+  --net-new: oklch(0.76 0.13 60);
   --background: oklch(0.147 0.004 49.3);
   --foreground: oklch(0.986 0.002 67.8);
   --card: oklch(0.214 0.009 43.1);
@@ -85,6 +90,8 @@
    after the .dark block — .dark and .contrast-high have equal specificity, so source order
    decides a shared variable; the combined .dark.contrast-high selector outranks both. */
 .contrast-high {
+  --net-old: oklch(0.65 0 0);
+  --net-new: oklch(0 0 0);
   --background: oklch(1 0 0);
   --foreground: oklch(0 0 0);
   --card: oklch(1 0 0);
@@ -114,6 +121,8 @@
 }
 
 .dark.contrast-high {
+  --net-old: oklch(0.5 0 0);
+  --net-new: oklch(1 0 0);
   --background: oklch(0 0 0);
   --foreground: oklch(1 0 0);
   --card: oklch(0 0 0);

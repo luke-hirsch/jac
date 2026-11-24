@@ -461,6 +461,29 @@ def _drop_claimed(featured: list[dict], more: list[dict]) -> list[dict]:
     return [i for i in more if i["type"] == "block" or i["id"] not in claimed]
 
 
+def _link_skills(items: list[dict]) -> None:
+    """Give every job and project in `items` the skills it used that are in `items` too: the lines
+    of the portfolio's skill network. Both ends on the page, or no line, so a link never reveals
+    an entry it didn't select. One query per type, in the page's skill order."""
+    from jac.models import Job, Project
+
+    order = {i["id"]: n for n, i in enumerate(items) if i["type"] == "skill"}
+    for type_name, model in (("job", Job), ("project", Project)):
+        anchors = [i for i in items if i["type"] == type_name]
+        if not anchors:
+            continue
+        pks = [int(i["id"].partition(":")[2]) for i in anchors]
+        used: dict[int, list[str]] = {pk: [] for pk in pks}
+        rows = model.skills.through.objects.filter(
+            **{f"{type_name}_id__in": pks}
+        ).values_list(f"{type_name}_id", "skill_id")
+        for pk, skill_pk in rows:
+            if f"skill:{skill_pk}" in order:
+                used[pk].append(f"skill:{skill_pk}")
+        for item, pk in zip(anchors, pks):
+            item["skills"] = sorted(used[pk], key=order.__getitem__)
+
+
 def build_payload(
     owner,
     link=None,
@@ -506,6 +529,7 @@ def build_payload(
                 more = _entries(owner, favourite=True, exclude_ids=exclude, order=order)
                 more += _blocks(owner, exclude_ids=exclude)
         more = _drop_claimed(featured, more)
+        _link_skills(featured + more)
         return {
             "kind": link.kind,
             "title": link.title,
@@ -544,6 +568,7 @@ def build_payload(
             return payload
 
     more = _drop_claimed(featured, more)
+    _link_skills(featured + more)
     return {
         "kind": "native",
         "title": "",

@@ -18,8 +18,9 @@ from unittest import mock
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils.text import slugify
 
 from jac.models import (
@@ -29,6 +30,7 @@ from jac.models import (
     JobApplication,
     JobPostAddress,
     JobPosting,
+    Project,
     Skill,
 )
 from llm_connector.base import WAITING_STAGE, LLMTransportError
@@ -1161,6 +1163,70 @@ class BlockLinksResolveTests(TestCase):
         )
         [item] = resolve_items(owner, [f"block:{block.pk}"])
         self.assertEqual(item["links"], [])
+
+
+class SkillNetworkPayloadTests(TestCase):
+    """The portfolio draws skills as a network around the jobs and projects that used them. A
+    job's or project's `skills` are its links to skills that are on the page too: both ends
+    shown, or no line. A link page must not reveal an entry it didn't select."""
+
+    def setUp(self):
+        self.owner = _owner()
+        self.python = _skill(self.owner, name="Python")
+        self.django = _skill(self.owner, name="Django")
+        self.job = _job(self.owner)
+        self.job.skills.add(self.python, self.django)
+        self.project = Project.objects.create(user=self.owner, name="jac")
+        self.project.skills.add(self.django)
+
+    def _by_id(self, payload):
+        return {i["id"]: i for i in payload["featured"] + payload["more"]}
+
+    def test_jobs_and_projects_name_their_skills_on_the_page(self):
+        items = self._by_id(build_payload(self.owner))
+        self.assertEqual(
+            sorted(items[f"job:{self.job.pk}"]["skills"]),
+            sorted([f"skill:{self.python.pk}", f"skill:{self.django.pk}"]),
+        )
+        self.assertEqual(
+            items[f"project:{self.project.pk}"]["skills"], [f"skill:{self.django.pk}"]
+        )
+
+    def test_only_jobs_and_projects_carry_skills(self):
+        items = self._by_id(build_payload(self.owner))
+        self.assertNotIn("skills", items[f"skill:{self.python.pk}"])
+
+    def test_a_skill_off_the_page_draws_no_line(self):
+        """A link that selected the job and one skill shows that one line only."""
+        link = PortfolioLink.objects.create(
+            user=self.owner,
+            kind=PortfolioLink.Kind.manual,
+            slug="for-acme",
+            content={
+                "featured": [f"job:{self.job.pk}", f"skill:{self.python.pk}"],
+                "hide_explore": True,
+            },
+        )
+        items = self._by_id(build_payload(self.owner, link=link))
+        self.assertEqual(
+            items[f"job:{self.job.pk}"]["skills"], [f"skill:{self.python.pk}"]
+        )
+
+    def test_a_job_without_skills_on_the_page_has_an_empty_list(self):
+        self.job.skills.clear()
+        items = self._by_id(build_payload(self.owner))
+        self.assertEqual(items[f"job:{self.job.pk}"]["skills"], [])
+
+    def test_more_jobs_cost_no_more_queries(self):
+        def count():
+            with CaptureQueriesContext(connection) as ctx:
+                build_payload(self.owner)
+            return len(ctx.captured_queries)
+
+        one = count()
+        for n in range(5):
+            _job(self.owner, title=f"Dev {n}").skills.add(self.python)
+        self.assertEqual(count(), one)
 
 
 class BuildPayloadClaimedTests(TestCase):

@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ItemCard } from "@/components/portfolio/item-card";
+import { SkillNetwork } from "@/components/portfolio/skill-network";
 import { isEmptyPayload, pageAnchors } from "@/lib/portfolio/content";
 import type { PortfolioPayload } from "@/lib/queries/portfolio";
 
@@ -17,8 +18,11 @@ export function PortfolioPage({
 }) {
   const { owner } = payload;
   const more = moreOverride ?? payload.more;
+  // Skills live in the network, not in the card grids.
+  const featuredCards = payload.featured.filter((i) => i.type !== "skill");
+  const moreCards = more.filter((i) => i.type !== "skill");
   // Which ids own a card here — a block's nested links jump to them instead of leaving.
-  const anchors = pageAnchors(payload.featured, more);
+  const anchors = pageAnchors(featuredCards, moreCards);
   return (
     <main className="max-w-4xl mx-auto p-6 space-y-10">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-center">
@@ -69,22 +73,24 @@ export function PortfolioPage({
         </div>
       </header>
 
-      {payload.featured.length > 0 && (
+      {featuredCards.length > 0 && (
         <section className="space-y-4">
           <h2 className="text-xl font-semibold">Highlights</h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            {payload.featured.map((item) => (
+            {featuredCards.map((item) => (
               <ItemCard key={item.id} item={item} anchors={anchors} />
             ))}
           </div>
         </section>
       )}
 
-      {more.length > 0 && (
+      <SkillNetwork featured={payload.featured} more={more} cards={anchors} />
+
+      {moreCards.length > 0 && (
         <section className="space-y-4">
           <h2 className="text-xl font-semibold">More to explore</h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            {more.map((item) => (
+            {moreCards.map((item) => (
               <ItemCard key={item.id} item={item} anchors={anchors} />
             ))}
           </div>
