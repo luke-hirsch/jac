@@ -1,16 +1,23 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
+import {
+  PersonaliseGate,
+  PersonaliseNotice,
+} from "@/components/portfolio/personalise-gate";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
+import { usePersonalise } from "@/components/portfolio/use-personalise";
 import { reorderByRank } from "@/lib/portfolio/content";
 import { clearStamp } from "@/lib/portfolio/stamp";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
-import {
-  useNativeIntro,
-  useNativePortfolio,
-  usePortfolioRank,
-} from "@/lib/queries/portfolio";
+import { useNativePortfolio } from "@/lib/queries/portfolio";
 
+/** A questionnaire's result. The standard page (the answers' topics, order and tone) loads at
+ *  once; the AI's ranking and welcome come from a queued job, which can take minutes while the
+ *  model server wakes. Until it's done the visitor sees a waiting card and chooses: wait, or
+ *  browse the standard portfolio and switch when the note says it's ready. Nothing reorders
+ *  under a reader. */
 export function ExploreResult({
   handle,
   search,
@@ -20,8 +27,25 @@ export function ExploreResult({
 }) {
   const goHome = useOwnerHome(handle);
   const portfolio = useNativePortfolio(handle, search);
-  const rank = usePortfolioRank(handle, search);
-  const intro = useNativeIntro(handle, search); // disabled internally when search.lucky
+  const view = usePersonalise(handle, search);
+  const [browsing, setBrowsing] = useState(false);
+  const hasQuery = Boolean(search.q?.trim());
+
+  if (view.phase === "working" && !browsing) {
+    return (
+      <>
+        <EscapeHatch
+          handle={handle}
+          label="Your personalised page is on its way."
+        />
+        <PersonaliseGate
+          view={view}
+          ownerName={portfolio.data?.owner.display_name}
+          onBrowse={() => setBrowsing(true)}
+        />
+      </>
+    );
+  }
 
   if (portfolio.isPending) {
     return (
@@ -51,36 +75,34 @@ export function ExploreResult({
     );
   }
 
-  const more = rank.data
-    ? reorderByRank(portfolio.data.more, rank.data.ranked)
+  const personal = view.phase === "ready" && !browsing ? view : null;
+  const standard = view.phase === "failed" || (browsing && !personal);
+  const more = personal?.ranked
+    ? reorderByRank(portfolio.data.more, personal.ranked)
     : portfolio.data.more;
-  const payload = intro.data?.intro
-    ? { ...portfolio.data, intro: intro.data.intro }
+  const payload = personal?.intro
+    ? { ...portfolio.data, intro: personal.intro }
     : portfolio.data;
   return (
     <>
       <EscapeHatch
         handle={handle}
         onShuffle={search.lucky ? () => portfolio.refetch() : undefined}
+        label={standard ? "You're seeing the standard portfolio." : undefined}
       />
-      {search.q && rank.data?.ai === "warming_up" ? (
-        <p className="text-center text-xs text-muted-foreground pt-2">
-          The AI is warming up — showing the natural order for now.
-        </p>
-      ) : search.q && (rank.isError || rank.data?.ai === "unavailable") ? (
-        <p className="text-center text-xs text-muted-foreground pt-2">
-          Couldn't rank by your interest just now — showing the natural order.
-        </p>
-      ) : null}
-      {intro.isFetching ? (
-        <p className="text-center text-xs text-muted-foreground pt-2">
-          Writing a personal welcome…
-        </p>
-      ) : null}
+      <PersonaliseNotice
+        view={view}
+        browsing={browsing}
+        hasQuery={hasQuery}
+        onShow={() => {
+          setBrowsing(false);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+      />
       <PortfolioPage
         payload={payload}
         moreOverride={more}
-        aiIntroFor={intro.data?.intro ? handle : undefined}
+        aiIntroFor={personal?.intro ? handle : undefined}
       />
     </>
   );

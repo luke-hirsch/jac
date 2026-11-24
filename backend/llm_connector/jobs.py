@@ -70,6 +70,14 @@ def start_ai_job(kind: str, *, user, payload: dict) -> AiJob:
     return job
 
 
+def publish_partial(job: AiJob, result: dict) -> None:
+    """A handler's way to show what's done so far: the row's `result`, while the job still runs.
+    The runner's terminal write replaces it with the whole result."""
+    AiJob.objects.filter(pk=job.pk, status=AiJob.Status.running).update(
+        result=result, updated_at=timezone.now()
+    )
+
+
 def jobs_ahead(job: AiJob) -> int:
     """How many earlier jobs are still unfinished. 0 once this one left the queue."""
     if job.status != AiJob.Status.pending:

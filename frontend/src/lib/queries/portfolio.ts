@@ -64,10 +64,10 @@ export const publicPaths = {
   native: (handle: string, qs = "") =>
     `${pub(handle)}/native/${qs ? `?${qs}` : ""}`,
   meta: (handle: string) => `${pub(handle)}/native/meta/`,
-  rank: (handle: string) => `${pub(handle)}/native/rank/`,
   prewarm: (handle: string) => `${pub(handle)}/native/prewarm/`,
-  intro: (handle: string) => `${pub(handle)}/native/intro/`,
-  introJob: (id: string) => `/api/spa/public/intro/${encodeURIComponent(id)}/`,
+  personalise: (handle: string) => `${pub(handle)}/native/personalise/`,
+  personaliseJob: (id: string) =>
+    `/api/spa/public/personalise/${encodeURIComponent(id)}/`,
 };
 
 export const portfolioLinkQuery = (handle: string, slug: string) =>
@@ -121,62 +121,73 @@ export function useNativeMeta(handle: string) {
   return useQuery(nativeMetaQuery(handle));
 }
 
-const INTRO_POLL_MS = 3_000;
-/** Longer than a cold start. Past this the page simply stays without an intro. */
-export const INTRO_GIVE_UP_MS = 4 * 60_000;
+/* ---------- a questionnaire visit's AI job: the ranking + the welcome ---------- */
 
-type IntroStatus = {
+export const PERSONALISE_POLL_MS = 3_000;
+/** A cold start is about 3 minutes, and the server waits 4 for it (PORTFOLIO_PERSONALISE_WAIT_S).
+ *  Past this the page shows what has arrived, or the standard portfolio. */
+export const PERSONALISE_GIVE_UP_MS = 5 * 60_000;
+
+/** Mirrors spa PortfolioPersonaliseStatusView. `ranked` is absent until the ranking is done, and
+ *  null when there's none (no question, or it broke). `waking`: the model server is starting. */
+export type PersonaliseStatus = {
   status: "pending" | "running" | "done" | "failed";
+  waking: boolean;
+  ranked?: RankedId[] | null;
   intro: string;
 };
 
-async function fetchIntro(
-  handle: string,
-  search: ExploreSearch,
-): Promise<{ intro: string }> {
-  const { id } = await api<{ id: string }>(publicPaths.intro(handle), {
-    method: "POST",
-    body: JSON.stringify({
-      domains: search.d ?? [],
-      query: search.q ?? "",
-      focus: search.focus ?? "balanced",
-      tone: search.tone ?? "neutral",
-    }),
-  });
-  const deadline = Date.now() + INTRO_GIVE_UP_MS;
-  while (Date.now() < deadline) {
-    const job = await api<IntroStatus>(publicPaths.introJob(id));
-    if (job.status === "done" || job.status === "failed")
-      return { intro: job.intro };
-    await new Promise((r) => setTimeout(r, INTRO_POLL_MS));
-  }
-  return { intro: "" };
-}
-
-/** The AI intro — queued server-side, so the page is there first and the intro joins it when it
- *  arrives, even if the AI has to wake. Skipped for lucky ("a reshuffle mustn't burn the budget");
- *  '' / failure degrades silently to no intro. */
-export const nativeIntroQuery = (handle: string, search: ExploreSearch) =>
+/** Queue the job, once per answer: POST, but cached like a read, and never retried, because the
+ *  6/h throttle makes retries actively harmful. Skipped for lucky: a reshuffle mustn't burn the
+ *  budget. `startedAt` dates the give-up. */
+export const personaliseStartQuery = (handle: string, search: ExploreSearch) =>
   queryOptions({
     queryKey: [
       "portfolio",
       "public",
       handle,
-      "intro",
+      "personalise",
       search.d ?? [],
       search.q ?? "",
       search.focus,
       search.tone,
     ],
-    queryFn: () => fetchIntro(handle, search),
+    queryFn: async () => {
+      const { id } = await api<{ id: string }>(
+        publicPaths.personalise(handle),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            query: search.q?.trim() ?? "",
+            domains: search.d ?? [],
+            focus: search.focus ?? "balanced",
+            tone: search.tone ?? "neutral",
+          }),
+        },
+      );
+      return { id, startedAt: Date.now() };
+    },
     enabled: !search.lucky,
     staleTime: Infinity,
     retry: false,
   });
 
-export function useNativeIntro(handle: string, search: ExploreSearch) {
-  return useQuery(nativeIntroQuery(handle, search));
-}
+const settled = (job: PersonaliseStatus | undefined) =>
+  job?.status === "done" || job?.status === "failed";
+
+/** Where the job stands, polled until it's done or failed. A poll that hiccups is retried: it
+ *  mustn't end a wait the visitor chose. */
+export const personaliseJobQuery = (id: string | undefined) =>
+  queryOptions({
+    queryKey: ["portfolio", "public", "personalise-job", id ?? ""],
+    queryFn: () => api<PersonaliseStatus>(publicPaths.personaliseJob(id ?? "")),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchInterval: (query: {
+      state: { data: PersonaliseStatus | undefined };
+    }) => (settled(query.state.data) ? false : PERSONALISE_POLL_MS),
+    retry: 2,
+  });
 /** Mirrors spa PortfolioLinkSerializer (owner-side). `content` is `{}` on a fresh
  *  application link (before the sent-freeze), so its keys are optional. */
 export type PortfolioLinkRow = {
@@ -207,31 +218,6 @@ export function revokePortfolioLink(id: number) {
     `/api/spa/portfolio/manage/links/${id}/revoke/`,
     { method: "POST" },
   );
-}
-
-/** The embed finale — POST but semantically a read; cached per (q, d) and never
- *  retried: the 6/h throttle makes retries actively harmful. `ai` says why `ranked` may be
- *  empty: the page then keeps its standard selection. */
-export const portfolioRankQuery = (handle: string, search: ExploreSearch) => {
-  const q = search.q?.trim() ?? "";
-  return queryOptions({
-    queryKey: ["portfolio", "public", handle, "rank", q, search.d ?? []],
-    queryFn: () =>
-      api<{
-        ranked: RankedId[];
-        ai: "ok" | "warming_up" | "unavailable";
-      }>(publicPaths.rank(handle), {
-        method: "POST",
-        body: JSON.stringify({ query: q, domains: search.d ?? [] }),
-      }),
-    enabled: q.length > 0,
-    staleTime: Infinity,
-    retry: false,
-  });
-};
-
-export function usePortfolioRank(handle: string, search: ExploreSearch) {
-  return useQuery(portfolioRankQuery(handle, search));
 }
 
 /* ---------- owner-side management (guide 5) ---------- */

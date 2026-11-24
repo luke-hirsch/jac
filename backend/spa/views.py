@@ -1,11 +1,9 @@
 # Portfolio / personalized-link views — Phase 3+.
 
-import logging
 import mimetypes
 from pathlib import Path
 
 from allauth.account.internal.flows.reauthentication import did_recently_authenticate
-from django.conf import settings
 from django.contrib.auth import logout
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -15,8 +13,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from llm_connector.base import LLMWarmingUp
-from llm_connector.client import interactive
+from llm_connector.base import WAITING_STAGE
 from llm_connector.conf import ExecutorError, resolve_executor
 from llm_connector.jobs import start_ai_job
 from llm_connector.models import AiJob
@@ -37,19 +34,15 @@ from spa.portfolio import (
     link_owner_for_handle,
     owner_domains,
     owner_for_handle,
-    rank_for_query,
 )
 from spa.serializers import (
     PersonalityProfileSerializer,
     PersonalityQuestionSerializer,
     PortfolioBlockSerializer,
-    PortfolioIntroSerializer,
     PortfolioLinkSerializer,
-    PortfolioRankSerializer,
+    PortfolioPersonaliseSerializer,
     UserProfileSerializer,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
@@ -298,35 +291,6 @@ class PortfolioNativeView(PublicPortfolioAPIView):
         )
 
 
-class PortfolioRankView(PublicPortfolioAPIView):
-    """POST: the embed finale. The tight `portfolio-rank` scope is the abuse valve —
-    this anonymous endpoint costs model-server compute. A visitor is waiting, so it gets a short
-    timeout and no retry; on any failure the page keeps its standard selection. `ai` says why:
-    "ok", "warming_up" (503 + Retry-After: worth another visit soon) or "unavailable"."""
-
-    throttle_scope = "portfolio-rank"
-
-    def post(self, request, handle):
-        owner = owner_for_handle(handle)
-        if owner is None:
-            raise Http404
-        ser = PortfolioRankSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        try:
-            with interactive(settings.PORTFOLIO_RANK_TIMEOUT_S):
-                ranked = rank_for_query(
-                    owner,
-                    ser.validated_data["query"],  # type: ignore
-                    ser.validated_data.get("domains") or [],  # type: ignore
-                )
-        except LLMWarmingUp:
-            return Response({"ranked": [], "ai": "warming_up"})
-        except Exception:  # every AI feature has a path without AI
-            logger.warning("portfolio rank failed", exc_info=True)
-            return Response({"ranked": [], "ai": "unavailable"})
-        return Response({"ranked": ranked, "ai": "ok"})
-
-
 class PortfolioMetaView(PublicPortfolioAPIView):
     """GET: the questionnaire's building blocks — the owner's REAL domain shortlist (only
     domains with content, so no branch dead-ends) plus the style-axis vocab."""
@@ -350,23 +314,24 @@ class PortfolioMetaView(PublicPortfolioAPIView):
         )
 
 
-class PortfolioIntroView(PublicPortfolioAPIView):
-    """POST: queue the AI intro — the one generative anonymous call (HirschAI-only, tight
-    `portfolio-intro` throttle). Answers 202 with a job id at once: the page is already there, and
-    the intro joins it if it arrives, even when the model server has to wake first. "Pages first,
-    AI second." """
+class PortfolioPersonaliseView(PublicPortfolioAPIView):
+    """POST: queue the AI half of a questionnaire visit, the ranking by what the visitor wrote and
+    the welcome (`spa.ai_jobs.portfolio_personalise`, HirschAI only). Anonymous model-server
+    compute, so the tight `portfolio-personalise` scope is the valve. Answers 202 with a job id at
+    once: the standard page is already there, and the visitor chooses between waiting for the
+    personal one and browsing the standard one meanwhile, even while the model server wakes."""
 
-    throttle_scope = "portfolio-intro"
+    throttle_scope = "portfolio-personalise"
 
     def post(self, request, handle):
         owner = owner_for_handle(handle)
         if owner is None:
             raise Http404
-        ser = PortfolioIntroSerializer(data=request.data)
+        ser = PortfolioPersonaliseSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
         job = start_ai_job(
-            "portfolio_intro",
+            "portfolio_personalise",
             user=owner,
             payload={
                 "domains": data.get("domains") or [],  # type: ignore
@@ -392,15 +357,23 @@ class PortfolioPrewarmView(PublicPortfolioAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class PortfolioIntroStatusView(PublicPortfolioAPIView):
-    """GET: where an intro stands. `{status, intro}`; `intro` stays '' until it's done, and for
-    good if the job failed. The unguessable job id is the only key, and the row holds no more than
-    the paragraph a visitor is about to read."""
+class PortfolioPersonaliseStatusView(PublicPortfolioAPIView):
+    """GET: where a visit's AI job stands. `{status, waking, ranked?, intro}`: `waking` while the
+    model server starts; `ranked` is absent until the ranking is done and null when there's none;
+    `intro` stays '' until it's written, and for good if it failed. The unguessable job id is the
+    only key, and the row holds no more than entry ids and the paragraph a visitor is about to
+    read."""
 
     throttle_scope = "portfolio-poll"
 
     def get(self, request, pk):
-        job = get_object_or_404(AiJob, pk=pk, kind="portfolio_intro")
-        return Response(
-            {"status": job.status, "intro": (job.result or {}).get("intro", "")}
-        )
+        job = get_object_or_404(AiJob, pk=pk, kind="portfolio_personalise")
+        result = job.result or {}
+        body = {
+            "status": job.status,
+            "waking": job.stage == WAITING_STAGE,
+            "intro": result.get("intro", ""),
+        }
+        if "ranked" in result:
+            body["ranked"] = result["ranked"]
+        return Response(body)

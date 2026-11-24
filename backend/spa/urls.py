@@ -8,15 +8,14 @@ from spa.views import (
     PersonalityQuestionListCreateView,
     PortfolioBlockDetailView,
     PortfolioBlockListCreateView,
-    PortfolioIntroStatusView,
-    PortfolioIntroView,
     PortfolioLinkDetailView,
     PortfolioLinkListCreateView,
     PortfolioLinkRevokeView,
     PortfolioMetaView,
     PortfolioNativeView,
+    PortfolioPersonaliseStatusView,
+    PortfolioPersonaliseView,
     PortfolioPrewarmView,
-    PortfolioRankView,
     PortfolioResolveView,
     SignatureFileView,
     UserProfileView,
@@ -69,9 +68,9 @@ urlpatterns = [
     ),
     # Public: anonymous, the owner named by the handle in the path (never the Host header).
     path(
-        "public/intro/<uuid:pk>/",
-        PortfolioIntroStatusView.as_view(),
-        name="portfolio-intro-status",
+        "public/personalise/<uuid:pk>/",
+        PortfolioPersonaliseStatusView.as_view(),
+        name="portfolio-personalise-status",
     ),
     path(
         "public/<slug:handle>/links/<slug:slug>/",
@@ -84,11 +83,6 @@ urlpatterns = [
         name="portfolio-native",
     ),
     path(
-        "public/<slug:handle>/native/rank/",
-        PortfolioRankView.as_view(),
-        name="portfolio-rank",
-    ),
-    path(
         "public/<slug:handle>/native/meta/",
         PortfolioMetaView.as_view(),
         name="portfolio-meta",
@@ -99,8 +93,8 @@ urlpatterns = [
         name="portfolio-prewarm",
     ),
     path(
-        "public/<slug:handle>/native/intro/",
-        PortfolioIntroView.as_view(),
-        name="portfolio-intro",
+        "public/<slug:handle>/native/personalise/",
+        PortfolioPersonaliseView.as_view(),
+        name="portfolio-personalise",
     ),
 ]
