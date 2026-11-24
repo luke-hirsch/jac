@@ -77,7 +77,11 @@ export function ExploreResult({
           Writing a personal welcome…
         </p>
       ) : null}
-      <PortfolioPage payload={payload} moreOverride={more} />
+      <PortfolioPage
+        payload={payload}
+        moreOverride={more}
+        aiIntroFor={intro.data?.intro ? handle : undefined}
+      />
     </>
   );
 }

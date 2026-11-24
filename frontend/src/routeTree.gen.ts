@@ -13,6 +13,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as HandleRouteImport } from './routes/$handle'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as HandleIndexRouteImport } from './routes/$handle/index'
 import { Route as AuthVerifyEmailRouteImport } from './routes/auth/verify-email'
 import { Route as AuthSignupRouteImport } from './routes/auth/signup'
@@ -62,6 +63,11 @@ const HandleRoute = HandleRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AboutIndexRoute = AboutIndexRouteImport.update({
+  id: '/about/',
+  path: '/about/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HandleIndexRoute = HandleIndexRouteImport.update({
@@ -250,6 +256,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle/': typeof HandleIndexRoute
+  '/about/': typeof AboutIndexRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -282,6 +289,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle': typeof HandleIndexRoute
+  '/about': typeof AboutIndexRoute
   '/account/danger': typeof AuthenticatedAccountDangerRoute
   '/account/email': typeof AuthenticatedAccountEmailRoute
   '/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -320,6 +328,7 @@ export interface FileRoutesById {
   '/auth/signup': typeof AuthSignupRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/$handle/': typeof HandleIndexRoute
+  '/about/': typeof AboutIndexRoute
   '/_authenticated/account/danger': typeof AuthenticatedAccountDangerRoute
   '/_authenticated/account/email': typeof AuthenticatedAccountEmailRoute
   '/_authenticated/account/llm': typeof AuthenticatedAccountLlmRoute
@@ -358,6 +367,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle/'
+    | '/about/'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle'
+    | '/about'
     | '/account/danger'
     | '/account/email'
     | '/account/llm'
@@ -427,6 +438,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/auth/verify-email'
     | '/$handle/'
+    | '/about/'
     | '/_authenticated/account/danger'
     | '/_authenticated/account/email'
     | '/_authenticated/account/llm'
@@ -454,6 +466,7 @@ export interface RootRouteChildren {
   HandleRoute: typeof HandleRouteWithChildren
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
+  AboutIndexRoute: typeof AboutIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -484,6 +497,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/about/': {
+      id: '/about/'
+      path: '/about'
+      fullPath: '/about/'
+      preLoaderRoute: typeof AboutIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$handle/': {
@@ -844,6 +864,7 @@ const rootRouteChildren: RootRouteChildren = {
   HandleRoute: HandleRouteWithChildren,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
+  AboutIndexRoute: AboutIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
