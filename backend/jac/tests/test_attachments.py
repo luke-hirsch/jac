@@ -164,6 +164,45 @@ class CvAttachmentApiTests(APITestCase):
         self.assertEqual(res.status_code, 204)
         self.assertFalse(CvAttachment.objects.filter(pk=att.pk).exists())
 
+    # The SPA renames and re-links with a JSON PATCH (`useUpdateAttachment`); only the
+    # upload is multipart. A multipart-only parser list answered it 415 and the label never
+    # changed (Lukas, 2026-11-24: "when the inline field is filled and reloaded it is not
+    # saving").
+
+    def test_a_json_patch_renames_it(self):
+        att = CvAttachment.objects.create(
+            user=self.user, file=self._pdf(), label="Zeugnis"
+        )
+        file_name = att.file.name
+        res = self.client.patch(
+            f"{self.URL}{att.pk}/", {"label": "Arbeitszeugnis ACME"}, format="json"
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        att.refresh_from_db()
+        self.assertEqual(att.label, "Arbeitszeugnis ACME")
+        self.assertEqual(att.file.name, file_name)  # a rename leaves the file alone
+
+    def test_a_json_patch_links_it_to_an_entry(self):
+        edu = _education(self.user)
+        att = CvAttachment.objects.create(user=self.user, file=self._pdf())
+        res = self.client.patch(
+            f"{self.URL}{att.pk}/", {"education": edu.pk}, format="json"
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        att.refresh_from_db()
+        self.assertEqual(att.education_id, edu.pk)
+
+    def test_the_download_carries_the_new_name(self):
+        att = CvAttachment.objects.create(
+            user=self.user, file=self._pdf(), label="Zeugnis"
+        )
+        self.client.patch(
+            f"{self.URL}{att.pk}/", {"label": "Arbeitszeugnis ACME"}, format="json"
+        )
+        res = self.client.get(f"{self.URL}{att.pk}/file/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("arbeitszeugnis-acme.pdf", res["Content-Disposition"])
+
 
 @tag("files")
 @override_settings(**own_media_roots())

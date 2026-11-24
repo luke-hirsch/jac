@@ -33,7 +33,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_seriali
 from kombu.exceptions import OperationalError
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings as drf_api_settings
@@ -1197,7 +1197,8 @@ class CvAttachmentViewSet(viewsets.ModelViewSet):
 
     serializer_class = CvAttachmentSerializer
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    # The upload is multipart; a rename or a re-link is the SPA's JSON PATCH.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     throttle_classes = [UploadThrottle]
     filterset_fields = ["job", "education", "certification"]
     ordering_fields = ["created_at", "label"]

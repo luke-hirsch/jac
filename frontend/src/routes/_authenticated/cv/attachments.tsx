@@ -116,13 +116,32 @@ function AttachmentRow({ a }: { a: Attachment }) {
   const [label, setLabel] = useState(a.label);
   const link = linkOf(a);
 
+  /** Blank isn't a name: the download would fall back to `attachment-<id>.pdf`. */
+  function rename() {
+    const next = label.trim();
+    if (!next) return setLabel(a.label);
+    if (next === a.label) return;
+    update.mutate(
+      { id: a.id, body: { label: next } },
+      {
+        onSuccess: () => toast.success("Renamed."),
+        onError: () => {
+          setLabel(a.label);
+          toast.error("Couldn't rename the file.");
+        },
+      },
+    );
+  }
+
   return (
     <li className="flex items-center gap-2 p-2">
       <Input
         value={label}
+        aria-label="File name"
         onChange={(e) => setLabel(e.target.value)}
-        onBlur={() => {
-          if (label !== a.label) update.mutate({ id: a.id, body: { label } });
+        onBlur={rename}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur(); // blur saves, so it saves once
         }}
         className="max-w-xs"
       />
