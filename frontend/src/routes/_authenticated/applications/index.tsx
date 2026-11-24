@@ -19,13 +19,16 @@ import { ExportButton, ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
 import {
+  filterByStatus,
   postingsToBatch,
   STATUS_LABELS,
+  statusCounts,
   useApplications,
   useCreateApplication,
   useCreateApplicationsBatch,
   useDeleteApplication,
   type ApplicationRow,
+  type ApplicationStatus,
 } from "@/lib/queries/applications";
 import {
   hasSampleEntries,
@@ -52,6 +55,8 @@ function runBadge(row: ApplicationRow): string | null {
 function ApplicationsPage() {
   const navigate = useNavigate();
   const apps = useApplications();
+  const { status } = Route.useSearch();
+  const shown = filterByStatus(apps.data ?? [], status);
   const create = useCreateApplication();
   const batch = useCreateApplicationsBatch();
   const destroy = useDeleteApplication();
@@ -172,8 +177,15 @@ function ApplicationsPage() {
         </CardHeader>
         <CardContent>
           {apps.data?.length ? (
+            <StatusFilter rows={apps.data} active={status} />
+          ) : null}
+          {apps.data?.length && status && !shown.length ? (
+            <p className="py-3 text-sm text-muted-foreground">
+              No application has the status {STATUS_LABELS[status]}.
+            </p>
+          ) : apps.data?.length ? (
             <ul className="divide-y">
-              {apps.data.map((a) => (
+              {shown.map((a) => (
                 <li
                   key={a.id}
                   className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-3"
@@ -249,6 +261,57 @@ function ApplicationsPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** One button per status the list holds, with its count. Hidden while every application
+ *  has the same status, unless a filter is on (it stays, to switch it off). */
+function StatusFilter({
+  rows,
+  active,
+}: {
+  rows: ApplicationRow[];
+  active: ApplicationStatus | undefined;
+}) {
+  const navigate = useNavigate({ from: Route.fullPath });
+  const counts = statusCounts(rows);
+  if (counts.length < 2 && !active) return null;
+
+  const pick = (status: ApplicationStatus | undefined) =>
+    navigate({ search: (prev) => ({ ...prev, status }), replace: true });
+
+  const option = (
+    key: string,
+    label: string,
+    count: number,
+    status: ApplicationStatus | undefined,
+  ) => (
+    <Button
+      key={key}
+      size="sm"
+      variant={active === status ? "secondary" : "ghost"}
+      aria-pressed={active === status}
+      onClick={() => pick(status)}
+    >
+      {label}
+      <span className="text-muted-foreground tabular-nums">{count}</span>
+    </Button>
+  );
+
+  return (
+    <div
+      role="group"
+      aria-label="Filter by status"
+      className="-mx-2 flex flex-wrap gap-1 pb-2"
+    >
+      {option("all", "All", rows.length, undefined)}
+      {counts.map((c) =>
+        option(c.status, STATUS_LABELS[c.status], c.count, c.status),
+      )}
+      {active && !counts.some((c) => c.status === active)
+        ? option(active, STATUS_LABELS[active], 0, active)
+        : null}
     </div>
   );
 }

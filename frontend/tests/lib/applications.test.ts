@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
-  toApplicationPayload,
+  APPLICATION_STATUSES,
+  applicationsSearch,
+  filterByStatus,
+  parseStatusFilter,
   runToApplicationPatch,
+  statusCounts,
+  toApplicationPayload,
+  type ApplicationStatus,
 } from "@/lib/queries/applications";
 import type { TailoredResult } from "@/lib/queries/generations";
 
@@ -23,7 +29,9 @@ describe("runToApplicationPatch", () => {
   it("maps the run result onto cv_content + body-only letter + letter_meta + pins", () => {
     const result = {
       meta: { mode: "standard", provider: "ollama", model: "" },
-      cv: { skills: [{ id: "skill:1", label: "Python", relevance_score: 0.9 }] },
+      cv: {
+        skills: [{ id: "skill:1", label: "Python", relevance_score: 0.9 }],
+      },
       cover_letter: {
         language: "en",
         subject: "Application for Dev",
@@ -81,12 +89,16 @@ describe("runToApplicationPatch", () => {
         { id: "job:1", label: "old", relevance_score: 0.5, pinned: true },
         { id: "job:2", label: "unpinned, dropped", relevance_score: 0.4 },
       ],
-      skills: [{ id: "skill:9", label: "Rust", relevance_score: null, pinned: true }],
+      skills: [
+        { id: "skill:9", label: "Rust", relevance_score: null, pinned: true },
+      ],
     };
 
     const patch = runToApplicationPatch(result, current);
     expect(patch.cv_content).toEqual({
-      jobs: [{ id: "job:1", label: "kept", relevance_score: 0.8, pinned: true }],
+      jobs: [
+        { id: "job:1", label: "kept", relevance_score: 0.8, pinned: true },
+      ],
       skills: [
         { id: "skill:9", label: "Rust", relevance_score: null, pinned: true },
       ],
@@ -115,10 +127,89 @@ describe("runToApplicationPatch", () => {
       },
     } as unknown as TailoredResult;
     const current = {
-      jobs: [{ id: "job:99", label: "mine", relevance_score: null, pinned: true }],
+      jobs: [
+        { id: "job:99", label: "mine", relevance_score: null, pinned: true },
+      ],
     };
     expect(runToApplicationPatch(result, current).pinned_entries).toEqual([
       "job:99",
     ]);
+  });
+});
+
+/**
+ * The list's status filter: `?status=` names one lifecycle status, anything else
+ * means no filter. The options are the statuses the list holds, in lifecycle order.
+ */
+describe("parseStatusFilter", () => {
+  it("keeps a known status", () => {
+    for (const s of APPLICATION_STATUSES) expect(parseStatusFilter(s)).toBe(s);
+  });
+
+  it("drops anything else to no filter", () => {
+    for (const raw of [undefined, null, "", "Sent", "bogus", 3, ["sent"]])
+      expect(parseStatusFilter(raw)).toBeUndefined();
+  });
+
+  it("doesn't take an object's inherited keys for a status", () => {
+    expect(parseStatusFilter("toString")).toBeUndefined();
+    expect(parseStatusFilter("constructor")).toBeUndefined();
+  });
+});
+
+describe("applicationsSearch", () => {
+  it("reads the status out of the URL's search", () => {
+    expect(applicationsSearch({ status: "sent" })).toEqual({ status: "sent" });
+    expect(applicationsSearch({ status: "nope" }).status).toBeUndefined();
+    expect(applicationsSearch({}).status).toBeUndefined();
+  });
+});
+
+describe("APPLICATION_STATUSES", () => {
+  it("lists every status once, in lifecycle order", () => {
+    expect(APPLICATION_STATUSES).toEqual([
+      "draft",
+      "approved",
+      "sent",
+      "response",
+      "follow_up",
+      "inactive",
+    ]);
+  });
+});
+
+const rows = (...statuses: ApplicationStatus[]) =>
+  statuses.map((status, id) => ({ id, status }));
+
+describe("statusCounts", () => {
+  it("counts each status the list holds, in lifecycle order", () => {
+    expect(statusCounts(rows("sent", "draft", "sent", "inactive"))).toEqual([
+      { status: "draft", count: 1 },
+      { status: "sent", count: 2 },
+      { status: "inactive", count: 1 },
+    ]);
+  });
+
+  it("leaves out statuses nobody has", () => {
+    expect(statusCounts(rows("draft", "draft"))).toEqual([
+      { status: "draft", count: 2 },
+    ]);
+    expect(statusCounts([])).toEqual([]);
+  });
+});
+
+describe("filterByStatus", () => {
+  it("keeps only the rows with that status, in their order", () => {
+    const list = rows("sent", "draft", "sent");
+    expect(filterByStatus(list, "sent").map((r) => r.id)).toEqual([0, 2]);
+  });
+
+  it("returns the whole list without a filter", () => {
+    const list = rows("sent", "draft");
+    expect(filterByStatus(list, undefined)).toBe(list);
+  });
+
+  it("returns nothing when no row has the status", () => {
+    expect(filterByStatus(rows("draft"), "response")).toEqual([]);
   });
 });
