@@ -73,50 +73,24 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. What's left sits in fifteen guides in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. Two guides are left in
 `.claude/plans/to-do/`. All of it is his, and none of it is urgent:
-- `02_[infra]-health-every-host`: `/health/` on `jac.` and `portfolio.` reaches Django now (merged, live). His curls
-  against the live names and the Results are left;
-- `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones folded in, the rollback drill rides
-  on guide 02's deploy) and the watch list;
-- `04_[fullstack]-after-launch`: the backlog, in a recommended order, and what waits on the lab or the board. Each item
-  gets an activation pass before Lukas types it ([[backlog-guides-need-activation]]);
-- `05` to `12`: coded by the AI at his request (2026-11-20, 09 and 10 on 2026-11-21, 11 and 12 on 2026-11-22), summary
-  guides, all merged into `main` and live, his to test on live and log (08 `skill-file-mode` is in `done/`: 12
-  superseded it, nothing left to test):
-  - 05 `live-model-catalog`: each key's live model list + the fix for effort on current Claude models;
-  - 06 `claude-skill`: write applications with Claude on his own subscription, and have Claude review and improve
-    the career data, every batch of edits undoable ([[claude-skill]]);
-  - 07 `career-export`: the career and the applications as files, a download and an import each; an import fills
-    only an empty career or list ([[career-files]]);
-  - 09 `career-change-field-names` (deployed by the AI at his request): the changes import 500d on a name `career`
-    showed but the import doesn't take (`type` for `job_type`); names are checked first now, a refusal, not a 500.
-    His live test runs through the connector.
-  - 10 `claude-connector` (deployed by the AI at his request): the Claude app, phone included, reaches jac through a
-    custom MCP connector at `jac.<domain>/api/jac/mcp/` (Anthropic's servers call it, not the sandbox), on a
-    personal token. Its consent is kept per user like a cookie choice (`TransferConsent`: asked once, withdrawing
-    deletes the keys or tokens; privacy §6, §8 and §11 and terms §6 cover it). His steps: a token, the connector in
-    Claude's settings, the couch test ([[claude-skill]]).
-  - 11 `style-rules` (deployed by the AI at his request): per-user writing rules (Account → Personality), followed by
-    jac's writer, the editor's AI tools and Claude; jac checks dashes and "not X but Y" on save, on a run and live in
-    the letter editor, as warnings.
-  - 12 `connector-only` (deployed by the AI at his request): the connector is the only way Claude reaches jac. File
-    mode, the script and the Claude imports are gone; the rules live on the server (`jac/resources/rules/`), the
-    uploaded skill is one file that points at the connector, and the Claude page is a Connectors section on Account
-    → LLM. His steps: re-upload the skill in Claude, the couch test. ChatGPT later ([[claude-skill]]).
-- `13` to `17`: coded by the AI at his request (2026-11-23), from the Claude app's review of his career through the
-  connector. Summary guides, merged into `main` on his word ("we test live"), suites green first, **not pushed or
-  deployed**. His to test live and log:
-  - 13 `skill-years`: a skill's years are the time its linked jobs, projects and educations ran (overlaps once,
-    from `first_used` on, the time from `first_used` to the first link counted), no longer the years since the
-    earliest start; the override still wins and the connector shows it;
-  - 14 `skill-certification-link`: one link, the certification's `skills`; `Skill.certification` is gone
-    (migration `jac.0006` moves the links);
-  - 15 `review-noise`: fewer false findings, an empty bio or website is one, dry runs name new skills `new:<ref>`;
-  - 16 `change-log-keep`: Keep / Keep all / Remove in the change log, older batches collapsed;
-  - 17 `domain-manager`: rename, merge and delete his own domains (CV pages, the domain filter).
-  - Later: review dismissals (a "no" to a `consider` finding that sticks). Parked in guide 04's spirit: draft
-    entries Claude proposes and he confirms.
+- `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones and guide 02's live curls folded in;
+  the rollback drill on `57ee607`, never across `jac.0006`) and the watch list;
+- `04_[fullstack]-after-launch`: the backlog, in a recommended order. It starts with what the archived guides left open
+  (guide 19's deploy, guide 18's live test, four legal sentences, token scope, his own data fixes, three small bugs),
+  then what waits on the lab or the board. Each item gets an activation pass before Lukas types it
+  ([[backlog-guides-need-activation]]).
+
+Guides 02, 05 to 07 and 09 to 19 (AI-coded at his request, 2026-11-20 to 11-23) are in `done/` without a Results
+chapter (2026-11-23): Lukas tests live, in the Claude app, and what breaks comes back as new work. All but 19 are
+live: `/health/` on every host, each key's live model list, the career and applications as files ([[career-files]]),
+the style rules, and the Claude connector at `jac.<domain>/api/jac/mcp/` as the only way Claude reaches jac, its
+consent kept per user (`TransferConsent`) ([[claude-skill]]); 13 to 17: skill years from the linked entries, one
+skill↔certification link (migration `jac.0006`), less review noise, Keep in the change log, the domain manager; 18:
+the PDF preview in the Claude app, an MCP App the connector serves ([[claude-skill]]); 19: every export named
+`cv_` / `letter_` / `application_<title>_<full name>` (`exportStem`). Parked in guide 04: review
+dismissals, draft entries from Claude, ChatGPT.
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
@@ -126,16 +100,16 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  guides 02 and 05 to 12, all deployed (2026-11-22). Since that deploy, on `main` but neither pushed nor deployed:
-  the privacy page drops its menu paths (2026-11-22), and guides 13 to 17 (2026-11-23; the deploy runs migration
-  `jac.0006`, which moves every skill's certification link into the certification).
+  the privacy page without menu paths, and guides 02 and 05 to 19. Live is `10ab336` (2026-11-23), everything up to guide 18; guide 19's merge
+  `cd190df` is on the laptop's `main`, not pushed or deployed: that waits on Lukas. `jac.0006` (every skill's certification link moved into the certification) was already
+  applied live when guide 18 deployed.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
   data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
   deleted-account record are built. The lab confirmed the shortened log address and the addressless stream log
   (2026-11-14); what the VPS's own logs keep is still open (guide 04). The visitor hash waits on the board. The DNS
   stays at Strato, so section 11 no longer names Cloudflare. Guide 07's download makes §13's "a data export on
-  request by email" out of date: the sentence is his call (guide 07).
+  request by email" incomplete: the sentence is his call (guide 04).
 - **Live isn't verified yet:** Lukas has given it a first glance, but the checklist hasn't run. Guide 03 is the logged
   run ([[implemented-is-not-verified]]).
 - **The lab:**
