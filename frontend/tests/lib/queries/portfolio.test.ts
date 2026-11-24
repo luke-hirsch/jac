@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  nativeIntroQuery,
+  PERSONALISE_POLL_MS,
   nativeMetaQuery,
   nativePortfolioQuery,
+  personaliseJobQuery,
+  personaliseStartQuery,
   portfolioLinkQuery,
-  portfolioRankQuery,
   publicPaths,
+  type PersonaliseStatus,
 } from "@/lib/queries/portfolio";
 
 /**
@@ -45,17 +47,18 @@ describe("publicPaths", () => {
       "/api/spa/public/jane/native/?lucky=1",
     );
     expect(publicPaths.meta("jane")).toBe("/api/spa/public/jane/native/meta/");
-    expect(publicPaths.rank("jane")).toBe("/api/spa/public/jane/native/rank/");
     expect(publicPaths.prewarm("jane")).toBe(
       "/api/spa/public/jane/native/prewarm/",
     );
-    expect(publicPaths.intro("jane")).toBe(
-      "/api/spa/public/jane/native/intro/",
+    expect(publicPaths.personalise("jane")).toBe(
+      "/api/spa/public/jane/native/personalise/",
     );
   });
 
-  it("an intro job needs no handle: its id is enough", () => {
-    expect(publicPaths.introJob("0b1c")).toBe("/api/spa/public/intro/0b1c/");
+  it("a personalise job needs no handle: its id is enough", () => {
+    expect(publicPaths.personaliseJob("0b1c")).toBe(
+      "/api/spa/public/personalise/0b1c/",
+    );
   });
 
   it("encodes what a visitor typed into the address bar", () => {
@@ -77,8 +80,7 @@ describe("query keys", () => {
     ["link", (h: string) => portfolioLinkQuery(h, "acme").queryKey],
     ["native", (h: string) => nativePortfolioQuery(h, search).queryKey],
     ["meta", (h: string) => nativeMetaQuery(h).queryKey],
-    ["rank", (h: string) => portfolioRankQuery(h, search).queryKey],
-    ["intro", (h: string) => nativeIntroQuery(h, search).queryKey],
+    ["personalise", (h: string) => personaliseStartQuery(h, search).queryKey],
   ] as const)("%s: two owners never share a cache entry", (_, key) => {
     expect(key("jane")).toContain("jane");
     expect(key("jane")).not.toEqual(key("lukas"));
@@ -102,29 +104,54 @@ describe("what the queries fetch", () => {
     ]);
   });
 
-  it("the rank posts to its owner", async () => {
-    await run(portfolioRankQuery("jane", { q: "jazz", d: ["music"] }));
+  it("a visit's AI job is queued at its owner, with everything it needs", async () => {
+    fetchMock.mockResolvedValueOnce(json({ id: "0b1c" }));
+    const started = await run(
+      personaliseStartQuery("jane", {
+        q: "jazz",
+        d: ["music"],
+        focus: "technical",
+        tone: "formal",
+      }),
+    );
     const [[url, init]] = fetchMock.mock.calls;
-    expect(url).toBe("/api/spa/public/jane/native/rank/");
+    expect(url).toBe("/api/spa/public/jane/native/personalise/");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({
       query: "jazz",
       domains: ["music"],
+      focus: "technical",
+      tone: "formal",
     });
+    expect(started).toMatchObject({ id: "0b1c" });
+    expect(typeof (started as { startedAt: unknown }).startedAt).toBe("number");
   });
 
-  it("the intro is queued at its owner and polled by job id", async () => {
-    fetchMock
-      .mockResolvedValueOnce(json({ id: "0b1c" }))
-      .mockResolvedValueOnce(json({ status: "done", intro: "Hi" }));
-    await expect(run(nativeIntroQuery("jane", { q: "jazz" }))).resolves.toEqual(
-      {
-        intro: "Hi",
-      },
-    );
-    expect(urls()).toEqual([
-      "/api/spa/public/jane/native/intro/",
-      "/api/spa/public/intro/0b1c/",
-    ]);
+  it("a lucky draw queues nothing: it uses no AI", () => {
+    expect(personaliseStartQuery("jane", { lucky: true }).enabled).toBe(false);
+    expect(personaliseStartQuery("jane", { q: "jazz" }).enabled).toBe(true);
+  });
+
+  it("the job is read by its id alone", async () => {
+    await run(personaliseJobQuery("0b1c"));
+    expect(urls()).toEqual(["/api/spa/public/personalise/0b1c/"]);
+    expect(personaliseJobQuery(undefined).enabled).toBe(false);
+  });
+
+  it("polls until the job is done or failed, then stops", () => {
+    const interval = personaliseJobQuery("0b1c").refetchInterval as (q: {
+      state: { data: PersonaliseStatus | undefined };
+    }) => number | false;
+    const at = (status?: PersonaliseStatus["status"]) =>
+      interval({
+        state: {
+          data: status && { status, waking: false, intro: "" },
+        },
+      });
+    expect(at()).toBe(PERSONALISE_POLL_MS);
+    expect(at("pending")).toBe(PERSONALISE_POLL_MS);
+    expect(at("running")).toBe(PERSONALISE_POLL_MS);
+    expect(at("done")).toBe(false);
+    expect(at("failed")).toBe(false);
   });
 });

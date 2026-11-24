@@ -146,9 +146,9 @@ class LLMRequestLog(models.Model):
 
 class AiJob(models.Model):
     """One short AI job a page waits for: a rewrite, a shortened letter, a dossier, a portfolio
-    intro. The request answers at once, the worker does the work, and the page polls this row, so
+    visit's ranking and welcome. The request answers at once, the worker does the work, and the page polls this row, so
     "waiting for compute" reads the same as for a generation run and no web thread hangs on the
-    model server. The id is unguessable because an anonymous visitor polls the intro.
+    model server. The id is unguessable because an anonymous visitor polls a portfolio's job.
 
     `payload` holds the input (a letter passage, a visitor's question) only until the job ends;
     the housekeeping job deletes finished rows after a day.

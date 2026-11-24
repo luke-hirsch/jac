@@ -435,19 +435,10 @@ class PortfolioLinkSerializer(serializers.ModelSerializer):
         }
 
 
-class PortfolioRankSerializer(serializers.Serializer):
-    """Input caps for the embed finale — one-tweet query (the questionnaire's own
-    MAX_ANSWER_LEN), at most 10 domain names."""
-
-    query = serializers.CharField(max_length=MAX_ANSWER_LEN)
-    domains = serializers.ListField(
-        child=serializers.CharField(max_length=100), required=False, max_length=10
-    )
-
-
-class PortfolioIntroSerializer(serializers.Serializer):
-    """Input for the AI-intro endpoint — same caps as the rank finale, plus the style
-    axis (reusing the personality tone/focus vocab)."""
+class PortfolioPersonaliseSerializer(serializers.Serializer):
+    """Input for a questionnaire visit's AI job: a one-tweet query (the questionnaire's own
+    MAX_ANSWER_LEN), at most 10 domain names, and the style axis (the personality tone/focus
+    vocab)."""
 
     query = serializers.CharField(
         max_length=MAX_ANSWER_LEN, required=False, allow_blank=True

@@ -10,15 +10,18 @@ import { clearStamp } from "@/lib/portfolio/stamp";
 export function EscapeHatch({
   handle,
   onShuffle,
+  label = "You're seeing a personalised page.",
 }: {
   handle: string;
   onShuffle?: () => void;
+  /** What this page is, when it isn't (yet) the personalised one. */
+  label?: string;
 }) {
   const goHome = useOwnerHome(handle);
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b bg-muted/50 px-4 py-1.5 text-sm">
       <span className="text-muted-foreground">
-        You're seeing a personalised page.{" "}
+        {label}{" "}
         <Link
           to="/about/"
           search={{ from: handle }}

@@ -254,7 +254,9 @@ GENERATION_EXPIRES_S = 3 * 60 * 60
 # A short AI job has somebody polling for it: it gets a shorter leash on every count. Its wait still
 # outlasts a cold start (about 3 minutes).
 AI_JOB_WAIT_S = 5 * 60
-PORTFOLIO_INTRO_WAIT_S = 3 * 60
+# A visitor on the waiting page: a cold start (about 3 minutes) and a little to spare. The page
+# gives up a minute later (PERSONALISE_GIVE_UP_MS in the SPA).
+PORTFOLIO_PERSONALISE_WAIT_S = 4 * 60
 AI_JOB_SOFT_LIMIT_S = 10 * 60
 AI_JOB_EXPIRES_S = 15 * 60
 # Mail about finished runs only for runs this long: whoever waits less has the tab open.
@@ -350,8 +352,6 @@ HIRSCHAI_ENV = {
     if value
 }
 
-# A visitor is waiting: past this, the portfolio shows its standard selection instead.
-PORTFOLIO_RANK_TIMEOUT_S = env_int("PORTFOLIO_RANK_TIMEOUT_S", 8)
 # A token for waking the model server ahead of a request (the board's AI_PREWARM_KEY). Unset = off:
 # a plain Ollama has nothing to wake, and whatever needs it simply waits.
 HIRSCHAI_PREWARM_KEY = os.getenv("HIRSCHAI_PREWARM_KEY", "")
@@ -431,9 +431,10 @@ REST_FRAMEWORK = {
         "llm-chat": os.getenv("LLM_CHAT_RATE", "20/min"),
         "llm-chat-daily": os.getenv("LLM_CHAT_DAILY_RATE", "100/day"),
         "portfolio": os.getenv("PORTFOLIO_RATE", "60/hour"),
-        "portfolio-rank": os.getenv("PORTFOLIO_RANK_RATE", "6/hour"),
-        "portfolio-intro": os.getenv("PORTFOLIO_INTRO_RATE", "6/hour"),
-        # A page polling for its intro: one request every few seconds, for a few minutes.
+        # The ranking and the welcome of a questionnaire visit, one job: anonymous model-server
+        # compute.
+        "portfolio-personalise": os.getenv("PORTFOLIO_PERSONALISE_RATE", "6/hour"),
+        # A page polling for that job: one request every few seconds, for a few minutes.
         "portfolio-poll": os.getenv("PORTFOLIO_POLL_RATE", "600/hour"),
         "generation": os.getenv("GENERATION_RATE", "20/day"),
         # The daily cap only counts runs: past it, an application still gets created.

@@ -31,8 +31,7 @@ from jac.models import (
     JobPosting,
     Skill,
 )
-from llm_connector.base import LLMTransportError, LLMWarmingUp
-from llm_connector.client import _interactive_timeout
+from llm_connector.base import WAITING_STAGE, LLMTransportError
 from llm_connector.models import AiJob
 from llm_connector.tasks import run_ai_job
 from spa.models import PortfolioBlock, PortfolioLink, UserProfile
@@ -165,13 +164,12 @@ class PublicHandleTests(TestCase):
         "links": 200,
         "native": 200,
         "meta": 200,
-        "rank": 200,
         "prewarm": 204,
-        "intro": 202,
+        "personalise": 202,
     }
 
     def setUp(self):
-        cache.clear()  # 6/hour on rank and intro, and every test here calls them
+        cache.clear()  # 6/hour on personalise, and every test here calls it
         jane = _owner("jane")
         hidden = _owner("hidden", published=False)
         # Holds a reserved handle anyway (an admin edit, a row from before the list grew).
@@ -186,7 +184,6 @@ class PublicHandleTests(TestCase):
         api = f"/api/spa/public/{handle}/"
         post = {"data": {"query": "x"}, "content_type": "application/json"}
         with (
-            mock.patch("spa.views.rank_for_query", return_value=[]),
             mock.patch("spa.views.request_prewarm"),
             mock.patch("llm_connector.tasks.run_ai_job"),
         ):
@@ -194,9 +191,8 @@ class PublicHandleTests(TestCase):
                 "links": self.client.get(f"{api}links/{self.SLUG}/"),
                 "native": self.client.get(f"{api}native/"),
                 "meta": self.client.get(f"{api}native/meta/"),
-                "rank": self.client.post(f"{api}native/rank/", **post),
                 "prewarm": self.client.post(f"{api}native/prewarm/"),
-                "intro": self.client.post(f"{api}native/intro/", **post),
+                "personalise": self.client.post(f"{api}native/personalise/", **post),
             }
 
     def test_a_published_handle_answers_on_every_endpoint(self):
@@ -781,7 +777,7 @@ class PortfolioIntroWriterTests(TestCase):
         )
 
 
-# ── public endpoints (meta / intro) + landing ───────────────────────────────────
+# ── public endpoints (meta / personalise) + landing ───────────────────────────────────
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
@@ -813,77 +809,169 @@ class PublicPortfolioEndpointTests(TestCase):
         r = self.client.get("/api/spa/public/jane/native/meta/")
         self.assertEqual(r.json()["domains"], ["theatre"])
 
-    def _queue_intro(self):
+    def _personalise(self, **data):
+        body = {
+            "domains": ["music"],
+            "query": "gigs",
+            "tone": "personal",
+            "focus": "technical",
+        }
+        body.update(data)
         with mock.patch("llm_connector.tasks.run_ai_job"):
             return self.client.post(
-                f"{self.API}intro/",
-                data={
-                    "domains": ["music"],
-                    "query": "gigs",
-                    "tone": "personal",
-                    "focus": "technical",
-                },
-                content_type="application/json",
+                f"{self.API}personalise/", data=body, content_type="application/json"
             )
 
+    def _status(self, r):
+        return self.client.get(f"/api/spa/public/personalise/{r.json()['id']}/").json()
+
+    RANKED = [{"id": "job:1", "score": 0.9}]
+
     @mock.patch("spa.portfolio.complete", return_value="Hello there.")
-    def test_intro_is_queued_then_read_by_its_job_id(self, m_complete):
+    def test_it_is_queued_then_read_by_its_job_id(self, m_complete):
         """Pages first, AI second: the POST answers at once, whatever the model server is doing."""
-        r = self._queue_intro()
+        r = self._personalise()
         self.assertEqual(r.status_code, 202)
-        url = f"/api/spa/public/intro/{r.json()['id']}/"
-        self.assertEqual(self.client.get(url).json(), {"status": "pending", "intro": ""})
-        m_complete.assert_not_called()
-        run_ai_job(r.json()["id"])
         self.assertEqual(
-            self.client.get(url).json(), {"status": "done", "intro": "Hello there."}
+            self._status(r), {"status": "pending", "waking": False, "intro": ""}
+        )
+        m_complete.assert_not_called()
+        with mock.patch("spa.ai_jobs.rank_for_query", return_value=self.RANKED) as rank:
+            run_ai_job(r.json()["id"])
+        rank.assert_called_once_with(self.owner, "gigs", ["music"])
+        self.assertEqual(
+            self._status(r),
+            {
+                "status": "done",
+                "waking": False,
+                "ranked": self.RANKED,
+                "intro": "Hello there.",
+            },
         )
 
-    def test_the_visitors_question_is_gone_when_the_job_ends(self):
-        r = self._queue_intro()
-        job = AiJob.objects.get(pk=r.json()["id"])
-        self.assertEqual(job.payload["query"], "gigs")
-        with mock.patch("spa.portfolio.complete", return_value="Hello there."):
-            run_ai_job(str(job.pk))
-        job.refresh_from_db()
-        self.assertEqual(job.payload, {})
+    def test_the_ranking_shows_before_the_welcome_is_written(self):
+        """The waiting page ticks the ranking off while the welcome is still being written. Until
+        then `ranked` is absent: null means there's none to come."""
+        r = self._personalise()
+        seen = {}
+
+        def write(**kwargs):
+            seen["status"] = self._status(r)
+            return "Hello there."
+
+        with (
+            mock.patch("spa.ai_jobs.rank_for_query", return_value=self.RANKED),
+            mock.patch("spa.portfolio.complete", side_effect=write),
+        ):
+            run_ai_job(r.json()["id"])
+        self.assertEqual(
+            seen["status"],
+            {"status": "running", "waking": False, "ranked": self.RANKED, "intro": ""},
+        )
+
+    @mock.patch("spa.portfolio.complete", return_value="Hello there.")
+    def test_without_a_question_nothing_is_ranked(self, _complete):
+        r = self._personalise(query="")
+        with mock.patch("spa.ai_jobs.rank_for_query") as rank:
+            run_ai_job(r.json()["id"])
+        rank.assert_not_called()
+        self.assertEqual(
+            self._status(r),
+            {
+                "status": "done",
+                "waking": False,
+                "ranked": None,
+                "intro": "Hello there.",
+            },
+        )
+
+    @mock.patch("spa.portfolio.complete", return_value="Hello there.")
+    def test_a_broken_ranking_still_gets_a_welcome(self, _complete):
+        r = self._personalise()
+        with (
+            mock.patch("spa.ai_jobs.rank_for_query", side_effect=ValueError("boom")),
+            self.assertLogs("spa.ai_jobs", level="WARNING"),
+        ):
+            run_ai_job(r.json()["id"])
+        body = self._status(r)
+        self.assertEqual((body["status"], body["ranked"]), ("done", None))
+        self.assertEqual(body["intro"], "Hello there.")
+
+    def test_a_model_server_that_never_wakes_fails_the_job(self):
+        """Past the wait, the ranking's transport error ends the job: the welcome would only wait
+        for the same server. The page then keeps the standard portfolio."""
+        r = self._personalise()
+        with (
+            mock.patch(
+                "spa.ai_jobs.rank_for_query", side_effect=LLMTransportError("off")
+            ),
+            mock.patch("spa.portfolio.complete") as m_complete,
+            self.assertLogs("llm_connector.tasks", level="WARNING"),
+        ):
+            run_ai_job(r.json()["id"])
+        m_complete.assert_not_called()
+        self.assertEqual(
+            self._status(r), {"status": "failed", "waking": False, "intro": ""}
+        )
 
     @mock.patch("spa.portfolio.complete", side_effect=LLMTransportError("off"))
-    def test_a_sleeping_model_server_ends_with_no_intro_not_an_error(self, _complete):
-        r = self._queue_intro()
+    def test_a_welcome_that_fails_leaves_the_ranking(self, _complete):
+        r = self._personalise()
         with (
-            override_settings(PORTFOLIO_INTRO_WAIT_S=0),
-            mock.patch("llm_connector.client.time.sleep"),
+            mock.patch("spa.ai_jobs.rank_for_query", return_value=self.RANKED),
             self.assertLogs("spa.portfolio", level="WARNING"),
         ):
             run_ai_job(r.json()["id"])
-        body = self.client.get(f"/api/spa/public/intro/{r.json()['id']}/").json()
+        body = self._status(r)
+        self.assertEqual((body["status"], body["ranked"]), ("done", self.RANKED))
         self.assertEqual(body["intro"], "")
 
-    def test_only_intro_jobs_are_readable_without_a_login(self):
+    def test_it_says_when_the_model_server_is_waking(self):
+        r = self._personalise()
+        AiJob.objects.filter(pk=r.json()["id"]).update(
+            status=AiJob.Status.running, stage=WAITING_STAGE
+        )
+        self.assertTrue(self._status(r)["waking"])
+
+    @mock.patch("spa.ai_jobs.rank_for_query", return_value=[])
+    @mock.patch("spa.portfolio.complete", return_value="Hello there.")
+    def test_the_visitors_question_is_gone_when_the_job_ends(self, _c, _r):
+        r = self._personalise()
+        job = AiJob.objects.get(pk=r.json()["id"])
+        self.assertEqual(job.payload["query"], "gigs")
+        run_ai_job(str(job.pk))
+        job.refresh_from_db()
+        self.assertEqual(job.payload, {})
+
+    def test_only_portfolio_jobs_are_readable_without_a_login(self):
         job = AiJob.objects.create(
             kind="letter_rewrite", user=self.owner, result={"text": "private"}
         )
-        r = self.client.get(f"/api/spa/public/intro/{job.pk}/")
+        r = self.client.get(f"/api/spa/public/personalise/{job.pk}/")
         self.assertEqual(r.status_code, 404)
 
-    def test_the_intro_is_written_for_the_handles_owner(self):
+    def test_it_runs_for_the_handles_owner(self):
         jane = _owner("jane")
         with mock.patch("llm_connector.tasks.run_ai_job"):
             r = self.client.post(
-                "/api/spa/public/jane/native/intro/",
+                "/api/spa/public/jane/native/personalise/",
                 data={},
                 content_type="application/json",
             )
         self.assertEqual(AiJob.objects.get(pk=r.json()["id"]).user, jane)
 
-    def test_intro_rejects_overlong_query(self):
+    def test_it_rejects_an_overlong_query(self):
         r = self.client.post(
-            f"{self.API}intro/",
+            f"{self.API}personalise/",
             data={"query": "x" * 1000},
             content_type="application/json",
         )
         self.assertEqual(r.status_code, 400)
+
+    def test_the_seventh_in_an_hour_is_throttled(self):
+        """The one anonymous call that costs model-server compute: the tight scope is the valve."""
+        codes = [self._personalise().status_code for _ in range(7)]
+        self.assertEqual(codes, [202] * 6 + [429])
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
@@ -1024,56 +1112,6 @@ class PortfolioPrewarmTests(TestCase):
         with mock.patch("spa.views.request_prewarm") as prewarm:
             self.client.get("/api/spa/public/lukas/native/meta/")
         prewarm.assert_not_called()
-
-
-@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
-class PortfolioRankFallbackTests(TestCase):
-    """A visitor is waiting, so a model server that is off or starting is a normal answer: the page
-    keeps its standard selection and learns why, without an error and without a retry."""
-
-    URL = "/api/spa/public/lukas/native/rank/"
-
-    def setUp(self):
-        cache.clear()
-        self.owner = _owner("lukas")
-
-    def _post(self):
-        return self.client.post(
-            self.URL, data={"query": "gigs"}, content_type="application/json"
-        )
-
-    @mock.patch("spa.views.rank_for_query", return_value=[{"id": "job:1", "score": 0.9}])
-    def test_ok(self, _rank):
-        body = self._post().json()
-        self.assertEqual(body["ai"], "ok")
-        self.assertEqual(body["ranked"], [{"id": "job:1", "score": 0.9}])
-
-    @mock.patch(
-        "spa.views.rank_for_query", side_effect=LLMWarmingUp("waking", retry_after=30)
-    )
-    def test_503_with_retry_after_is_warming_up(self, _rank):
-        r = self._post()
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"ranked": [], "ai": "warming_up"})
-
-    @mock.patch("spa.views.rank_for_query", side_effect=LLMTransportError("off"))
-    def test_an_absent_model_server_is_unavailable(self, _rank):
-        with self.assertLogs("spa.views", level="WARNING"):
-            r = self._post()
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"ranked": [], "ai": "unavailable"})
-
-    @override_settings(PORTFOLIO_RANK_TIMEOUT_S=3)
-    def test_the_call_runs_under_the_short_timeout(self):
-        seen = {}
-
-        def rank(*args):
-            seen["timeout"] = _interactive_timeout.get()
-            return []
-
-        with mock.patch("spa.views.rank_for_query", side_effect=rank):
-            self._post()
-        self.assertEqual(seen["timeout"], 3)
 
 
 # ── block links (guide [fullstack]-block-links) ─────────────────────────────────
