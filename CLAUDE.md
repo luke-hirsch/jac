@@ -82,14 +82,15 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
   then what waits on the lab or the board. Each item gets an activation pass before Lukas types it
   ([[backlog-guides-need-activation]]).
 
-Guides 02, 05 to 07 and 09 to 19 (AI-coded at his request, 2026-11-20 to 11-23) are in `done/` without a Results
+Guides 02, 05 to 07 and 09 to 20 (AI-coded at his request, 2026-11-20 to 11-24) are in `done/` without a Results
 chapter (2026-11-23): Lukas tests live, in the Claude app, and what breaks comes back as new work. All are
 live: `/health/` on every host, each key's live model list, the career and applications as files ([[career-files]]),
 the style rules, and the Claude connector at `jac.<domain>/api/jac/mcp/` as the only way Claude reaches jac, its
 consent kept per user (`TransferConsent`) ([[claude-skill]]); 13 to 17: skill years from the linked entries, one
 skill↔certification link (migration `jac.0006`), less review noise, Keep in the change log, the domain manager; 18:
 the PDF preview in the Claude app, an MCP App the connector serves ([[claude-skill]]); 19: every export named
-`cv_` / `letter_` / `application_<title>_<full name>` (`exportStem`). Parked in guide 04: review
+`cv_` / `letter_` / `application_<title>_<full name>` (`exportStem`); 20: the applications list's status filter
+(`?status=`, kept into an application). Parked in guide 04: review
 dismissals, draft entries from Claude, ChatGPT.
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
@@ -100,8 +101,8 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  the privacy page without menu paths, guides 02 and 05 to 19, and the favicon (the antlers, [[brand-mark]]). Live is
-  `0d5a0a4` (2026-11-24), all of it. `jac.0006` (every skill's certification link moved into the certification) was already
+  the privacy page without menu paths, guides 02 and 05 to 20, and the favicon (the antlers, [[brand-mark]]). Live is
+  `00aa21b` (2026-11-24), all of it. `jac.0006` (every skill's certification link moved into the certification) was already
   applied live when guide 18 deployed.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
   data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
