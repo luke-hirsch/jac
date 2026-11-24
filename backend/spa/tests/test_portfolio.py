@@ -127,6 +127,11 @@ class OwnerForHandleTests(TestCase):
                 self.assertIsNone(owner_for_handle(spelling), spelling)
                 self.assertIsNone(link_owner_for_handle(spelling), spelling)
 
+    def test_the_explainer_page_holds_its_path(self):
+        """portfolio.<domain>/about/ is the SPA's "What's this?" page, and a static route wins over
+        a handle: an owner called "about" would never be reached."""
+        self.assertIn("about", settings.RESERVED_HANDLES)
+
     def test_an_inactive_user_is_none(self):
         jane = _owner("jane")
         User.objects.filter(pk=jane.pk).update(is_active=False)

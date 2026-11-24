@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { ItemCard } from "@/components/portfolio/item-card";
 import { isEmptyPayload, pageAnchors } from "@/lib/portfolio/content";
 import type { PortfolioPayload } from "@/lib/queries/portfolio";
@@ -5,10 +6,14 @@ import type { PortfolioPayload } from "@/lib/queries/portfolio";
 export function PortfolioPage({
   payload,
   moreOverride,
+  aiIntroFor,
 }: {
   payload: PortfolioPayload;
   /** /explore passes a rank-reordered "more" list; default is the server order. */
   moreOverride?: PortfolioPayload["more"];
+  /** The handle, when `payload.intro` is the AI's welcome rather than the owner's own words:
+   *  the page then says so, and links to how it's made. */
+  aiIntroFor?: string;
 }) {
   const { owner } = payload;
   const more = moreOverride ?? payload.more;
@@ -31,6 +36,19 @@ export function PortfolioPage({
           {payload.intro || owner.bio ? (
             <p className="text-muted-foreground max-w-prose">
               {payload.intro || owner.bio}
+            </p>
+          ) : null}
+          {payload.intro && aiIntroFor ? (
+            <p className="text-xs text-muted-foreground">
+              Written by AI from the entries below ·{" "}
+              <Link
+                to="/about/"
+                search={{ from: aiIntroFor }}
+                hash="ai"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                how this works
+              </Link>
             </p>
           ) : null}
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">

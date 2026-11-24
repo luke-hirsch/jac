@@ -549,6 +549,7 @@ LEGAL_CONTACT_EMAIL = os.getenv("LEGAL_CONTACT_EMAIL", "")
 # anyway still shows nothing.
 RESERVED_HANDLES = {
     "_allauth",
+    "about",
     "account",
     "admin",
     "api",
