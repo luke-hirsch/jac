@@ -1315,3 +1315,327 @@ class BlockLinksSerializerTests(TestCase):
         self.assertEqual(self._post(["job:1", "job:1", "block:2"]).status_code, 201)
         block = PortfolioBlock.objects.get(user=self.user)
         self.assertEqual(block.links, ["job:1", "block:2"])
+
+
+# --- guide 26: the block kinds -----------------------------------------------------------
+
+QUOTE = {"by": "Ada Lovelace", "role": "Analyst"}
+FIGURES = {
+    "figures": [
+        {"value": "40%", "label": "faster builds"},
+        {"value": "3", "label": "teams"},
+    ]
+}
+CTA = {"label": "Write to me", "url": "mailto:jane@example.com"}
+LINKLIST = {
+    "items": [
+        {"title": "Talk", "url": "https://example.com/talk", "note": "Twenty minutes"},
+        {"title": "Paper", "url": "http://example.org/paper.pdf", "note": ""},
+    ]
+}
+
+
+class BlockKindsApiTests(TestCase):
+    """The kind table: what each kind needs, what its `data` may hold (spa/blocks.py), on a
+    create and on a PATCH that leaves things out."""
+
+    URL = "/api/spa/portfolio/manage/blocks/"
+
+    def setUp(self):
+        self.user = _owner("blocker")
+        self.client.force_login(self.user)
+
+    def _post(self, **body):
+        return self.client.post(
+            self.URL, data=json.dumps(body), content_type="application/json"
+        )
+
+    def _patch(self, block, **body):
+        return self.client.patch(
+            f"{self.URL}{block.pk}/",
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+
+    def _refused(self, res, field="data"):
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn(field, res.json())
+
+    def _stored(self, res) -> PortfolioBlock:
+        self.assertIn(res.status_code, (200, 201), res.content)
+        return PortfolioBlock.objects.get(pk=res.json()["id"])
+
+    def test_every_new_kind_is_created_with_its_fields(self):
+        for kind, body, data in (
+            ("quote", "Code is poetry.", QUOTE),
+            ("figures", "", FIGURES),
+            ("cta", "Hiring?", CTA),
+            ("linklist", "", LINKLIST),
+        ):
+            with self.subTest(kind):
+                block = self._stored(self._post(kind=kind, body=body, data=data))
+                self.assertEqual(block.kind, kind)
+                self.assertEqual(block.data, data)
+
+    def test_the_api_answers_with_data_and_media(self):
+        self._post(kind="quote", body="Code is poetry.", data=QUOTE)
+        [row] = self.client.get(self.URL).json()
+        self.assertEqual(row["data"], QUOTE)
+        self.assertIsNone(row["media"])
+
+    def test_strings_are_stripped_and_unknown_keys_dropped(self):
+        block = self._stored(
+            self._post(
+                kind="quote",
+                body="Code is poetry.",
+                data={"by": "  Ada  ", "role": " CTO ", "email": "ada@example.com"},
+            )
+        )
+        self.assertEqual(block.data, {"by": "Ada", "role": "CTO"})
+
+    def test_a_kind_without_fields_of_its_own_stores_no_data(self):
+        block = self._stored(self._post(kind="text", body="Hi", data={"by": "Ada"}))
+        self.assertEqual(block.data, {})
+
+    def test_a_quote_needs_its_words_and_who_said_them(self):
+        self._refused(self._post(kind="quote", data=QUOTE), "body")
+        self._refused(self._post(kind="quote", body="Code is poetry.", data={}))
+        self._refused(
+            self._post(kind="quote", body="x", data={"by": "A" * 101}),
+        )
+        self._refused(
+            self._post(kind="quote", body="x", data={"by": "Ada", "role": "R" * 151}),
+        )
+
+    def test_key_figures_take_two_to_four_rows(self):
+        row = {"value": "3", "label": "teams"}
+        for rows in ([row], [row] * 5, "3 teams"):
+            with self.subTest(rows=rows):
+                self._refused(self._post(kind="figures", data={"figures": rows}))
+        for bad in (
+            {"value": "1234567890123", "label": "too long a value"},
+            {"value": "3", "label": ""},
+            {"value": 3, "label": "teams"},
+            "3 teams",
+        ):
+            with self.subTest(bad=bad):
+                self._refused(self._post(kind="figures", data={"figures": [row, bad]}))
+        self._stored(self._post(kind="figures", data={"figures": [row] * 4}))
+
+    def test_a_call_to_action_links_to_https_or_mail_only(self):
+        for url in (
+            "javascript:alert(1)",
+            "http://example.com",
+            "ftp://example.com",
+            "data:text/html,<script>alert(1)</script>",
+            "mailto:not-an-address",
+            "",
+        ):
+            with self.subTest(url=url):
+                self._refused(self._post(kind="cta", data={"label": "Go", "url": url}))
+        for url in (
+            "https://example.com/contact",
+            "mailto:jane@example.com?subject=Hi",
+        ):
+            with self.subTest(url=url):
+                self._stored(self._post(kind="cta", data={"label": "Go", "url": url}))
+        self._refused(
+            self._post(kind="cta", data={"label": "L" * 41, "url": "https://x.de"})
+        )
+
+    def test_a_link_list_takes_one_to_twelve_web_links(self):
+        item = {"title": "Talk", "url": "https://example.com/talk"}
+        for items in ([], [item] * 13):
+            with self.subTest(count=len(items)):
+                self._refused(self._post(kind="linklist", data={"items": items}))
+        for bad in (
+            {"title": "Talk", "url": "javascript:alert(1)"},
+            {"title": "Talk", "url": "mailto:jane@example.com"},
+            {"title": "", "url": "https://example.com"},
+            {"title": "Talk", "url": "https://example.com", "note": "N" * 201},
+        ):
+            with self.subTest(bad=bad):
+                self._refused(self._post(kind="linklist", data={"items": [bad]}))
+        block = self._stored(self._post(kind="linklist", data={"items": [item] * 12}))
+        self.assertEqual(block.data["items"][0]["note"], "")
+
+    def test_data_must_be_an_object(self):
+        for data in (["Ada"], "Ada"):
+            with self.subTest(data=data):
+                self._refused(self._post(kind="quote", body="x", data=data))
+
+    def test_a_new_block_without_a_kind_is_a_text_block(self):
+        self._refused(self._post(title="Untitled"), "body")
+
+    def test_a_patch_that_switches_kind_is_checked_against_what_is_stored(self):
+        block = PortfolioBlock.objects.create(user=self.user, kind="text", body="Hi")
+        self._refused(self._patch(block, kind="quote"))
+        block = self._stored(self._patch(block, kind="quote", data={"by": "Ada"}))
+        self.assertEqual((block.kind, block.body), ("quote", "Hi"))
+
+    def test_a_patch_that_switches_kind_drops_the_old_kinds_data(self):
+        block = PortfolioBlock.objects.create(
+            user=self.user, kind="quote", body="Hi", data=QUOTE
+        )
+        block = self._stored(self._patch(block, kind="text"))
+        self.assertEqual(block.data, {})
+
+    def test_a_patch_of_data_alone_follows_the_stored_kind(self):
+        block = PortfolioBlock.objects.create(user=self.user, kind="cta", data=CTA)
+        self._refused(self._patch(block, data={"label": "Mail me"}))
+        block = self._stored(self._patch(block, title="Contact"))
+        self.assertEqual(block.data, CTA)
+
+    def test_data_travels_over_multipart_as_json_text(self):
+        """The editor goes multipart whenever a file rides along; `data` is then a text field."""
+        res = self.client.post(
+            self.URL, {"kind": "linklist", "data": json.dumps(LINKLIST)}
+        )
+        self.assertEqual(self._stored(res).data, LINKLIST)
+
+    def test_a_nul_in_multipart_data_is_refused(self):
+        """A JSON body never gets this far (lukehirsch.parsers), a multipart one does."""
+        res = self.client.post(
+            self.URL,
+            {"kind": "quote", "body": "x", "data": json.dumps({"by": "Ada\u0000"})},
+        )
+        self._refused(res)
+
+    def test_the_admin_runs_the_same_rules(self):
+        from django.core.exceptions import ValidationError
+
+        for kind, body, data in (
+            ("quote", "Hi", {}),
+            ("cta", "", {"label": "Go", "url": "javascript:alert(1)"}),
+            ("quote", "", QUOTE),
+        ):
+            block = PortfolioBlock(user=self.user, kind=kind, body=body, data=data)
+            with self.subTest(kind=kind, data=data), self.assertRaises(ValidationError):
+                block.full_clean()
+        block = PortfolioBlock(
+            user=self.user, kind="quote", body="Hi", data={"by": " Ada ", "x": 1}
+        )
+        block.full_clean()
+        self.assertEqual(block.data, {"by": "Ada", "role": ""})
+
+
+class BlockPayloadTests(TestCase):
+    """The public item of a block: its `data` by the kind's rules, its media file and type."""
+
+    def setUp(self):
+        self.owner = _owner()
+
+    def _item(self, **fields) -> dict:
+        block = PortfolioBlock.objects.create(user=self.owner, **fields)
+        [item] = resolve_items(self.owner, [f"block:{block.pk}"])
+        return item
+
+    def test_every_block_carries_data_and_media(self):
+        item = self._item(kind="text", body="Hi")
+        self.assertEqual(item["data"], {})
+        self.assertIsNone(item["media_url"])
+        self.assertIsNone(item["media_type"])
+
+    def test_each_kind_shows_its_fields(self):
+        for kind, data in (
+            ("quote", QUOTE),
+            ("figures", FIGURES),
+            ("cta", CTA),
+            ("linklist", LINKLIST),
+        ):
+            with self.subTest(kind):
+                item = self._item(kind=kind, body="x", data=data)
+                self.assertEqual((item["kind"], item["data"]), (kind, data))
+
+    def test_only_the_kinds_own_keys_reach_the_page(self):
+        item = self._item(
+            kind="quote", body="x", data={**QUOTE, "email": "ada@example.com"}
+        )
+        self.assertEqual(item["data"], QUOTE)
+
+    def test_a_link_written_past_the_serializer_never_reaches_the_page(self):
+        item = self._item(
+            kind="cta", data={"label": "Go", "url": "javascript:alert(1)"}
+        )
+        self.assertEqual(item["data"], {})
+
+    def test_a_media_block_names_its_file_its_type_and_its_poster(self):
+        # Names only, no files written: the payload reads the stored name.
+        item = self._item(
+            kind="media",
+            media=f"portfolio/media/{self.owner.pk}/abc.m4a",
+            image=f"portfolio/blocks/{self.owner.pk}/cover.png",
+        )
+        self.assertEqual(
+            item["media_url"], f"/media/portfolio/media/{self.owner.pk}/abc.m4a"
+        )
+        self.assertEqual(item["media_type"], "audio/mp4")
+        self.assertEqual(
+            item["image_url"], f"/media/portfolio/blocks/{self.owner.pk}/cover.png"
+        )
+
+    def test_a_file_left_from_an_earlier_kind_isnt_shown(self):
+        item = self._item(
+            kind="text", body="Hi", media=f"portfolio/media/{self.owner.pk}/abc.mp4"
+        )
+        self.assertIsNone(item["media_url"])
+        self.assertIsNone(item["media_type"])
+
+    def test_the_media_type_follows_the_stored_extension(self):
+        from spa.blocks import media_type
+
+        for ext, expected in (
+            ("mp4", "video/mp4"),
+            ("webm", "video/webm"),
+            ("mp3", "audio/mpeg"),
+            ("m4a", "audio/mp4"),
+            ("ogg", "audio/ogg"),
+            ("mov", None),
+        ):
+            with self.subTest(ext=ext):
+                block = PortfolioBlock(
+                    user=self.owner, media=f"portfolio/media/1/x.{ext}"
+                )
+                self.assertEqual(media_type(block.media), expected)
+        self.assertIsNone(media_type(PortfolioBlock(user=self.owner).media))
+
+
+class BlockRankingTextTests(TestCase):
+    """What the embed ranking reads of a block: its title, its body and the words in its data,
+    so a key-figures block without a body still says what it's about."""
+
+    def setUp(self):
+        self.owner = _owner()
+
+    def test_it_reads_the_words_in_the_data(self):
+        from spa.blocks import block_text
+
+        for kind, data, words in (
+            ("quote", QUOTE, ["Ada Lovelace", "Analyst"]),
+            ("figures", FIGURES, ["40% faster builds", "3 teams"]),
+            ("cta", CTA, ["Write to me"]),
+            ("linklist", LINKLIST, ["Talk", "Twenty minutes", "Paper"]),
+        ):
+            with self.subTest(kind):
+                block = PortfolioBlock(
+                    user=self.owner, kind=kind, title="Title", body="Body", data=data
+                )
+                text = block_text(block)
+                for word in ["Title", "Body", *words]:
+                    self.assertIn(word, text)
+        self.assertNotIn(
+            "example.com", block_text(PortfolioBlock(kind="cta", data=CTA))
+        )
+
+    def test_the_ranking_hands_it_to_the_embedder(self):
+        from spa.portfolio import rank_for_query
+
+        block = PortfolioBlock.objects.create(
+            user=self.owner, kind="figures", data=FIGURES
+        )
+        with mock.patch("spa.portfolio.PortfolioEmbed") as embed:
+            embed.return_value.ranked_entries.return_value = []
+            rank_for_query(self.owner, "build speed", [])
+        docs = embed.call_args.args[1]
+        [doc] = [d for d in docs if d["id"] == f"block:{block.pk}"]
+        self.assertIn("40% faster builds", doc["text"])

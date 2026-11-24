@@ -5,6 +5,9 @@
   owner-checked views (dev: Django streams; prod: X-Accel-Redirect to nginx's internal location).
 - Layout templates stay public (/media/), so they must be what they claim: a JSON object, stored
   as `<uuid>.json` whatever the uploader named it — nginx picks the Content-Type by extension.
+- A block's audio or video is public too, so the same holds: its first bytes decide what it is
+  (`spa.blocks.sniff_media`), it's stored as `<uuid>.<that extension>`, and it fits the per-file
+  cap and the per-user quota (guide 26).
 
 Housed in spa like test_settings_hardening: the mechanism is project-level (lukehirsch/storage.py,
 lukehirsch/private_media.py) and spans jac + spa consumers. Carries the `files` skip group: real
@@ -19,7 +22,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings, tag
+from django.test import SimpleTestCase, override_settings, tag
 from rest_framework.test import APITestCase
 
 from jac.models import ApplicationLayout, CvAttachment
@@ -32,6 +35,36 @@ PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 UUID_HEX = "[0-9a-f]{32}"
+
+
+def _ogg(packet: bytes) -> bytes:
+    """An Ogg page header with one segment, then the stream's first packet."""
+    header = b"OggS\x00\x02" + b"\x00" * 8 + b"\x01\x00\x00\x00" + b"\x00" * 8
+    return header + b"\x01" + bytes([len(packet)]) + packet + b"\x00" * 32
+
+
+# The first bytes of each container, which is all `sniff_media` reads; the rest is padding.
+PAD = b"\x00" * 64
+MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + PAD
+M4A = b"\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A mp42isom\x00\x00\x00\x00" + PAD
+WEBM = (
+    b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01\x42\xf2\x81\x04"
+    b"\x42\xf3\x81\x08\x42\x82\x84webm\x42\x87\x81\x04\x42\x85\x81\x02" + PAD
+)
+MP3_TAGGED = b"ID3\x04\x00\x00\x00\x00\x00\x00" + PAD
+MP3_FRAME = b"\xff\xfb\x90\x64" + PAD
+OGG_VORBIS = _ogg(b"\x01vorbis\x00\x00\x00\x00\x02\x44\xac\x00\x00")
+OGG_OPUS = _ogg(b"OpusHead\x01\x02\x38\x01\x80\xbb\x00\x00")
+# Lookalikes: the same container formats, holding what a browser won't play or isn't sound.
+MOV = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  " + PAD
+HEIC = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + PAD
+MKV = (
+    b"\x1a\x45\xdf\xa3\xa3\x42\x86\x81\x01\x42\xf7\x81\x01\x42\xf2\x81\x04"
+    b"\x42\xf3\x81\x08\x42\x82\x88matroska\x42\x87\x81\x04\x42\x85\x81\x02" + PAD
+)
+AAC_ADTS = b"\xff\xf1\x50\x80\x02\x1f\xfc" + PAD
+OGG_THEORA = _ogg(b"\x80theora\x03\x02\x01\x00\x14\x00\x0f")
+HTML = b"<!doctype html><script>alert(document.cookie)</script>" + PAD
 
 
 def _under(path, root) -> bool:
@@ -348,6 +381,9 @@ class UploadThrottleTests(APITestCase):
             "block": self.client.post(
                 BLOCKS, {"kind": "image", "image": _png()}, format="multipart"
             ),
+            "block media": self.client.post(
+                BLOCKS, {"kind": "media", "media": _media()}, format="multipart"
+            ),
             "layout": self.client.post(
                 LAYOUTS,
                 {"name": "mine", "template": SimpleUploadedFile("l.json", b"{}")},
@@ -378,3 +414,221 @@ class UploadThrottleTests(APITestCase):
         self.assertEqual(self._attachment().status_code, 201)
         self.client.force_login(User.objects.create_user(username="bob", password="pw"))
         self.assertEqual(self._attachment().status_code, 201)
+
+
+def sniff_media(head: bytes):
+    # Imported here, not at the top: until spa/blocks.py exists, only these tests go red.
+    from spa.blocks import sniff_media
+
+    return sniff_media(head)
+
+
+class SniffMediaTests(SimpleTestCase):
+    """What a file is comes from its first bytes, never from its name or the browser's word."""
+
+    def test_the_five_playable_kinds_are_recognised(self):
+        for head, ext in (
+            (MP4, ".mp4"),
+            (M4A, ".m4a"),
+            (WEBM, ".webm"),
+            (MP3_TAGGED, ".mp3"),
+            (MP3_FRAME, ".mp3"),
+            (OGG_VORBIS, ".ogg"),
+            (OGG_OPUS, ".ogg"),
+        ):
+            with self.subTest(ext=ext, head=head[:12]):
+                self.assertEqual(sniff_media(head[:64]), ext)
+
+    def test_lookalikes_and_everything_else_are_not(self):
+        for name, head in (
+            ("QuickTime", MOV),
+            ("HEIC image", HEIC),
+            ("Matroska", MKV),
+            ("bare AAC", AAC_ADTS),
+            ("Ogg video", OGG_THEORA),
+            ("PNG", PNG),
+            ("PDF", PDF),
+            ("HTML", HTML),
+            ("empty", b""),
+        ):
+            with self.subTest(name):
+                self.assertIsNone(sniff_media(head[:64]))
+
+
+def _media(data=MP4, name="talk.mp4", content_type="video/mp4"):
+    return SimpleUploadedFile(name, data, content_type=content_type)
+
+
+@tag("files")
+@override_settings(**own_media_roots())
+class BlockMediaUploadTests(APITestCase):
+    """A media block's file: public under /media/, so it has to be what it claims, and it has to
+    fit the per-file cap and the per-user quota. A replaced or dropped file leaves the disk."""
+
+    SERIALIZER = "spa.serializers.PortfolioBlockSerializer"
+
+    def setUp(self):
+        self.alice = User.objects.create_user(username="alice", password="pw")
+        self.client.force_login(self.alice)
+
+    def _post(self, media=None, **fields):
+        body = {"kind": "media", "media": media or _media(), **fields}
+        return self.client.post(BLOCKS, body, format="multipart")
+
+    def _block(self, **fields) -> PortfolioBlock:
+        res = self._post(**fields)
+        self.assertEqual(res.status_code, 201, res.content)
+        return PortfolioBlock.objects.get(pk=res.json()["id"])
+
+    def test_a_video_is_stored_under_a_new_name_whatever_it_was_called(self):
+        block = self._block(
+            media=_media(name="Bewerbung_Alice.html", content_type="text/html")
+        )
+        self.assertRegex(
+            block.media.name, rf"^portfolio/media/{self.alice.pk}/{UUID_HEX}\.mp4$"
+        )
+        self.assertTrue(_under(block.media.path, settings.MEDIA_ROOT), block.media.path)
+        self.assertTrue(Path(block.media.path).exists())
+
+    def test_the_extension_is_the_one_the_bytes_prove(self):
+        for data, ext in (
+            (M4A, ".m4a"),
+            (WEBM, ".webm"),
+            (MP3_TAGGED, ".mp3"),
+            (OGG_OPUS, ".ogg"),
+        ):
+            with self.subTest(ext=ext):
+                block = self._block(media=_media(data, name="clip.mp4"))
+                self.assertEqual(Path(block.media.name).suffix, ext)
+
+    def test_what_isnt_audio_or_video_is_refused(self):
+        for name, data in (
+            ("PNG", PNG),
+            ("HTML", HTML),
+            ("QuickTime", MOV),
+            ("PDF", PDF),
+        ):
+            with self.subTest(name):
+                res = self._post(media=_media(data, name="clip.mp4"))
+                self.assertEqual(res.status_code, 400, res.content)
+                self.assertIn("media", res.json())
+        self.assertFalse(PortfolioBlock.objects.exists())
+        # This user's folder only: the class's other tests leave their files in the root.
+        folder = Path(settings.MEDIA_ROOT) / "portfolio" / "media" / str(self.alice.pk)
+        self.assertFalse(list(folder.glob("*")))
+
+    def test_a_media_block_needs_its_file(self):
+        res = self.client.post(
+            BLOCKS, {"kind": "media", "title": "Talk"}, format="multipart"
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("media", res.json())
+
+    def test_a_poster_goes_with_it(self):
+        res = self._post(image=_png())
+        self.assertEqual(res.status_code, 201, res.content)
+        body = res.json()
+        self.assertIn("/media/portfolio/media/", body["media"])
+        self.assertIn("/media/portfolio/blocks/", body["image"])
+
+    def test_an_oversized_file_is_refused(self):
+        with patch(f"{self.SERIALIZER}._MAX_MEDIA_BYTES", 8):
+            res = self._post()
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("media", res.json())
+
+    def test_the_quota_counts_the_users_other_files(self):
+        with patch(f"{self.SERIALIZER}._MEDIA_QUOTA_BYTES", len(MP4) * 2 - 1):
+            self.assertEqual(self._post().status_code, 201)
+            res = self._post()
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("media", res.json())
+
+    def test_another_users_files_dont_count(self):
+        bob = User.objects.create_user(username="bob", password="pw")
+        PortfolioBlock.objects.create(user=bob, kind="media", media=_media())
+        with patch(f"{self.SERIALIZER}._MEDIA_QUOTA_BYTES", len(MP4)):
+            self.assertEqual(self._post().status_code, 201)
+
+    def test_a_file_gone_from_disk_takes_no_space(self):
+        block = self._block()
+        Path(block.media.path).unlink()
+        with patch(f"{self.SERIALIZER}._MEDIA_QUOTA_BYTES", len(MP4)):
+            self.assertEqual(self._post().status_code, 201)
+
+    def test_a_replacement_doesnt_count_the_file_it_replaces(self):
+        block = self._block()
+        with patch(f"{self.SERIALIZER}._MEDIA_QUOTA_BYTES", len(MP4)):
+            res = self.client.patch(
+                f"{BLOCKS}{block.pk}/", {"media": _media()}, format="multipart"
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_replacing_the_file_takes_the_old_one_along(self):
+        block = self._block()
+        old = block.media.path
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.patch(
+                f"{BLOCKS}{block.pk}/", {"media": _media(WEBM)}, format="multipart"
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        block.refresh_from_db()
+        self.assertFalse(Path(old).exists(), old)
+        self.assertTrue(Path(block.media.path).exists())
+
+    def test_replacing_an_image_takes_the_old_one_along(self):
+        res = self.client.post(
+            BLOCKS, {"kind": "image", "image": _png()}, format="multipart"
+        )
+        block = PortfolioBlock.objects.get(pk=res.json()["id"])
+        old = block.image.path
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.patch(
+                f"{BLOCKS}{block.pk}/", {"image": _png()}, format="multipart"
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        block.refresh_from_db()
+        self.assertNotEqual(block.image.path, old)
+        self.assertFalse(Path(old).exists(), old)
+
+    def test_switching_the_kind_keeps_the_files(self):
+        """A misclick on the kind loses nothing: switching back brings the file back."""
+        block = self._block(image=_png())
+        stored = block.media.name
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.patch(
+                f"{BLOCKS}{block.pk}/",
+                {"kind": "text", "body": "Now a text."},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(Path(block.media.path).exists())
+        self.assertTrue(Path(block.image.path).exists())
+        res = self.client.patch(
+            f"{BLOCKS}{block.pk}/", {"kind": "media"}, format="json"
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        block.refresh_from_db()
+        self.assertEqual(block.media.name, stored)
+
+    def test_a_kind_without_audio_or_video_refuses_the_file(self):
+        for fields in (
+            {"kind": "text", "body": "x"},
+            {"kind": "image", "image": _png()},
+        ):
+            with self.subTest(kind=fields["kind"]):
+                res = self.client.post(
+                    BLOCKS, {**fields, "media": _media()}, format="multipart"
+                )
+                self.assertEqual(res.status_code, 400, res.content)
+                self.assertIn("media", res.json())
+
+    def test_a_plain_edit_keeps_the_files(self):
+        block = self._block(image=_png())
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.patch(
+                f"{BLOCKS}{block.pk}/", {"title": "My talk"}, format="json"
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(Path(block.media.path).exists())
+        self.assertTrue(Path(block.image.path).exists())
