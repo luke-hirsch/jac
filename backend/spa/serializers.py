@@ -14,6 +14,7 @@ from spa.blocks import (
     sniff_media,
     takes_file,
 )
+from spa.captcha import MAX_PAYLOAD_LEN
 from spa.models import (
     PersonalityProfile,
     PersonalityQuestion,
@@ -537,7 +538,15 @@ class PortfolioStandardSerializer(serializers.ModelSerializer):
         return {"featured": list(dict.fromkeys(featured))}
 
 
-class PortfolioPersonaliseSerializer(serializers.Serializer):
+class CaptchaSerializer(serializers.Serializer):
+    """The body of a request that can wake the model server: the solved check's payload
+    (spa.captcha). Only its shape here. The view checks it last, once every other field is
+    valid, so a refused field never spends it."""
+
+    captcha = serializers.CharField(max_length=MAX_PAYLOAD_LEN)
+
+
+class PortfolioPersonaliseSerializer(CaptchaSerializer):
     """Input for a questionnaire visit's AI job: a one-tweet query (the questionnaire's own
     MAX_ANSWER_LEN), at most 10 domain names, and the style axis (the personality tone/focus
     vocab)."""

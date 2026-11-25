@@ -8,6 +8,7 @@ from spa.views import (
     PersonalityQuestionListCreateView,
     PortfolioBlockDetailView,
     PortfolioBlockListCreateView,
+    PortfolioCaptchaView,
     PortfolioLinkDetailView,
     PortfolioLinkListCreateView,
     PortfolioLinkRevokeView,
@@ -73,6 +74,11 @@ urlpatterns = [
         name="portfolio-standard",
     ),
     # Public: anonymous, the owner named by the handle in the path (never the Host header).
+    path(
+        "public/captcha/",
+        PortfolioCaptchaView.as_view(),
+        name="portfolio-captcha",
+    ),
     path(
         "public/personalise/<uuid:pk>/",
         PortfolioPersonaliseStatusView.as_view(),

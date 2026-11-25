@@ -8,6 +8,7 @@ from django.contrib.auth import logout
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -22,6 +23,7 @@ from llm_connector.tasks import request_prewarm
 from lukehirsch.private_media import private_file_response
 from lukehirsch.storage import delete_on_commit
 from lukehirsch.throttling import UploadThrottle
+from spa.captcha import REFUSED, check_captcha, new_challenge
 from spa.models import (
     PersonalityProfile,
     PersonalityQuestion,
@@ -39,6 +41,7 @@ from spa.portfolio import (
     standard_page_for,
 )
 from spa.serializers import (
+    CaptchaSerializer,
     PersonalityProfileSerializer,
     PersonalityQuestionSerializer,
     PortfolioBlockSerializer,
@@ -296,6 +299,27 @@ class PublicPortfolioAPIView(APIView):
         return response
 
 
+def _require_captcha(payload: str, purpose: str) -> None:
+    """A wake costs the visitor a solved check (spa.captcha), once per purpose. A refused one is a
+    field error on `captcha`, the 400 every check answers. Call it last, after the other fields,
+    so a refused field doesn't spend the payload."""
+    if not check_captcha(payload, purpose):
+        raise ValidationError({"captcha": [REFUSED]})
+
+
+class PortfolioCaptchaView(PublicPortfolioAPIView):
+    """GET: a fresh proof-of-work challenge (spa.captcha), solved in the browser before a request
+    that can wake the model server. No handle: one challenge serves any portfolio. Never cached,
+    because each one is single use."""
+
+    throttle_scope = "captcha"
+
+    def get(self, request):
+        response = Response(new_challenge())
+        response["Cache-Control"] = "no-store"
+        return response
+
+
 class PortfolioResolveView(PublicPortfolioAPIView):
     """GET: personalised slug → payload. Revoked ≡ missing — the single filtered
     lookup yields identical 404s. Counts the visit unless the owner previews their
@@ -351,7 +375,7 @@ class PortfolioMetaView(PublicPortfolioAPIView):
         return Response(
             {
                 "domains": owner_domains(owner),
-                "accent": owner.profile.accent_color or "",
+                "accent": owner.profile.accent_color or "",  # type: ignore
                 "tones": [
                     {"value": v, "label": str(label)}
                     for v, label in PersonalityProfile.Tone.choices
@@ -380,6 +404,7 @@ class PortfolioPersonaliseView(PublicPortfolioAPIView):
         ser = PortfolioPersonaliseSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
+        _require_captcha(data["captcha"], "personalise")  # type: ignore
         job = start_ai_job(
             "portfolio_personalise",
             user=owner,
@@ -403,6 +428,9 @@ class PortfolioPrewarmView(PublicPortfolioAPIView):
     def post(self, request, handle):
         if owner_for_handle(handle) is None:
             raise Http404
+        ser = CaptchaSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        _require_captcha(ser.validated_data["captcha"], "prewarm")  # type: ignore
         request_prewarm()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
