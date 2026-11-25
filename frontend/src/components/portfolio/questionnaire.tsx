@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Button } from "@/components/ui/button";
+import { Studio, StudioButton } from "@/components/portfolio/studio";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { prewarmForVisitor } from "@/lib/prewarm";
@@ -41,7 +41,7 @@ function StyleAxis({
       <p className="text-sm font-medium">{label}</p>
       <div className="flex flex-wrap gap-2">
         {opts.map((o) => (
-          <Button
+          <StudioButton
             key={o.value}
             size="sm"
             variant={value === o.value ? "default" : "outline"}
@@ -49,7 +49,7 @@ function StyleAxis({
             onClick={() => onChange(o.value)}
           >
             {o.label}
-          </Button>
+          </StudioButton>
         ))}
       </div>
     </div>
@@ -77,15 +77,21 @@ export function Questionnaire({
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10">
+    <Studio
+      as="main"
+      accent={meta.data?.accent}
+      className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10"
+    >
       {/* The first click or key in here, not the page load: only a person gets this far. */}
       <Card
-        className="w-full max-w-lg"
+        className="w-full max-w-lg rounded-[18px] border shadow-none ring-0"
         onPointerDownCapture={prewarm}
         onKeyDownCapture={prewarm}
       >
         <CardHeader>
-          <CardTitle>What do you want to see?</CardTitle>
+          <CardTitle className="font-display text-2xl font-bold tracking-[-0.02em] normal-case">
+            What do you want to see?
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -94,7 +100,7 @@ export function Questionnaire({
               {(meta.data?.domains ?? []).map((d) => {
                 const picked = form.domains.includes(d);
                 return (
-                  <Button
+                  <StudioButton
                     key={d}
                     type="button"
                     size="xs"
@@ -103,7 +109,7 @@ export function Questionnaire({
                     onClick={() => toggleDomain(d)}
                   >
                     {d}
-                  </Button>
+                  </StudioButton>
                 );
               })}
               {meta.data && meta.data.domains.length === 0 ? (
@@ -142,13 +148,21 @@ export function Questionnaire({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => onDone(formToSearch(form))}>Show me</Button>
-            <Button variant="outline" onClick={() => onDone(luckySearch())}>
+            <StudioButton onClick={() => onDone(formToSearch(form))}>
+              Show me
+            </StudioButton>
+            <StudioButton
+              variant="outline"
+              onClick={() => onDone(luckySearch())}
+            >
               I feel lucky
-            </Button>
-            <Button variant="ghost" onClick={() => onDone(standardSearch())}>
+            </StudioButton>
+            <StudioButton
+              variant="ghost"
+              onClick={() => onDone(standardSearch())}
+            >
               Skip the questions
-            </Button>
+            </StudioButton>
           </div>
         </CardContent>
       </Card>
@@ -159,6 +173,6 @@ export function Questionnaire({
           Create one here
         </Link>
       </p>
-    </main>
+    </Studio>
   );
 }

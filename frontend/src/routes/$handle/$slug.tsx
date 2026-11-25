@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
+import { Studio } from "@/components/portfolio/studio";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { QueryError } from "@/components/query-error";
 import { ApiError } from "@/lib/api";
@@ -55,9 +56,9 @@ function PortfolioLink() {
     );
   }
   return (
-    <>
+    <Studio accent={q.data.owner.accent}>
       <EscapeHatch handle={handle} />
       <PortfolioPage payload={q.data} />
-    </>
+    </Studio>
   );
 }

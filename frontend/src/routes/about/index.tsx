@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { z } from "zod";
-import { Button } from "@/components/ui/button";
+import { StudioButton } from "@/components/portfolio/studio";
 import { jacOrigin, leaveTo, portfolioOrigin, siteHost } from "@/lib/host";
 
 /** portfolio.<base>/about/: what a personalised portfolio is, for the visitor who wonders. The same
@@ -41,7 +41,7 @@ function Section({
 }) {
   return (
     <section id={id} className="space-y-3 scroll-mt-6">
-      <h2 className="text-xl font-semibold">{title}</h2>
+      <h2 className="font-display text-2xl font-semibold">{title}</h2>
       {children}
     </section>
   );
@@ -62,7 +62,9 @@ function About() {
       ) : null}
 
       <header className="space-y-3">
-        <h1 className="text-3xl font-bold tracking-tight">About this page</h1>
+        <h1 className="font-display text-4xl font-bold tracking-[-0.03em]">
+          About this page
+        </h1>
         <p className="text-lg text-muted-foreground">
           This portfolio isn't the same for everyone. It's put together for each
           visitor from the career entries its owner keeps in jac, the same data
@@ -148,9 +150,9 @@ function About() {
           writes a CV and a cover letter tailored to a job posting, and builds a
           portfolio like this one. You can try it with your own data.
         </p>
-        <Button asChild>
+        <StudioButton asChild>
           <a href={`${jacOrigin()}/auth/signup`}>Try jac</a>
-        </Button>
+        </StudioButton>
       </Section>
     </main>
   );

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Button } from "@/components/ui/button";
+import { StudioButton } from "@/components/portfolio/studio";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { clearStamp } from "@/lib/portfolio/stamp";
 
@@ -19,38 +19,42 @@ export function EscapeHatch({
 }) {
   const goHome = useOwnerHome(handle);
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b bg-muted/50 px-4 py-1.5 text-sm">
-      <span className="text-muted-foreground">
-        {label}{" "}
-        <Link
-          to="/about/"
-          search={{ from: handle }}
-          className="underline underline-offset-2 hover:text-foreground"
-        >
-          What's this?
-        </Link>
-      </span>
-      {onShuffle ? (
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0"
-          onClick={onShuffle}
-        >
-          Feeling lucky again
-        </Button>
-      ) : null}
-      <Button
-        variant="link"
-        size="sm"
-        className="h-auto p-0"
-        onClick={() => {
-          clearStamp(handle);
-          goHome();
-        }}
-      >
-        Start over
-      </Button>
+    <div className="border-b">
+      <div className="mx-auto flex max-w-[1160px] flex-wrap items-center justify-between gap-x-4 gap-y-1 px-[clamp(1rem,4vw,3rem)] py-3.5 text-sm">
+        <span className="text-muted-foreground">
+          {label}{" "}
+          <Link
+            to="/about/"
+            search={{ from: handle }}
+            className="underline underline-offset-[3px] hover:text-foreground"
+          >
+            What's this?
+          </Link>
+        </span>
+        <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {onShuffle ? (
+            <StudioButton
+              variant="link"
+              size="sm"
+              className="h-auto p-0"
+              onClick={onShuffle}
+            >
+              Feeling lucky again
+            </StudioButton>
+          ) : null}
+          <StudioButton
+            variant="link"
+            size="sm"
+            className="h-auto p-0"
+            onClick={() => {
+              clearStamp(handle);
+              goHome();
+            }}
+          >
+            Start over
+          </StudioButton>
+        </span>
+      </div>
     </div>
   );
 }

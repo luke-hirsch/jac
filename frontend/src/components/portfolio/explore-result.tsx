@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
 import {
   PersonaliseGate,
   PersonaliseNotice,
 } from "@/components/portfolio/personalise-gate";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
+import { Studio, StudioButton } from "@/components/portfolio/studio";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { usePersonalise } from "@/components/portfolio/use-personalise";
 import { reorderByRank } from "@/lib/portfolio/content";
 import { clearStamp } from "@/lib/portfolio/stamp";
+import { scrollMotion } from "@/lib/portfolio/studio";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
 import { useNativePortfolio } from "@/lib/queries/portfolio";
 
@@ -34,7 +35,7 @@ export function ExploreResult({
 
   if (view.phase === "working" && !browsing) {
     return (
-      <>
+      <Studio accent={portfolio.data?.owner.accent}>
         <EscapeHatch
           handle={handle}
           label="Your personalised page is on its way."
@@ -44,7 +45,7 @@ export function ExploreResult({
           ownerName={portfolio.data?.owner.display_name}
           onBrowse={() => setBrowsing(true)}
         />
-      </>
+      </Studio>
     );
   }
 
@@ -62,7 +63,7 @@ export function ExploreResult({
           <p className="text-muted-foreground">
             The portfolio isn't available right now.
           </p>
-          <Button
+          <StudioButton
             variant="outline"
             onClick={() => {
               clearStamp(handle);
@@ -70,7 +71,7 @@ export function ExploreResult({
             }}
           >
             Back to start
-          </Button>
+          </StudioButton>
         </div>
       </main>
     );
@@ -88,7 +89,7 @@ export function ExploreResult({
     ? { ...portfolio.data, intro: personal.intro }
     : portfolio.data;
   return (
-    <>
+    <Studio accent={portfolio.data.owner.accent}>
       <EscapeHatch
         handle={handle}
         onShuffle={search.lucky ? () => portfolio.refetch() : undefined}
@@ -100,7 +101,7 @@ export function ExploreResult({
         hasQuery={hasQuery}
         onShow={() => {
           setBrowsing(false);
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          window.scrollTo({ top: 0, behavior: scrollMotion() });
         }}
       />
       <PortfolioPage
@@ -108,6 +109,6 @@ export function ExploreResult({
         moreOverride={more}
         aiIntroFor={personal?.intro ? handle : undefined}
       />
-    </>
+    </Studio>
   );
 }
