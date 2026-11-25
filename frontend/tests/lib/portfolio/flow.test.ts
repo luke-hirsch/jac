@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FOCUS,
   DEFAULT_TONE,
+  EMPTY_FORM,
+  checkedAnswer,
   exploreSearchSchema,
   formToSearch,
   hasAnswer,
@@ -82,6 +84,47 @@ describe("splitQuery", () => {
       query: "jazz",
     };
     expect(hasAnswer(splitQuery(formToSearch(form)).url)).toBe(true);
+  });
+
+  it("keeps the check's payload out of the URL too: it's single use, and a shared link mustn't carry it", () => {
+    const { url, q, captcha } = splitQuery({
+      d: ["music"],
+      focus: "technical",
+      tone: "personal",
+      q: "jazz",
+      captcha: "cGF5bG9hZA==",
+    });
+    expect(captcha).toBe("cGF5bG9hZA==");
+    expect(q).toBe("jazz");
+    expect(url).toEqual({ d: ["music"], focus: "technical", tone: "personal" });
+    expect("captcha" in url).toBe(false);
+  });
+});
+
+describe("checkedAnswer", () => {
+  const PAYLOAD = "cGF5bG9hZA==";
+
+  it("an answer the AI works on waits for the tick", () => {
+    for (const form of [
+      { ...EMPTY_FORM, domains: ["music"] },
+      { ...EMPTY_FORM, query: "jazz" },
+      { ...EMPTY_FORM, tone: "personal" },
+    ]) {
+      expect(checkedAnswer(form, null)).toBeNull();
+    }
+  });
+
+  it("once ticked, the answer carries the check's payload", () => {
+    const form = { ...EMPTY_FORM, domains: ["music"], query: "jazz" };
+    expect(checkedAnswer(form, PAYLOAD)).toEqual({
+      ...formToSearch(form),
+      captcha: PAYLOAD,
+    });
+  });
+
+  it("an answer without AI needs no tick and carries none: it is the standard page", () => {
+    expect(checkedAnswer(EMPTY_FORM, null)).toEqual(standardSearch());
+    expect(checkedAnswer(EMPTY_FORM, PAYLOAD)).toEqual(standardSearch());
   });
 });
 
@@ -198,6 +241,19 @@ describe("nativeStamp (style preserved)", () => {
         focus: "technical",
         tone: "personal",
       },
+    });
+  });
+
+  it("never stores the check's payload: a return visit has to tick again", () => {
+    expect(
+      nativeStamp({
+        d: ["music"],
+        focus: "technical",
+        captcha: "cGF5bG9hZA==",
+      }),
+    ).toEqual({
+      kind: "native",
+      search: { d: ["music"], focus: "technical" },
     });
   });
 

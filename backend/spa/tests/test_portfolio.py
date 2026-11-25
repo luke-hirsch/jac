@@ -59,6 +59,7 @@ from spa.portfolio import (
     resolve_items,
     section_order,
 )
+from spa.tests._helpers import solved_captcha
 
 
 def _owner(username="lukas", published=True):
@@ -194,8 +195,15 @@ class PublicHandleTests(TestCase):
             )
 
     def _calls(self, handle):
+        """One solved check for both POSTs, as the questionnaire's tick: a portfolio that isn't
+        there is the 404 before any check."""
         api = f"/api/spa/public/{handle}/"
-        post = {"data": {"query": "x"}, "content_type": "application/json"}
+        captcha = solved_captcha()
+        post = {
+            "data": {"query": "x", "captcha": captcha},
+            "content_type": "application/json",
+        }
+        prewarm = {"data": {"captcha": captcha}, "content_type": "application/json"}
         with (
             mock.patch("spa.views.request_prewarm"),
             mock.patch("llm_connector.tasks.run_ai_job"),
@@ -204,7 +212,7 @@ class PublicHandleTests(TestCase):
                 "links": self.client.get(f"{api}links/{self.SLUG}/"),
                 "native": self.client.get(f"{api}native/"),
                 "meta": self.client.get(f"{api}native/meta/"),
-                "prewarm": self.client.post(f"{api}native/prewarm/"),
+                "prewarm": self.client.post(f"{api}native/prewarm/", **prewarm),
                 "personalise": self.client.post(f"{api}native/personalise/", **post),
             }
 
@@ -1215,13 +1223,17 @@ class PublicPortfolioEndpointTests(TestCase):
         self.assertEqual(r.json()["domains"], ["theatre"])
 
     def _personalise(self, **data):
+        """A questionnaire answer as the SPA sends it, with a freshly solved check unless the
+        test brings its own (or none: `captcha=None` leaves the field out)."""
         body = {
             "domains": ["music"],
             "query": "gigs",
             "tone": "personal",
             "focus": "technical",
+            "captcha": solved_captcha(),
         }
         body.update(data)
+        body = {k: v for k, v in body.items() if v is not None}
         with mock.patch("llm_connector.tasks.run_ai_job"):
             return self.client.post(
                 f"{self.API}personalise/", data=body, content_type="application/json"
@@ -1360,23 +1372,58 @@ class PublicPortfolioEndpointTests(TestCase):
         with mock.patch("llm_connector.tasks.run_ai_job"):
             r = self.client.post(
                 "/api/spa/public/jane/native/personalise/",
-                data={},
+                data={"captcha": solved_captcha()},
                 content_type="application/json",
             )
         self.assertEqual(AiJob.objects.get(pk=r.json()["id"]).user, jane)
 
     def test_it_rejects_an_overlong_query(self):
-        r = self.client.post(
-            f"{self.API}personalise/",
-            data={"query": "x" * 1000},
-            content_type="application/json",
-        )
+        r = self._personalise(query="x" * 1000)
         self.assertEqual(r.status_code, 400)
+        self.assertIn("query", r.json())
 
     def test_the_seventh_in_an_hour_is_throttled(self):
         """The one anonymous call that costs model-server compute: the tight scope is the valve."""
         codes = [self._personalise().status_code for _ in range(7)]
         self.assertEqual(codes, [202] * 6 + [429])
+
+    # The check in front of the AI (guide 30): every job wakes the model server.
+
+    def _refused(self, r):
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(list(r.json()), ["captcha"])
+        self.assertFalse(AiJob.objects.filter(kind="portfolio_personalise").exists())
+
+    def test_without_a_check_no_job_is_queued(self):
+        self._refused(self._personalise(captcha=None))
+
+    def test_a_bad_check_queues_no_job(self):
+        for junk in ("", "x", "A" * 5000):
+            with self.subTest(junk=junk[:8]):
+                self._refused(self._personalise(captcha=junk))
+
+    def test_a_check_queues_one_job_and_no_second(self):
+        captcha = solved_captcha()
+        self.assertEqual(self._personalise(captcha=captcha).status_code, 202)
+        again = self._personalise(captcha=captcha)
+        self.assertEqual(again.status_code, 400)
+        self.assertEqual(list(again.json()), ["captcha"])
+        self.assertEqual(AiJob.objects.filter(kind="portfolio_personalise").count(), 1)
+
+    def test_a_refused_field_leaves_the_check_unspent(self):
+        """The check comes last: an answer the serializer refuses doesn't use the payload up, so
+        the visitor's next try still has it."""
+        captcha = solved_captcha()
+        self.assertEqual(
+            self._personalise(query="x" * 1000, captcha=captcha).status_code, 400
+        )
+        self.assertEqual(self._personalise(captcha=captcha).status_code, 202)
+
+    def test_the_check_stays_out_of_the_job(self):
+        """The job's payload is the answer: the check has done its work at the door."""
+        r = self._personalise()
+        payload = AiJob.objects.get(pk=r.json()["id"]).payload
+        self.assertEqual(set(payload), {"domains", "query", "focus", "tone"})
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
@@ -1544,35 +1591,88 @@ class OwnerAccentTests(TestCase):
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
 class PortfolioPrewarmTests(TestCase):
-    """A visitor has started the questionnaire: wake the model server ahead of the rank and the
-    intro. No login, and nothing for a portfolio that isn't there."""
+    """A visitor has solved the questionnaire's check: wake the model server ahead of the rank and
+    the intro. No login, a solved check (guide 30), and nothing for a portfolio that isn't there."""
 
     URL = "/api/spa/public/{}/native/prewarm/"
 
     def setUp(self):
-        cache.clear()  # scoped-throttle history lives in the default cache
+        cache.clear()  # scoped-throttle history and the checks' records live in the default cache
+
+    def _post(self, handle="lukas", captcha=None):
+        body = {} if captcha is None else {"captcha": captcha}
+        return self.client.post(
+            self.URL.format(handle), data=body, content_type="application/json"
+        )
 
     def test_a_visitor_asks_for_it(self):
         _owner("lukas")
         with mock.patch("spa.views.request_prewarm") as prewarm:
-            r = self.client.post(self.URL.format("lukas"))
+            r = self._post(captcha=solved_captcha())
         self.assertEqual(r.status_code, 204)
         prewarm.assert_called_once()
 
+    def test_without_a_check_nothing_wakes(self):
+        _owner("lukas")
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            r = self._post()
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(list(r.json()), ["captcha"])
+        prewarm.assert_not_called()
+
+    def test_a_bad_check_wakes_nothing(self):
+        _owner("lukas")
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            for junk in ("", "x", "A" * 5000):
+                r = self._post(captcha=junk)
+                self.assertEqual(r.status_code, 400, junk[:8])
+                self.assertEqual(list(r.json()), ["captcha"], junk[:8])
+        prewarm.assert_not_called()
+
+    def test_a_check_wakes_once(self):
+        _owner("lukas")
+        captcha = solved_captcha()
+        with mock.patch("spa.views.request_prewarm") as prewarm:
+            self.assertEqual(self._post(captcha=captcha).status_code, 204)
+            self.assertEqual(self._post(captcha=captcha).status_code, 400)
+        prewarm.assert_called_once()
+
+    def test_one_tick_serves_the_prewarm_and_the_personalise(self):
+        """The questionnaire sends the same payload twice: the prewarm on the tick, the job on
+        "Show me". Each purpose takes it once."""
+        _owner("lukas")
+        captcha = solved_captcha()
+        with (
+            mock.patch("spa.views.request_prewarm"),
+            mock.patch("llm_connector.tasks.run_ai_job"),
+        ):
+            self.assertEqual(self._post(captcha=captcha).status_code, 204)
+            r = self.client.post(
+                "/api/spa/public/lukas/native/personalise/",
+                data={"query": "gigs", "captcha": captcha},
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 202)
+
     def test_no_portfolio_nothing_wakes(self):
+        """Answered like every public path on a portfolio that isn't there: the 404 comes before
+        the check, so a missing one doesn't tell handles apart."""
         _owner("hidden", published=False)
         UserProfile.objects.filter(user=_owner("squatter")).update(handle="admin")
         with mock.patch("spa.views.request_prewarm") as prewarm:
             for handle in ("nobody", "hidden", "admin"):
-                r = self.client.post(self.URL.format(handle))
-                self.assertEqual(r.status_code, 404, handle)
+                for captcha in (None, solved_captcha()):
+                    r = self._post(handle, captcha)
+                    self.assertEqual(r.status_code, 404, handle)
         prewarm.assert_not_called()
 
     def test_loading_the_questionnaire_wakes_nothing(self):
-        """Crawlers load pages. Only the POST a person's first click sends may wake the tower."""
+        """Crawlers load pages, and they can fetch a challenge too. Only a solved one wakes the
+        tower."""
         _owner("lukas")
         with mock.patch("spa.views.request_prewarm") as prewarm:
             self.client.get("/api/spa/public/lukas/native/meta/")
+            self.client.get("/api/spa/public/captcha/")
         prewarm.assert_not_called()
 
 

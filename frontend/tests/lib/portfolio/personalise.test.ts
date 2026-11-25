@@ -21,6 +21,9 @@ const job = (over: Partial<PersonaliseStatus> = {}): PersonaliseStatus => ({
 
 const input = (over: Partial<PersonaliseInput> = {}): PersonaliseInput => ({
   needed: true,
+  checked: true,
+  started: false,
+  refused: false,
   hasQuery: true,
   startFailed: false,
   job: undefined,
@@ -48,6 +51,41 @@ describe("personaliseView", () => {
   it("a start that failed (throttled, server down) is the standard page", () => {
     expect(personaliseView(input({ startFailed: true }))).toEqual({
       phase: "failed",
+    });
+  });
+
+  it("an answer without a solved check gets no AI: the stamp, a shared address", () => {
+    expect(personaliseView(input({ checked: false }))).toEqual({
+      phase: "unchecked",
+    });
+  });
+
+  it("a check the server refused reads the same: spent by an earlier load, or expired", () => {
+    expect(
+      personaliseView(input({ refused: true, startFailed: true })),
+    ).toEqual({ phase: "unchecked" });
+  });
+
+  it("a job this tab already queued carries on without the payload", () => {
+    // Back from the about page: the address restores the answer, the cache holds its job.
+    expect(
+      personaliseView(
+        input({
+          checked: false,
+          started: true,
+          job: job({ status: "done", ranked: RANKED, intro: "Hi" }),
+        }),
+      ),
+    ).toEqual({ phase: "ready", ranked: RANKED, intro: "Hi" });
+    expect(steps({ checked: false, started: true })).toEqual([
+      "rank:active",
+      "write:todo",
+    ]);
+  });
+
+  it("a lucky draw or the standard page needs no check", () => {
+    expect(personaliseView(input({ needed: false, checked: false }))).toEqual({
+      phase: "off",
     });
   });
 

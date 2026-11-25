@@ -112,6 +112,7 @@ describe("what the queries fetch", () => {
         d: ["music"],
         focus: "technical",
         tone: "formal",
+        captcha: "cGF5bG9hZA==",
       }),
     );
     const [[url, init]] = fetchMock.mock.calls;
@@ -122,18 +123,25 @@ describe("what the queries fetch", () => {
       domains: ["music"],
       focus: "technical",
       tone: "formal",
+      captcha: "cGF5bG9hZA==",
     });
     expect(started).toMatchObject({ id: "0b1c" });
     expect(typeof (started as { startedAt: unknown }).startedAt).toBe("number");
   });
 
+  const CHECKED = { captcha: "cGF5bG9hZA==" };
+
   it("a lucky draw queues nothing: it uses no AI", () => {
-    expect(personaliseStartQuery("jane", { lucky: true }).enabled).toBe(false);
-    expect(personaliseStartQuery("jane", { q: "jazz" }).enabled).toBe(true);
+    expect(
+      personaliseStartQuery("jane", { lucky: true, ...CHECKED }).enabled,
+    ).toBe(false);
+    expect(
+      personaliseStartQuery("jane", { q: "jazz", ...CHECKED }).enabled,
+    ).toBe(true);
   });
 
   it("the standard page queues nothing either: the default answer", () => {
-    const standard = { focus: "balanced", tone: "neutral" };
+    const standard = { focus: "balanced", tone: "neutral", ...CHECKED };
     expect(personaliseStartQuery("jane", standard).enabled).toBe(false);
     expect(
       personaliseStartQuery("jane", { ...standard, tone: "personal" }).enabled,
@@ -141,6 +149,26 @@ describe("what the queries fetch", () => {
     expect(
       personaliseStartQuery("jane", { ...standard, d: ["music"] }).enabled,
     ).toBe(true);
+  });
+
+  it("without a solved check nothing is queued: a reload's stamp, a shared address", () => {
+    expect(personaliseStartQuery("jane", { q: "jazz" }).enabled).toBe(false);
+    expect(
+      personaliseStartQuery("jane", { d: ["music"], focus: "balanced" })
+        .enabled,
+    ).toBe(false);
+  });
+
+  it("the payload is a ticket, not part of the answer: the cache key leaves it out", () => {
+    const answer = { d: ["music"], q: "jazz", focus: "technical" };
+    const key = personaliseStartQuery("jane", {
+      ...answer,
+      captcha: "one",
+    }).queryKey;
+    expect(key).toEqual(
+      personaliseStartQuery("jane", { ...answer, captcha: "two" }).queryKey,
+    );
+    expect(key).toEqual(personaliseStartQuery("jane", answer).queryKey);
   });
 
   it("the job is read by its id alone", async () => {
