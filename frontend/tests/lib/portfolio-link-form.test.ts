@@ -50,6 +50,8 @@ function block(over: Partial<PortfolioBlockRow>): PortfolioBlockRow {
     title: "Award",
     body: "",
     image: null,
+    media: null,
+    data: {},
     alt_text: "",
     domains: [],
     links: [],

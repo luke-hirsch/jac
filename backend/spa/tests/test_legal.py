@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core import mail
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings, tag
 from rest_framework.test import APITestCase
@@ -31,6 +33,7 @@ PDF = b"%PDF-1.5\nzeugnis"
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
+MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64
 PAGES = ("imprint", "privacy", "terms")
 
 
@@ -129,6 +132,18 @@ class LegalPagesTests(TestCase):
             "dabei löschen wir deine Schlüssel",
             "https://www.anthropic.com/legal/consumer-terms",
             "auch über dein Claude-Konto",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertContains(r, phrase)
+
+    def test_the_privacy_page_says_block_audio_and_video_are_public_files(self):
+        """Blocks can carry audio and video now (guide 26): public at their address like the
+        images (section 7), and gone with the account (section 12)."""
+        r = self.client.get("/legal/privacy/")
+        for phrase in (
+            "Bilder, Audio- und Videodateien von Portfolio-Blöcken",
+            "deine aktiven Portfolio-Blöcke mit Bildern, Audio und Video",
+            "Bilder, Audio- und Videodateien deiner Portfolio-Blöcke",
         ):
             with self.subTest(phrase=phrase):
                 self.assertContains(r, phrase)
@@ -274,6 +289,14 @@ class AccountDeletionTests(APITestCase):
         self._delete_account()
         self.assertFalse(Path(self.old_signature).exists(), self.old_signature)
 
+    def test_block_audio_and_video_no_row_points_at_are_gone_too(self):
+        name = default_storage.save(
+            f"portfolio/media/{self.alice.pk}/earlier.mp4", ContentFile(MP4)
+        )
+        path = default_storage.path(name)
+        self._delete_account()
+        self.assertFalse(Path(path).exists(), path)
+
     def test_another_users_files_survive(self):
         self._delete_account()
         self.assertTrue(Path(self.bobs_attachment.file.path).exists())
@@ -313,6 +336,20 @@ class SingleDeleteRemovesTheFileTests(APITestCase):
             r = self.client.delete(f"/api/jac/attachments/{att.pk}/")
         self.assertEqual(r.status_code, 204)
         self.assertFalse(Path(path).exists(), path)
+
+    def test_deleting_a_media_block_deletes_its_file_and_poster(self):
+        block = PortfolioBlock.objects.create(
+            user=self.alice,
+            kind="media",
+            media=SimpleUploadedFile("talk.mp4", MP4),
+            image=_png("poster.png"),
+        )
+        paths = [block.media.path, block.image.path]
+        with self.captureOnCommitCallbacks(execute=True):
+            r = self.client.delete(f"/api/spa/portfolio/manage/blocks/{block.pk}/")
+        self.assertEqual(r.status_code, 204)
+        for path in paths:
+            self.assertFalse(Path(path).exists(), path)
 
     def test_deleting_an_image_block_deletes_its_image(self):
         block = PortfolioBlock.objects.create(

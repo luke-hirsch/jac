@@ -20,6 +20,7 @@ from llm_connector.models import AiJob
 from llm_connector.serializers import AiJobSerializer
 from llm_connector.tasks import request_prewarm
 from lukehirsch.private_media import private_file_response
+from lukehirsch.storage import delete_on_commit
 from lukehirsch.throttling import UploadThrottle
 from spa.models import (
     PersonalityProfile,
@@ -186,6 +187,14 @@ class PortfolioBlockDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return PortfolioBlock.objects.filter(user=self.request.user)
+
+    def perform_update(self, serializer):
+        """A replaced file leaves the disk with the save: the media quota counts the rows'
+        files, so a replaced one mustn't stay behind. A replaced image goes the same way."""
+        before = [serializer.instance.image, serializer.instance.media]
+        block = serializer.save()
+        kept = {block.image.name, block.media.name}
+        delete_on_commit(*(f for f in before if f.name not in kept))
 
 
 class PortfolioLinkListCreateView(generics.ListCreateAPIView):

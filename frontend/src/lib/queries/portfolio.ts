@@ -5,7 +5,33 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import {
+  blockRequestBody,
+  type BlockFiles,
+  type BlockForm,
+} from "@/lib/portfolio/block-form";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
+
+/** spa.models.PortfolioBlock.Kind. What each kind holds: spa/blocks.py. */
+export type BlockKind =
+  | "text"
+  | "image"
+  | "quote"
+  | "figures"
+  | "cta"
+  | "linklist"
+  | "media";
+export type BlockFigure = { value: string; label: string };
+export type BlockLinkItem = { title: string; url: string; note?: string };
+/** A block's own fields, by kind; `{}` for text, image and media. */
+export type BlockData = {
+  by?: string; // quote
+  role?: string; // quote
+  figures?: BlockFigure[]; // figures
+  label?: string; // cta
+  url?: string; // cta
+  items?: BlockLinkItem[]; // linklist
+};
 
 /** Mirrors spa/portfolio.py build_payload — server-joined, redacted, self-contained. */
 export type PortfolioItem = {
@@ -28,9 +54,14 @@ export type PortfolioItem = {
   /** Jobs and projects: the skills on this page they used (spa.portfolio._link_skills). */
   skills?: string[];
   // block-only:
-  kind?: "text" | "image";
+  kind?: BlockKind;
   body?: string;
+  data?: BlockData;
+  /** An image block's image; a media block's poster. */
   image_url?: string | null;
+  media_url?: string | null;
+  /** "video/mp4" | "video/webm" | "audio/mpeg" | "audio/mp4" | "audio/ogg", from the stored file. */
+  media_type?: string | null;
   alt_text?: string;
   links?: PortfolioItem[];
 };
@@ -227,14 +258,16 @@ export function revokePortfolioLink(id: number) {
 const BLOCKS_URL = "/api/spa/portfolio/manage/blocks/";
 const LINKS_URL = "/api/spa/portfolio/manage/links/";
 
-/** Mirrors spa PortfolioBlockSerializer. `image` is a media URL (or "" / null); domains
- *  are pks (the block M2M — links store domain *names* instead). */
+/** Mirrors spa PortfolioBlockSerializer. `image` and `media` are media URLs (or null);
+ *  domains are pks (the block M2M — links store domain *names* instead). */
 export type PortfolioBlockRow = {
   id: number;
-  kind: "text" | "image";
+  kind: BlockKind;
   title: string;
   body: string;
   image: string | null;
+  media: string | null;
+  data: BlockData;
   alt_text: string;
   domains: number[];
   links: string[];
@@ -242,18 +275,6 @@ export type PortfolioBlockRow = {
   order: number;
   is_active: boolean;
   updated_at: string;
-};
-
-export type BlockInput = {
-  kind: "text" | "image";
-  title: string;
-  body: string;
-  alt_text: string;
-  domains: number[];
-  links: string[];
-  favourite: boolean;
-  order: number;
-  is_active: boolean;
 };
 
 export type LinkInput = {
@@ -272,42 +293,26 @@ export function usePortfolioBlocks() {
   });
 }
 
-function blockMultipart(input: BlockInput, image: File): FormData {
-  const fd = new FormData();
-  fd.set("kind", input.kind);
-  fd.set("title", input.title);
-  fd.set("body", input.body);
-  fd.set("alt_text", input.alt_text);
-  fd.set("favourite", String(input.favourite));
-  fd.set("order", String(input.order));
-  fd.set("is_active", String(input.is_active));
-  for (const d of input.domains) fd.append("domains", String(d));
-  for (const l of input.links) fd.append("links", l);
-  fd.set("image", image);
-  return fd;
-}
-
-/** Create or update a block. With a new `image` File it goes multipart (required to
- *  create an image block — the serializer rejects kind=image without a file); otherwise
- *  plain JSON, which keeps domain edits (incl. clearing) clean. Caveat: clearing all
- *  domains *in the same save as an image swap* isn't expressible over multipart — do the
- *  tag change and the image change in separate saves if you hit it. */
+/** Create or update a block: JSON, or multipart when a file goes along
+ *  (`blockRequestBody`). */
 export function useSaveBlock() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
       id,
-      input,
-      image,
+      form,
+      files,
     }: {
       id?: number;
-      input: BlockInput;
-      image?: File | null;
+      form: BlockForm;
+      files?: BlockFiles;
     }) => {
       const url = id ? `${BLOCKS_URL}${id}/` : BLOCKS_URL;
       const method = id ? "PATCH" : "POST";
-      const body = image ? blockMultipart(input, image) : JSON.stringify(input);
-      return api<PortfolioBlockRow>(url, { method, body });
+      return api<PortfolioBlockRow>(url, {
+        method,
+        body: blockRequestBody(form, files),
+      });
     },
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: ["portfolio", "blocks"] }),

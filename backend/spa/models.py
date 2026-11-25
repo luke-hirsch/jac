@@ -14,9 +14,11 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers
 
 from lukehirsch.managers import SystemScopedManager
 from lukehirsch.storage import PrivateStorage
+from spa.blocks import clean_block_data, missing_fields
 from spa.distill import StyleDistiller
 from spa.personality_questions import MAX_ANSWER_LEN
 
@@ -34,6 +36,13 @@ def _signature_path(instance, filename):
 def _block_image_path(instance, filename):
     """Namespace block images per owner; Django suffixes duplicates itself."""
     return f"portfolio/blocks/{instance.user_id}/{Path(filename).name}"
+
+
+def _block_media_path(instance, filename):
+    """Per owner, unguessable, and nothing of the upload's own name: a file called after its
+    owner would say who's in it. The serializer has already swapped the extension for the one
+    the bytes proved (spa.blocks.sniff_media)."""
+    return f"portfolio/media/{instance.user_id}/{uuid4().hex}{Path(filename).suffix.lower()}"
 
 
 class UserProfile(models.Model):
@@ -268,24 +277,34 @@ class PersonalityQuestion(models.Model):
 
 
 class PortfolioBlock(models.Model):
-    """Owner-authored portfolio content the career DB can't hold: a markdown text
-    group or a captioned image. Domain-taggable so every filtering axis that applies
-    to career entries applies to blocks too; `favourite` = featured-by-default (same
-    axis as `CvEntry.favourite`, no cap — blocks are already hand-curated). Public id
-    grammar: `block:<pk>` beside the career ids (`job:12`).
+    """Owner-authored portfolio content the career DB can't hold: markdown text, a captioned
+    image, a quote, key figures, a call to action, a link list, or an audio or video file.
+    What each kind needs is in spa/blocks.py; the kind's own fields live in `data`.
+    Domain-taggable so every filtering axis that applies to career entries applies to blocks
+    too; `favourite` = featured-by-default (same axis as `CvEntry.favourite`, no cap — blocks
+    are already hand-curated). Public id grammar: `block:<pk>` beside the career ids (`job:12`).
     """
 
     class Kind(models.TextChoices):
         text = "text", _("Text")
         image = "image", _("Image")
+        quote = "quote", _("Quote")
+        figures = "figures", _("Key figures")
+        cta = "cta", _("Call to action")
+        linklist = "linklist", _("Link list")
+        media = "media", _("Audio or video")
 
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, related_name="portfolio_blocks"
     )
-    kind = models.CharField(max_length=5, choices=Kind, default=Kind.text)
+    kind = models.CharField(max_length=8, choices=Kind, default=Kind.text)
     title = models.CharField(max_length=200, blank=True)
-    body = models.TextField(blank=True)  # markdown for text blocks; caption for images
+    # Markdown for text blocks; the quote; a caption (image, media); a pitch (cta); a lead line.
+    body = models.TextField(blank=True)
+    # The image of an image block; a media block's poster.
     image = models.ImageField(upload_to=_block_image_path, blank=True)
+    media = models.FileField(upload_to=_block_media_path, blank=True)
+    data = models.JSONField(default=dict, blank=True)
     alt_text = models.CharField(max_length=200, blank=True)
     domains = models.ManyToManyField(
         "jac.Domain", blank=True, related_name="portfolio_blocks"
@@ -305,13 +324,20 @@ class PortfolioBlock(models.Model):
 
     def clean(self):
         """A block must carry its kind's payload. DRF doesn't call full_clean — the
-        serializer repeats this rule; this keeps admin/forms honest (the CvEntry pattern,
-        jac/models.py:200)."""
+        serializer runs the same spa.blocks rules; this keeps admin/forms honest (the CvEntry
+        pattern, jac/models.py:200)."""
         super().clean()
-        if self.kind == self.Kind.image and not self.image:
-            raise ValidationError({"image": "An image block needs an image."})
-        if self.kind == self.Kind.text and not (self.body or "").strip():
-            raise ValidationError({"body": "A text block needs a body."})
+        missing = missing_fields(
+            self.kind, body=self.body, image=self.image, media=self.media
+        )
+        if missing:
+            raise ValidationError(missing)
+        try:
+            self.data = clean_block_data(self.kind, self.data)
+        except serializers.ValidationError as exc:
+            raise ValidationError(
+                {"data": [str(m) for m in exc.detail["data"]]}
+            ) from exc
 
 
 class PortfolioLink(models.Model):

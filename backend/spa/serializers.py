@@ -7,6 +7,13 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from lukehirsch.private_media import PrivateImageField
+from spa.blocks import (
+    MEDIA_HEAD_BYTES,
+    clean_block_data,
+    missing_fields,
+    sniff_media,
+    takes_file,
+)
 from spa.models import (
     PersonalityProfile,
     PersonalityQuestion,
@@ -280,11 +287,17 @@ class PersonalityQuestionSerializer(serializers.ModelSerializer):
 
 class PortfolioBlockSerializer(serializers.ModelSerializer):
     """Owner CRUD over portfolio blocks. `domains` accepts pks from the user's visible
-    taxonomy (own + system defaults). Mirrors the model's kind↔payload rule because DRF
-    never calls full_clean."""
+    taxonomy (own + system defaults). Runs the kind rules of spa.blocks because DRF never
+    calls full_clean. `data` is the model's JSONField: a JSON body sends an object, a
+    multipart one (with a file) the same object as JSON text, and DRF's JSONField reads both.
+    The media caps are class attributes, so a test patches them (the CvAttachmentSerializer
+    pattern)."""
 
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
     links = serializers.ListField(child=serializers.CharField(), required=False)
+    _MAX_MEDIA_BYTES = 50 * 1024 * 1024
+    # Per user, over every block's audio or video: a handful of talks and demos.
+    _MEDIA_QUOTA_BYTES = 250 * 1024 * 1024
 
     class Meta:
         model = PortfolioBlock
@@ -295,6 +308,8 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
             "title",
             "body",
             "image",
+            "media",
+            "data",
             "alt_text",
             "domains",
             "links",
@@ -321,16 +336,70 @@ class PortfolioBlockSerializer(serializers.ModelSerializer):
             )
         return fields
 
-    def validate(self, attrs):
-        kind = attrs.get("kind", getattr(self.instance, "kind", ""))
-        image = attrs.get("image", getattr(self.instance, "image", None))
-        body = attrs.get("body", getattr(self.instance, "body", ""))
-        if kind == PortfolioBlock.Kind.image and not image:
+    def validate_media(self, f):
+        mb = 1024 * 1024
+        if f.size > self._MAX_MEDIA_BYTES:
             raise serializers.ValidationError(
-                {"image": "An image block needs an image."}
+                f"File too large (max {self._MAX_MEDIA_BYTES // mb} MB)."
             )
-        if kind == PortfolioBlock.Kind.text and not (body or "").strip():
-            raise serializers.ValidationError({"body": "A text block needs a body."})
+        head = f.read(MEDIA_HEAD_BYTES)
+        f.seek(0)
+        ext = sniff_media(head)
+        if ext is None:
+            raise serializers.ValidationError(
+                "Only MP4 or WebM video and MP3, M4A or Ogg audio."
+            )
+        if self._media_bytes_in_use() + f.size > self._MEDIA_QUOTA_BYTES:
+            raise serializers.ValidationError(
+                f"Your audio and video would go over the {self._MEDIA_QUOTA_BYTES // mb} MB "
+                "limit. Delete one first."
+            )
+        # nginx picks the Content-Type by extension, so the stored one is what the bytes are.
+        f.name = f"media{ext}"
+        return f
+
+    def _media_bytes_in_use(self) -> int:
+        """What the user's other blocks' audio and video take on disk. A replacement doesn't
+        count the file it replaces, and a file gone from disk takes no space."""
+        rows = PortfolioBlock.objects.filter(user=self.context["request"].user).exclude(
+            media=""
+        )
+        if self.instance is not None:
+            rows = rows.exclude(pk=self.instance.pk)
+        total = 0
+        for row in rows:
+            try:
+                total += row.media.size
+            except OSError:
+                continue
+        return total
+
+    def validate(self, attrs):
+        """The kind table (spa/blocks.py). On a PATCH whatever isn't sent comes from the stored
+        block, so a PATCH that only changes `kind` is checked against the data already there."""
+        instance = self.instance
+
+        def current(name, empty):
+            return attrs[name] if name in attrs else getattr(instance, name, empty)
+
+        kind = current("kind", PortfolioBlock.Kind.text)
+        # A file the kind doesn't show is refused on upload. One already stored stays when the
+        # kind changes: switching back brings it back, and nothing is lost by a misclick.
+        for name in ("image", "media"):
+            if attrs.get(name) and not takes_file(kind, name):
+                label = PortfolioBlock.Kind(kind).label
+                raise serializers.ValidationError(
+                    {name: f"{label} blocks take no {name} file."}
+                )
+        missing = missing_fields(
+            kind,
+            body=current("body", ""),
+            image=current("image", None),
+            media=current("media", None),
+        )
+        if missing:
+            raise serializers.ValidationError(missing)
+        attrs["data"] = clean_block_data(kind, current("data", {}))
         return attrs
 
     def validate_links(self, value):
