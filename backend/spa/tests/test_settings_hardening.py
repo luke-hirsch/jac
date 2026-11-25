@@ -812,6 +812,28 @@ class DeployFilesTests(SimpleTestCase):
                     any(p.match(href) for p in served), "the apex 302s it to portfolio."
                 )
 
+    def test_the_apex_serves_the_stylesheet_the_django_pages_link(self):
+        """The landing and the legal pages link the SPA's built CSS from /assets/ (guide 31).
+        jac. and portfolio. serve it through spa.inc; the apex 302'd every such path to
+        portfolio., so the landing came up unstyled."""
+        template = (REPO_ROOT / "deploy" / "image" / "nginx.conf.template").read_text()
+        apex = next(b for n, b in _server_blocks(template).items() if n.startswith("@BASE_DOMAIN@"))
+        assets = re.search(r"location /assets/ \{([^}]*)\}", apex)
+        self.assertIsNotNone(assets, "the apex 302s /assets/ to portfolio.")
+        self.assertIn("root /app/webroot;", assets.group(1))
+
+    def test_the_build_writes_the_manifest_django_reads(self):
+        """spa/theme.py finds the hashed stylesheet in the build's manifest: Vite must write one,
+        and settings.SPA_MANIFEST must point where the image puts the build."""
+        vite = (REPO_ROOT / "frontend" / "vite.config.ts").read_text()
+        self.assertRegex(vite, r"build:\s*\{[^}]*\bmanifest:\s*true")
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+        built = re.search(r"^COPY --from=spa /spa/dist \./(\S+)$", dockerfile, re.MULTILINE)
+        self.assertEqual(
+            Path(getattr(settings, "SPA_MANIFEST", "")),
+            BACKEND_DIR / built.group(1) / ".vite" / "manifest.json",
+        )
+
     def test_a_checkout_merges_no_compose_override_on_its_own(self):
         """Compose picks up compose.override.yaml by name. The laptop's (DEBUG on, a laptop's
         database) would land on any box that clones the repo."""

@@ -5,6 +5,8 @@
   profile (PORTFOLIO_OWNER_USERNAME). Nothing personal is hardcoded in the public repo.
 - The Django-rendered pages link each other and are linked from the landing. The SPA footer is a
   component (no jsdom here), so it's checked in the guide's Verification.
+- They wear the SPA's look (guide 31): the stylesheet the build's manifest names, the site
+  owner's colour as `--brand`, and no colour of their own.
 - Art. 17: deleting an account removes the user's files (public + private, orphans included)
   and their LLM request logs, not only the rows that cascade from auth.User.
 
@@ -12,6 +14,10 @@ The deletion class carries the `files` skip group: real files under throwaway ro
 """
 
 import base64
+import json
+import re
+import shutil
+import tempfile
 from pathlib import Path
 from smtplib import SMTPException
 from unittest.mock import patch
@@ -175,6 +181,109 @@ class LegalPagesTests(TestCase):
         self.assertEqual(r.status_code, 200)
         for target in PAGES:
             self.assertContains(r, f'href="/legal/{target}/"')
+
+    def test_the_privacy_page_names_the_remembered_colour(self):
+        """The SPA remembers the last page's colour in localStorage under `brand`, so the next
+        load paints in it at once (guide 31). Section 4 lists every key the browser keeps."""
+        r = self.client.get("/legal/privacy/")
+        for key in ("<code>appearance</code>", "<code>brand</code>"):
+            with self.subTest(key=key):
+                self.assertContains(r, key)
+
+
+# A colour in a page's own markup: `#` and 3 to 8 hex digits, not an HTML entity (`&#8212;`).
+HEX_COLOUR = re.compile(r"(?<![&\w])#[0-9a-fA-F]{3,8}\b")
+DJANGO_PAGES = ("/", *(f"/legal/{page}/" for page in PAGES))
+
+
+@override_settings(
+    PORTFOLIO_OWNER_USERNAME="lukas",
+    BASE_DOMAIN="testserver",
+    LEGAL_CONTACT_EMAIL="",
+)
+class DjangoPagesWearTheThemeTests(TestCase):
+    """Guide 31: the apex landing and the legal pages render without the SPA, but they link the
+    stylesheet it is built with, so frontend/src/theme.css dresses them too. In prod that's the
+    hashed file the build's manifest names (settings.SPA_MANIFEST); without a build, Vite's
+    dev path. The colour is the site owner's, inlined on <html> as `--brand`, as the SPA sets it.
+    The pages keep their own layout but pick no colour: the indigo they hard-coded is gone."""
+
+    def setUp(self):
+        self.lukas = User.objects.create_user(username="lukas", password="pw")
+        build = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, build)
+        self.manifest = build / "manifest.json"
+        self.manifest.write_text(
+            json.dumps(
+                {
+                    "index.html": {
+                        "file": "assets/index-abc123.js",
+                        "isEntry": True,
+                        "css": ["assets/index-def456.css"],
+                    }
+                }
+            )
+        )
+
+    def _pick(self, colour):
+        UserProfile.objects.filter(user=self.lukas).update(accent_color=colour)
+
+    def test_every_page_links_the_built_stylesheet(self):
+        with override_settings(SPA_MANIFEST=self.manifest):
+            for url in DJANGO_PAGES:
+                with self.subTest(url=url):
+                    self.assertContains(
+                        self.client.get(url),
+                        '<link rel="stylesheet" href="/assets/index-def456.css" />',
+                    )
+
+    def test_without_a_build_every_page_links_vites_dev_stylesheet(self):
+        """A checkout has no webroot: `./dev` serves the pages through Vite's proxy, and Vite
+        answers a stylesheet link to the source with the compiled CSS."""
+        with override_settings(SPA_MANIFEST=self.manifest.parent / "missing.json"):
+            for url in DJANGO_PAGES:
+                with self.subTest(url=url):
+                    self.assertContains(
+                        self.client.get(url),
+                        '<link rel="stylesheet" href="/src/index.css" />',
+                    )
+
+    def test_every_page_wears_the_site_owners_colour(self):
+        """On <html>, where the SPA sets it: theme.css declares its tokens on :root, so only there
+        do they re-resolve with it. Lower case, as `brand_for` hands it out."""
+        self._pick("#8F4700")
+        for url in DJANGO_PAGES:
+            with self.subTest(url=url):
+                self.assertRegex(
+                    self.client.get(url).content.decode(),
+                    r'<html lang="\w+" style="--brand: #8f4700">',
+                )
+
+    def test_without_a_colour_the_theme_wears_its_fallback(self):
+        """No `--brand` at all, so theme.css's own line applies. An empty one would count as set."""
+        for url in DJANGO_PAGES:
+            with self.subTest(url=url):
+                self.assertNotContains(self.client.get(url), "--brand")
+
+    def test_a_portfolio_owners_colour_is_not_the_sites(self):
+        """jane's colour is her portfolio's; these pages are the operator's."""
+        jane = User.objects.create_user(username="jane", password="pw")
+        UserProfile.objects.filter(user=jane).update(
+            handle="jane", portfolio_public=True, accent_color="#1a7f56"
+        )
+        for url in DJANGO_PAGES:
+            with self.subTest(url=url):
+                self.assertNotContains(self.client.get(url), "#1a7f56")
+
+    def test_no_page_picks_a_colour_of_its_own(self):
+        """The landing and the legal pages hard-coded indigo (#4f46e5, #818cf8 in dark) and a
+        palette of greys. Their colours are the theme's tokens now; the only one in the markup
+        is the site owner's."""
+        self._pick("#8f4700")
+        for url in DJANGO_PAGES:
+            with self.subTest(url=url):
+                html = self.client.get(url).content.decode()
+                self.assertEqual(set(HEX_COLOUR.findall(html)), {"#8f4700"})
 
 
 def _png(name="x.png"):

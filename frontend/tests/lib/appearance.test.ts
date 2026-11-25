@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { runPrePaint } from "./_pre-paint";
 
 /**
  * `[fullstack]-appearance-settings`: theme + contrast resolution.
@@ -39,28 +40,50 @@ describe("resolveTheme", () => {
 });
 
 describe("themeClasses", () => {
-  it("puts nothing on <html> for the plain light default", () => {
+  /* Guide 31: theme.css's light-dark() picks by color-scheme, which without a class follows the
+     system. So light is said as plainly as dark: a light setting on a dark system must win. */
+  it("says light for the plain light default", () => {
     expect(
       m.themeClasses({ theme: "system", contrast: "normal" }, false),
-    ).toEqual([]);
+    ).toEqual(["light"]);
   });
 
-  it("adds dark alone", () => {
+  it("says light when the setting is light and the system is dark", () => {
+    expect(
+      m.themeClasses({ theme: "light", contrast: "normal" }, true),
+    ).toEqual(["light"]);
+  });
+
+  it("says dark alone", () => {
     expect(
       m.themeClasses({ theme: "dark", contrast: "normal" }, false),
     ).toEqual(["dark"]);
   });
 
-  it("adds contrast-high alone — it is not a dark-mode-only setting", () => {
+  it("adds contrast-high to light: it is not a dark-mode-only setting", () => {
     expect(m.themeClasses({ theme: "light", contrast: "high" }, true)).toEqual([
+      "light",
       "contrast-high",
     ]);
   });
 
-  it("composes both, because the CSS has a .dark.contrast-high block", () => {
+  it("composes dark and contrast-high: theme.css's high-contrast block has both", () => {
     expect(m.themeClasses({ theme: "system", contrast: "high" }, true)).toEqual(
       ["dark", "contrast-high"],
     );
+  });
+
+  it("always says exactly one of light and dark", () => {
+    for (const theme of ["system", "light", "dark"]) {
+      for (const contrast of ["normal", "high"]) {
+        for (const sys of [true, false]) {
+          const modes = m
+            .themeClasses({ theme, contrast }, sys)
+            .filter((c) => c === "light" || c === "dark");
+          expect(modes).toHaveLength(1);
+        }
+      }
+    }
   });
 
   it("only ever emits classes the provider knows how to remove again", () => {
@@ -72,6 +95,29 @@ describe("themeClasses", () => {
           }
         }
       }
+    }
+  });
+});
+
+describe("the pre-paint script in index.html", () => {
+  it("puts on <html> exactly what themeClasses would", () => {
+    for (const theme of ["system", "light", "dark"]) {
+      for (const contrast of ["normal", "high"]) {
+        for (const systemDark of [true, false]) {
+          const stored = { appearance: JSON.stringify({ theme, contrast }) };
+          expect(runPrePaint({ stored, systemDark }).classes).toEqual(
+            m.themeClasses({ theme, contrast }, systemDark),
+          );
+        }
+      }
+    }
+  });
+
+  it("follows the system on a first visit", () => {
+    for (const systemDark of [true, false]) {
+      expect(runPrePaint({ systemDark }).classes).toEqual(
+        m.themeClasses(m.DEFAULT_APPEARANCE, systemDark),
+      );
     }
   });
 });
