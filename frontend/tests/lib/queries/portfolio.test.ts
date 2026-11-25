@@ -132,12 +132,12 @@ describe("what the queries fetch", () => {
     expect(personaliseStartQuery("jane", { q: "jazz" }).enabled).toBe(true);
   });
 
-  it("the standard page queues nothing either: no pick, no question", () => {
+  it("the standard page queues nothing either: the default answer", () => {
     const standard = { focus: "balanced", tone: "neutral" };
     expect(personaliseStartQuery("jane", standard).enabled).toBe(false);
     expect(
       personaliseStartQuery("jane", { ...standard, tone: "personal" }).enabled,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       personaliseStartQuery("jane", { ...standard, d: ["music"] }).enabled,
     ).toBe(true);

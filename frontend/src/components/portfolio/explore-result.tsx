@@ -17,7 +17,8 @@ import { useNativePortfolio } from "@/lib/queries/portfolio";
  *  once; the AI's ranking and welcome come from a queued job, which can take minutes while the
  *  model server wakes. Until it's done the visitor sees a waiting card and chooses: wait, or
  *  browse the standard portfolio and switch when the note says it's ready. Nothing reorders
- *  under a reader. */
+ *  under a reader. An answer without picks or a question has no job (needsPersonalise): it is
+ *  the owner's standard page, at once. */
 export function ExploreResult({
   handle,
   search,
@@ -76,7 +77,10 @@ export function ExploreResult({
   }
 
   const personal = view.phase === "ready" && !browsing ? view : null;
-  const standard = view.phase === "failed" || (browsing && !personal);
+  const standard =
+    view.phase === "failed" ||
+    (view.phase === "off" && !search.lucky) ||
+    (browsing && !personal);
   const more = personal?.ranked
     ? reorderByRank(portfolio.data.more, personal.ranked)
     : portfolio.data.more;

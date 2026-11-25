@@ -86,6 +86,10 @@ function About() {
             <strong>Feeling lucky:</strong> the owner's highlights and a random
             handful of the rest.
           </li>
+          <li>
+            <strong>Skipping the questions:</strong> the page the owner put
+            together for everyone, without AI.
+          </li>
         </ul>
         <p>
           Every entry is in the owner's own words. “Start over” at the top

@@ -30,7 +30,12 @@ function memStorage() {
 }
 
 describe("formToSearch", () => {
-  const base = { domains: [] as string[], focus: "balanced", tone: "neutral", query: "" };
+  const base = {
+    domains: [] as string[],
+    focus: "balanced",
+    tone: "neutral",
+    query: "",
+  };
 
   it("always carries focus and tone (so the result URL is never param-empty)", () => {
     const s = formToSearch({ ...base, focus: "technical", tone: "personal" });
@@ -109,14 +114,20 @@ describe("standardSearch", () => {
 describe("needsPersonalise", () => {
   const style = { focus: "technical", tone: "personal" };
 
-  it("is false for the standard page, whatever the style", () => {
+  it("is false for the standard page", () => {
     expect(needsPersonalise(standardSearch())).toBe(false);
-    expect(needsPersonalise(style)).toBe(false);
-    expect(needsPersonalise({ ...style, d: [] })).toBe(false);
+    expect(needsPersonalise({ ...standardSearch(), d: [] })).toBe(false);
+    expect(needsPersonalise({ ...standardSearch(), q: "   " })).toBe(false);
   });
 
-  it("is false for a blank question", () => {
-    expect(needsPersonalise({ ...style, q: "   " })).toBe(false);
+  it("is true for a style other than the default: the welcome is written in it", () => {
+    expect(needsPersonalise(style)).toBe(true);
+    expect(needsPersonalise({ ...standardSearch(), tone: "formal" })).toBe(
+      true,
+    );
+    expect(needsPersonalise({ ...standardSearch(), focus: "technical" })).toBe(
+      true,
+    );
   });
 
   it("is true once a topic is picked or a question written", () => {
@@ -181,7 +192,12 @@ describe("nativeStamp (style preserved)", () => {
       }),
     ).toEqual({
       kind: "native",
-      search: { d: ["music"], lucky: false, focus: "technical", tone: "personal" },
+      search: {
+        d: ["music"],
+        lucky: false,
+        focus: "technical",
+        tone: "personal",
+      },
     });
   });
 
@@ -199,7 +215,11 @@ describe("nativeStamp (style preserved)", () => {
     );
     expect(readStamp("jane", storage)).toEqual({
       kind: "native",
-      search: { d: ["software development"], focus: "soft_skill", tone: "formal" },
+      search: {
+        d: ["software development"],
+        focus: "soft_skill",
+        tone: "formal",
+      },
     });
   });
 });

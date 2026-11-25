@@ -240,6 +240,42 @@ def default_link(owner):
     ).first()
 
 
+def standard_page(owner) -> PortfolioLink | None:
+    """The owner's standard page, or None while they've never saved one. Without a row the
+    native page shows what an empty one shows: the favourites, under the display name and bio."""
+    return owner.portfolio_links.filter(
+        kind=PortfolioLink.Kind.standard, revoked_at__isnull=True
+    ).first()
+
+
+def standard_page_for(owner) -> PortfolioLink:
+    """The owner's standard page, made empty on its first write. Empty changes nothing a visitor
+    sees, so making it early is harmless. Two first writes at once: one trips
+    `one_standard_page_per_user`, and the loser reads the winner's row."""
+    page = standard_page(owner)
+    if page is not None:
+        return page
+    try:
+        with transaction.atomic():
+            return PortfolioLink.objects.create(
+                user=owner,
+                kind=PortfolioLink.Kind.standard,
+                slug="",  # no path names it: the link endpoints and the resolve view skip it
+                content={"featured": []},
+            )
+    except IntegrityError:
+        return PortfolioLink.objects.get(
+            user=owner, kind=PortfolioLink.Kind.standard, revoked_at__isnull=True
+        )
+
+
+def standard_page_url(owner) -> str:
+    """The address that shows the standard page at once: the owner's home with the questions
+    skipped. It's what the questionnaire's "Skip the questions" sends (the SPA's
+    `formToSearch(EMPTY_FORM)`): no picks and no free text, so no AI job and no waiting card."""
+    return f"{portfolio_home_url(owner)}?focus=balanced&tone=neutral"
+
+
 # ── payload assembly ──────────────────────────────────────────────────────────
 # Hand-built allowlist dicts, deliberately not ModelSerializers: a field absent from
 # a builder cannot leak. Never add email / phone / street / zip / notes / status /
@@ -411,6 +447,15 @@ def _entries(
     return out
 
 
+def _in_scope(items: list[dict], scope) -> list[dict]:
+    """The items tagged with one of the scope's domains (Domain rows), all of them without a
+    scope. Language has no domains, so it drops out under a scope, as in `_entries`."""
+    if scope is None:
+        return items
+    names = {d.name for d in scope}
+    return [i for i in items if names.intersection(i["domains"])]
+
+
 def _blocks(
     owner,
     exclude_ids: set | None = None,
@@ -506,10 +551,13 @@ def build_payload(
     Link mode (unchanged): frozen ids, application links preview live `cv_content`. An
     unpublished owner's link shows that selection and no explore-more: handing out one link
     doesn't open the rest of the career DB.
-    Native mode: `domains` (names) scope; `focus` reorders career sections; `tone`
-    ("personal") floats blocks ahead of career entries. `lucky` = favourites + a seeded
-    random tasting menu. When a native result is EMPTY the flow degrades to the owner's
-    default link (the standard portfolio) — no dead-end. Position IS the featured signal;
+    Native mode: the title, the intro and the Highlights come from the owner's standard page
+    (`standard_page`). Its Highlights stay in the owner's order; under a `domains` (names)
+    scope only those tagged with one of them stay, and when none is left (or nothing is
+    picked) the favourites stand in. `focus` reorders career sections; `tone` ("personal")
+    floats blocks ahead of career entries. `lucky` = the Highlights (unscoped), else the
+    favourites, + a seeded random tasting menu. When a native result is EMPTY the flow
+    degrades to the owner's default link — no dead-end. Position IS the featured signal;
     the favourite flag never leaks.
     """
     if link is not None:
@@ -547,8 +595,13 @@ def build_payload(
             "more": more,
         }
 
+    standard = standard_page(owner)
+    picked = (standard.content or {}).get("featured") if standard else None
+    curated = resolve_items(owner, picked or [])
     if lucky:
-        featured = _entries(owner, favourite=True) + _blocks(owner, favourite=True)
+        featured = curated or (
+            _entries(owner, favourite=True) + _blocks(owner, favourite=True)
+        )
         exclude = {i["id"] for i in featured}
         pool = _entries(owner, exclude_ids=exclude) + _blocks(
             owner, exclude_ids=exclude
@@ -560,9 +613,12 @@ def build_payload(
         scope = matched or None  # nothing matched → the full portfolio
         order = section_order(focus)
         blocks_first = tone == "personal"
-        feat_e = _entries(owner, domains=scope, favourite=True, order=order)
-        feat_b = _blocks(owner, domains=scope, favourite=True)
-        featured = (feat_b + feat_e) if blocks_first else (feat_e + feat_b)
+        # The owner's own pick, in their order: the style axis reorders only the rest.
+        featured = _in_scope(curated, scope)
+        if not featured:
+            feat_e = _entries(owner, domains=scope, favourite=True, order=order)
+            feat_b = _blocks(owner, domains=scope, favourite=True)
+            featured = (feat_b + feat_e) if blocks_first else (feat_e + feat_b)
         exclude = {i["id"] for i in featured}
         more_e = _entries(owner, domains=scope, exclude_ids=exclude, order=order)
         more_b = _blocks(owner, domains=scope, exclude_ids=exclude)
@@ -579,8 +635,9 @@ def build_payload(
     _link_skills(featured + more)
     return {
         "kind": "native",
-        "title": "",
-        "intro": "",
+        # Blank falls back to the display name and the bio in the SPA.
+        "title": standard.title if standard else "",
+        "intro": standard.intro if standard else "",
         "owner": _owner_block(owner),
         "featured": featured,
         "more": more,

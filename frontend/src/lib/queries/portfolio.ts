@@ -10,7 +10,10 @@ import {
   type BlockFiles,
   type BlockForm,
 } from "@/lib/portfolio/block-form";
-import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
+import {
+  needsPersonalise,
+  type ExploreSearch,
+} from "@/lib/portfolio/questionnaire";
 
 /** spa.models.PortfolioBlock.Kind. What each kind holds: spa/blocks.py. */
 export type BlockKind =
@@ -171,8 +174,9 @@ export type PersonaliseStatus = {
 };
 
 /** Queue the job, once per answer: POST, but cached like a read, and never retried, because the
- *  6/h throttle makes retries actively harmful. Skipped for lucky: a reshuffle mustn't burn the
- *  budget. `startedAt` dates the give-up. */
+ *  6/h throttle makes retries actively harmful. Only for an answer with picks or a question
+ *  (needsPersonalise): the standard page and a lucky reshuffle mustn't burn the budget.
+ *  `startedAt` dates the give-up. */
 export const personaliseStartQuery = (handle: string, search: ExploreSearch) =>
   queryOptions({
     queryKey: [
@@ -200,7 +204,7 @@ export const personaliseStartQuery = (handle: string, search: ExploreSearch) =>
       );
       return { id, startedAt: Date.now() };
     },
-    enabled: !search.lucky,
+    enabled: needsPersonalise(search),
     staleTime: Infinity,
     retry: false,
   });
@@ -238,6 +242,23 @@ export type PortfolioLinkRow = {
   updated_at: string;
 };
 
+/** Mirrors spa PortfolioStandardSerializer: the owner's standard page. Before its first save
+ *  the server answers the empty page, with `updated_at` null. `url` shows it without the
+ *  questions. */
+export type StandardPageRow = {
+  title: string;
+  intro: string;
+  content: { featured: string[] };
+  url: string;
+  updated_at: string | null;
+};
+
+export type StandardPageInput = {
+  title: string;
+  intro: string;
+  content: { featured: string[] };
+};
+
 /** Idempotent get-or-create — safe to call again after a reload. */
 export function createApplicationLink(applicationId: number) {
   return api<PortfolioLinkRow>(
@@ -257,6 +278,7 @@ export function revokePortfolioLink(id: number) {
 
 const BLOCKS_URL = "/api/spa/portfolio/manage/blocks/";
 const LINKS_URL = "/api/spa/portfolio/manage/links/";
+const STANDARD_URL = "/api/spa/portfolio/manage/standard/";
 
 /** Mirrors spa PortfolioBlockSerializer. `image` and `media` are media URLs (or null);
  *  domains are pks (the block M2M — links store domain *names* instead). */
@@ -377,5 +399,27 @@ export function useRevokeLink() {
   return useMutation({
     mutationFn: (id: number) => revokePortfolioLink(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "links"] }),
+  });
+}
+
+/* the standard page */
+
+export function useStandardPage() {
+  return useQuery({
+    queryKey: ["portfolio", "standard"],
+    queryFn: () => api<StandardPageRow>(STANDARD_URL),
+  });
+}
+
+/** The first save makes the row; every later one edits it. */
+export function useSaveStandardPage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: StandardPageInput) =>
+      api<StandardPageRow>(STANDARD_URL, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: (row) => qc.setQueryData(["portfolio", "standard"], row),
   });
 }

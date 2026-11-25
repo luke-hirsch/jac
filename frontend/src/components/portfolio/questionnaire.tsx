@@ -11,6 +11,7 @@ import {
   EMPTY_FORM,
   formToSearch,
   luckySearch,
+  standardSearch,
   type ExploreSearch,
   type QuestForm,
 } from "@/lib/portfolio/questionnaire";
@@ -144,6 +145,9 @@ export function Questionnaire({
             <Button onClick={() => onDone(formToSearch(form))}>Show me</Button>
             <Button variant="outline" onClick={() => onDone(luckySearch())}>
               I feel lucky
+            </Button>
+            <Button variant="ghost" onClick={() => onDone(standardSearch())}>
+              Skip the questions
             </Button>
           </div>
         </CardContent>

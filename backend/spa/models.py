@@ -341,7 +341,7 @@ class PortfolioBlock(models.Model):
 
 
 class PortfolioLink(models.Model):
-    """A personalised public portfolio URL (`/portfolio/<slug>`).
+    """A personalised public portfolio URL (`portfolio.<domain>/<handle>/<slug>/`).
 
     `manual` links are owner-named and hand-curated; `application` links are minted by
     jac via `spa.portfolio.link_for_application` (readable-plus-entropy slug) and render
@@ -350,11 +350,17 @@ class PortfolioLink(models.Model):
     the public queryset filters `revoked_at__isnull=True` (revoked ≡ never-existed →
     identical 404s) and the partial unique constraint below allows one *active* link per
     application while keeping revoked history for regenerate.
+
+    The `standard` row is no link: it's the owner's standard page, what their home shows a
+    visitor who skips the questions (`spa.portfolio.standard_page`). One per owner, made on
+    its first save. Its slug is "", which no path can name, and the link endpoints never
+    list it.
     """
 
     class Kind(models.TextChoices):
         manual = "manual", _("Manual")
         application = "application", _("Application")
+        standard = "standard", _("Standard page")
 
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, related_name="portfolio_links"
@@ -393,6 +399,11 @@ class PortfolioLink(models.Model):
                 fields=["user", "slug"],
                 condition=Q(revoked_at__isnull=True),
                 name="unique_active_slug_per_user",
+            ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(kind="standard", revoked_at__isnull=True),
+                name="one_standard_page_per_user",
             ),
         ]
 

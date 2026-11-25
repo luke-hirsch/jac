@@ -4,7 +4,10 @@ import {
   personaliseView,
   type PersonaliseView,
 } from "@/lib/portfolio/personalise";
-import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
+import {
+  needsPersonalise,
+  type ExploreSearch,
+} from "@/lib/portfolio/questionnaire";
 import {
   PERSONALISE_GIVE_UP_MS,
   personaliseJobQuery,
@@ -42,7 +45,7 @@ export function usePersonalise(
   if (job.data?.waking && id !== undefined && wokeFor !== id) setWokeFor(id);
 
   return personaliseView({
-    lucky: Boolean(search.lucky),
+    needed: needsPersonalise(search),
     hasQuery: Boolean(search.q?.trim()),
     startFailed: start.isError,
     job: job.data,

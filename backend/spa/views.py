@@ -35,6 +35,8 @@ from spa.portfolio import (
     link_owner_for_handle,
     owner_domains,
     owner_for_handle,
+    standard_page,
+    standard_page_for,
 )
 from spa.serializers import (
     PersonalityProfileSerializer,
@@ -42,6 +44,7 @@ from spa.serializers import (
     PortfolioBlockSerializer,
     PortfolioLinkSerializer,
     PortfolioPersonaliseSerializer,
+    PortfolioStandardSerializer,
     UserProfileSerializer,
 )
 
@@ -197,6 +200,14 @@ class PortfolioBlockDetailView(generics.RetrieveUpdateDestroyAPIView):
         delete_on_commit(*(f for f in before if f.name not in kept))
 
 
+def _owner_links(user):
+    """The owner's links, manual and application. The standard page is a row of the same
+    table but no link: it has its own endpoint (`PortfolioStandardView`)."""
+    return PortfolioLink.objects.filter(user=user).exclude(
+        kind=PortfolioLink.Kind.standard
+    )
+
+
 class PortfolioLinkListCreateView(generics.ListCreateAPIView):
     """List every link — manual and application, revoked included (the owner sees
     history); POST creates a manual link (kind is read-only, application links come
@@ -208,7 +219,7 @@ class PortfolioLinkListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         return (
-            PortfolioLink.objects.filter(user=self.request.user)
+            _owner_links(self.request.user)
             .select_related("application")
             .order_by("-created_at")
         )
@@ -222,7 +233,7 @@ class PortfolioLinkDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return PortfolioLink.objects.filter(user=self.request.user)
+        return _owner_links(self.request.user)
 
 
 class PortfolioLinkRevokeView(APIView):
@@ -231,11 +242,39 @@ class PortfolioLinkRevokeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        link = get_object_or_404(PortfolioLink, pk=pk, user=request.user)
+        link = get_object_or_404(_owner_links(request.user), pk=pk)
         link.revoke()
         return Response(
             PortfolioLinkSerializer(link, context={"request": request}).data
         )
+
+
+class PortfolioStandardView(APIView):
+    """GET/PATCH the owner's standard page. GET shows an empty page while there's no row, so
+    opening the portfolio pages writes nothing; the first PATCH makes the row."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        page = standard_page(request.user) or PortfolioLink(
+            user=request.user,
+            kind=PortfolioLink.Kind.standard,
+            content={"featured": []},
+        )
+        return Response(
+            PortfolioStandardSerializer(page, context={"request": request}).data
+        )
+
+    def patch(self, request):
+        ser = PortfolioStandardSerializer(
+            standard_page_for(request.user),
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(ser.data)
 
 
 ####### Public Views
@@ -267,7 +306,7 @@ class PortfolioResolveView(PublicPortfolioAPIView):
         if owner is None:
             raise Http404
         link = get_object_or_404(
-            PortfolioLink.objects.filter(revoked_at__isnull=True, user=owner), slug=slug
+            _owner_links(owner).filter(revoked_at__isnull=True), slug=slug
         )
         if request.user.pk != link.user_id:  # type: ignore
             bump_visit(link)
