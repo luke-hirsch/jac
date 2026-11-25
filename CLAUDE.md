@@ -82,7 +82,7 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
   then what waits on the lab or the board. Each item gets an activation pass before Lukas types it
   ([[backlog-guides-need-activation]]).
 
-Guides 02, 05 to 07 and 09 to 25 (AI-coded at his request, 2026-11-20 to 11-24) are in `done/` without a Results
+Guides 02, 05 to 07 and 09 to 29 (AI-coded at his request, 2026-11-20 to 11-25) are in `done/` without a Results
 chapter (2026-11-23): Lukas tests live, in the Claude app, and what breaks comes back as new work. All are
 live: `/health/` on every host, each key's live model list, the career and applications as files ([[career-files]]),
 the style rules, and the Claude connector at `jac.<domain>/api/jac/mcp/` as the only way Claude reaches jac, its
@@ -96,8 +96,13 @@ job, `portfolio_personalise`, 6/h; the visitor waits or browses the standard pag
 the jobs and projects that used them (`item.skills` from `_link_skills`, both ends on the page; d3-force); 24: with
 certifications off, the CV describes two jobs and two projects and the page fit drops tail entries before it shortens
 them (the layout's `detailed_when_off`, resolved by `effectiveDetail`); 25: renaming a file on the attachments page saves
-(the endpoint reads JSON too). Parked in guide 04: review dismissals, draft
-entries from Claude, ChatGPT.
+(the endpoint reads JSON too); 26 to 29, the portfolio again: block kinds quote, figures, cta, linklist and media (a
+self-hosted upload, sniffed, 50 MB a file and 250 MB a user; `spa.blocks`), the standard page stored as a `standard`
+link row (`<home>?focus=balanced&tone=neutral` shows it at once: the AI job starts only for a topic, a question or a
+non-default style), the connector's `get_portfolio` / `save_portfolio_block` / `save_portfolio_page` (writes need the
+token's `may_edit_portfolio`, off by default; each answers with `before` and the `url`; `rules/portfolio.md`), and the
+Studio look on the public portfolio only (`.studio`, Space Grotesk + Inter, the owner's accent made readable on the
+dark ground). Parked in guide 04: review dismissals, draft entries from Claude, ChatGPT, click-to-load video embeds.
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
@@ -107,8 +112,8 @@ until Lukas says otherwise.
 - **Branches:** none open. `main` holds the Postgres move, prewarm, the race fix, the legal pages and what they
   promise, 2b (random handles, the consent gate and card, the audit fix, the legal sign-off), the four-host layout,
   `./dev` serving the landing on plain `localhost` as the apex does live, mail over Strato's 465 with SSL, and
-  the privacy page without menu paths, guides 02 and 05 to 25, and the favicon (the antlers, [[brand-mark]]). Live is
-  `f992da4` (2026-11-24), all of it. `jac.0006` (every skill's certification link moved into the certification) was already
+  the privacy page without menu paths, guides 02 and 05 to 29, and the favicon (the antlers, [[brand-mark]]). Live is
+  `1eb6d72` (2026-11-25), all of it. `jac.0006` (every skill's certification link moved into the certification) was already
   applied live when guide 18 deployed.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
   data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
