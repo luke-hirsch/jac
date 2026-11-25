@@ -481,13 +481,15 @@ def _owner_block(owner) -> dict:
     """Public identity card. Socials only when the profile opts in (`show_socials`,
     spa/models.py:57); never email / phone / postal address, and never the username: allauth
     makes it from the email's local part. Without a name the handle stands in, which the
-    address shows anyway."""
+    address shows anyway. `accent` is the CV colour, which the page wears (blank: the page's
+    own); a colour is no contact detail, so it doesn't wait for the opt-in."""
     profile = owner.profile
     full = f"{owner.first_name} {owner.last_name}".strip()
     block = {
         "display_name": profile.display_name or full or profile.handle,
         "bio": profile.bio,
         "avatar_url": profile.avatar.url if profile.avatar else None,
+        "accent": profile.accent_color or "",
     }
     if profile.show_socials:
         block.update(

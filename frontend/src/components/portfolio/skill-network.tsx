@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { SectionHeading, StudioButton } from "@/components/portfolio/studio";
 import { anchorId } from "@/lib/portfolio/content";
 import {
   buildNetwork,
@@ -13,6 +13,7 @@ import {
   type NetNode,
   type Placed,
 } from "@/lib/portfolio/network";
+import { scrollMotion } from "@/lib/portfolio/studio";
 import type { PortfolioItem } from "@/lib/queries/portfolio";
 import { useDebounced } from "@/lib/use-debounced";
 
@@ -163,7 +164,7 @@ function Detail({
             const el = document.getElementById(anchorId(node.id));
             if (!el) return;
             e.preventDefault();
-            el.scrollIntoView({ behavior: "smooth", block: "start" });
+            el.scrollIntoView({ behavior: scrollMotion(), block: "start" });
           }}
         >
           Jump to it ↓
@@ -203,9 +204,9 @@ export function SkillNetwork({
   const skills = net.nodes.length - anchors;
 
   return (
-    <section className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-xl font-semibold">Skills</h2>
+    <section className="space-y-5">
+      <div className="space-y-2">
+        <SectionHeading>Skills</SectionHeading>
         <p className="text-sm text-muted-foreground">
           How they connect to the jobs and projects on this page.
         </p>
@@ -214,7 +215,7 @@ export function SkillNetwork({
       {chips.length > 1 ? (
         <div className="flex flex-wrap gap-1.5" aria-label="Light up a domain">
           {[null, ...chips].map((d) => (
-            <Button
+            <StudioButton
               key={d ?? "all"}
               size="sm"
               variant={domain === d ? "default" : "outline"}
@@ -226,12 +227,17 @@ export function SkillNetwork({
               }}
             >
               {d ?? "All"}
-            </Button>
+            </StudioButton>
           ))}
         </div>
       ) : null}
 
-      <div ref={ref} className="rounded-xl border bg-card">
+      {/* The inset is padding on the measured element: ResizeObserver reports the width inside
+          it, so the layout is made for that. The detail line reaches the edges again. */}
+      <div
+        ref={ref}
+        className="rounded-[22px] border bg-studio-well px-[clamp(0.5rem,2vw,1.5rem)] pt-[clamp(0.5rem,2vw,1.5rem)]"
+      >
         {layout ? (
           <svg
             width={layout.width}
@@ -293,7 +299,10 @@ export function SkillNetwork({
         ) : (
           <div className="h-64" />
         )}
-        <div className="min-h-12 border-t px-4 py-3 text-sm" aria-live="polite">
+        <div
+          className="-mx-[clamp(0.5rem,2vw,1.5rem)] mt-[clamp(0.5rem,2vw,1.5rem)] min-h-12 border-t px-4 py-3 text-sm"
+          aria-live="polite"
+        >
           <Detail net={net} node={focused} cards={cards} />
         </div>
       </div>

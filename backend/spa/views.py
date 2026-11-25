@@ -341,7 +341,8 @@ class PortfolioNativeView(PublicPortfolioAPIView):
 
 class PortfolioMetaView(PublicPortfolioAPIView):
     """GET: the questionnaire's building blocks — the owner's REAL domain shortlist (only
-    domains with content, so no branch dead-ends) plus the style-axis vocab."""
+    domains with content, so no branch dead-ends) plus the style-axis vocab, and the owner's
+    accent, which the questionnaire wears before there's a payload to carry it."""
 
     def get(self, request, handle):
         owner = owner_for_handle(handle)
@@ -350,6 +351,7 @@ class PortfolioMetaView(PublicPortfolioAPIView):
         return Response(
             {
                 "domains": owner_domains(owner),
+                "accent": owner.profile.accent_color or "",
                 "tones": [
                     {"value": v, "label": str(label)}
                     for v, label in PersonalityProfile.Tone.choices

@@ -80,6 +80,9 @@ export type PortfolioPayload = {
     website?: string;
     linkedin_url?: string;
     github_url?: string;
+    /** The owner's CV accent, "" when none: the Studio makes it readable on its dark ground
+     *  (lib/portfolio/studio.ts studioAccent). */
+    accent?: string;
   };
   featured: PortfolioItem[];
   more: PortfolioItem[];
@@ -141,6 +144,8 @@ export function useNativePortfolio(handle: string, search: ExploreSearch) {
 
 export type NativeMeta = {
   domains: string[];
+  /** The owner's accent, for the questionnaire, which has no payload yet. */
+  accent?: string;
   tones: { value: string; label: string }[];
   focuses: { value: string; label: string }[];
 };
