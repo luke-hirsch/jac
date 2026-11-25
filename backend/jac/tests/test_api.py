@@ -76,6 +76,12 @@ from llm_connector.tasks import run_ai_job
 from llm_connector.tests._helpers import ANTHROPIC_MODELS
 from lukehirsch.test_media import own_media_roots
 from spa.models import PersonalityProfile, PortfolioBlock, PortfolioLink
+from spa.portfolio import (
+    portfolio_home_url,
+    public_portfolio_url,
+    standard_page,
+    standard_page_url,
+)
 
 from ._helpers import TEST_HIRSCHAI, make_application, make_user, queued_jobs
 
@@ -2574,6 +2580,111 @@ class SkillTokenManagementTests(APITestCase):
         self.assertEqual(self.client.get(f"{SKILL_URL}bundle/").status_code, 200)
 
 
+class SkillTokenPortfolioSwitchTests(APITestCase):
+    """Whether a token may change the public portfolio: off unless the user ticks it when the
+    token is made, switchable later in the Connectors section. Session only, and only the
+    user's own tokens."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.other = make_user("bob")
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_login(self.user)
+
+    def _create(self, **body):
+        return self.client.post(
+            f"{SKILL_URL}tokens/", {"transfer_consent": True, **body}, format="json"
+        )
+
+    def _switch(self, token, allowed):
+        return self.client.patch(
+            f"{SKILL_URL}tokens/{token.pk}/",
+            {"may_edit_portfolio": allowed},
+            format="json",
+        )
+
+    def test_a_new_token_may_not_change_the_portfolio(self):
+        r = self._create(name="laptop")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIs(r.data["may_edit_portfolio"], False)
+        self.assertFalse(AccessToken.objects.get(pk=r.data["id"]).may_edit_portfolio)
+        token, _ = mint_token(self.user)
+        self.assertFalse(token.may_edit_portfolio)
+
+    def test_the_box_ticked_when_it_is_made(self):
+        r = self._create(name="laptop", may_edit_portfolio=True)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIs(r.data["may_edit_portfolio"], True)
+        self.assertTrue(AccessToken.objects.get(pk=r.data["id"]).may_edit_portfolio)
+        self.assertTrue(r.data["key"].startswith("jac_"))
+
+    def test_the_list_shows_the_switch(self):
+        mint_token(self.user, "on", may_edit_portfolio=True)
+        mint_token(self.user, "off")
+        rows = self.client.get(f"{SKILL_URL}tokens/").data["results"]
+        self.assertEqual(
+            {t["name"]: t["may_edit_portfolio"] for t in rows},
+            {"on": True, "off": False},
+        )
+
+    def test_a_patch_switches_it_on_and_off_and_asks_nothing_again(self):
+        token, _ = mint_token(self.user, "laptop")
+        for allowed in (True, False):
+            with self.subTest(allowed=allowed):
+                r = self._switch(token, allowed)
+                self.assertEqual(r.status_code, 200, r.data)
+                self.assertIs(r.data["may_edit_portfolio"], allowed)
+                self.assertNotIn("key", r.data)
+                token.refresh_from_db()
+                self.assertIs(token.may_edit_portfolio, allowed)
+
+    def test_a_patch_changes_nothing_but_the_name_and_the_switch(self):
+        token, key = mint_token(self.user, "laptop")
+        r = self.client.patch(
+            f"{SKILL_URL}tokens/{token.pk}/",
+            {
+                "name": "phone",
+                "may_edit_portfolio": True,
+                "prefix": "jac_forged00",
+                "transfer_consent_at": "2020-01-01T00:00:00Z",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        was = token.transfer_consent_at
+        token.refresh_from_db()
+        self.assertEqual(token.name, "phone")
+        self.assertTrue(token.may_edit_portfolio)
+        self.assertEqual(token.prefix, key[:12])
+        self.assertEqual(token.transfer_consent_at, was)
+
+    def test_put_is_not_offered(self):
+        token, _ = mint_token(self.user)
+        r = self.client.put(
+            f"{SKILL_URL}tokens/{token.pk}/",
+            {"name": "x", "may_edit_portfolio": True},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 405)
+
+    def test_someone_elses_token_is_a_404(self):
+        token, _ = mint_token(self.other)
+        self.assertEqual(self._switch(token, True).status_code, 404)
+        token.refresh_from_db()
+        self.assertFalse(token.may_edit_portfolio)
+
+    def test_a_token_cannot_allow_itself(self):
+        token, key = mint_token(self.user)
+        self.client.logout()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertIn(self._switch(token, True).status_code, (401, 403))
+        token.refresh_from_db()
+        self.assertFalse(token.may_edit_portfolio)
+
+
 class SkillDownloadTests(APITestCase):
     """The skill the user uploads to Claude: one file that points at the connector. The rules
     stay on the server, so the upload never goes stale."""
@@ -2605,6 +2716,16 @@ class SkillDownloadTests(APITestCase):
             self.assertNotIn(rule, skill)
         self.assertNotIn("Quetzalcoatl", skill)  # nothing about the user
         self.assertFalse(AccessToken.objects.exists())  # and it mints no token
+
+    def test_the_skill_points_at_the_portfolio_too(self):
+        """Its description is what makes Claude reach for it in a chat with the connector off,
+        so the portfolio is named there, and the body points at the tool."""
+        z = zipfile.ZipFile(io.BytesIO(self.client.get(f"{SKILL_URL}bundle/").content))
+        skill = z.read("jac/SKILL.md").decode()
+        frontmatter = skill.split("---")[1]
+        self.assertIn("portfolio", frontmatter)
+        self.assertIn("`get_portfolio`", skill)
+        self.assertNotIn("Invent nothing", skill)  # the rules stay on the server
 
 
 class ConnectorCareerTests(_McpCase):
@@ -3531,6 +3652,600 @@ class ConnectorCareerChangeTests(_McpCase):
         )
 
 
+class _PortfolioCase(_McpCase):
+    """The public portfolio over the connector: two blocks and a few links beside the small
+    career, and a block, a link and a domain of someone else's."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.backend = Domain.objects.create(user=cls.user, name="Backend")
+        Domain.objects.create(user=cls.other, name="Secret")
+        cls.text = PortfolioBlock.objects.create(
+            user=cls.user, kind="text", title="How I work", body="Small steps.", order=1
+        )
+        cls.text.domains.add(cls.backend)
+        # A name is all a file field needs here: the connector only says whether there is one.
+        cls.photo = PortfolioBlock.objects.create(
+            user=cls.user,
+            kind="image",
+            title="On stage",
+            body="PyCon",
+            image="portfolio/blocks/1/stage.png",
+            alt_text="A talk",
+            order=2,
+        )
+        cls.link = PortfolioLink.objects.create(
+            user=cls.user,
+            slug="acme-k7m2",
+            title="For Acme",
+            content={
+                "featured": [f"job:{cls.job.pk}"],
+                "domains": ["Backend"],
+                "hide_explore": True,
+            },
+        )
+        cls.gone = PortfolioLink.objects.create(
+            user=cls.user, slug="old", revoked_at=timezone.now()
+        )
+        cls.app_link = PortfolioLink.objects.create(
+            user=cls.user,
+            slug="beispiel-x2y3",
+            kind=PortfolioLink.Kind.application,
+            application=make_application(cls.user),
+            title="Backend",
+        )
+        cls.their_block = PortfolioBlock.objects.create(
+            user=cls.other, kind="text", body="Not yours."
+        )
+        cls.their_link = PortfolioLink.objects.create(user=cls.other, slug="theirs")
+
+    def _allow(self):
+        """The token's "May change your public portfolio", switched on."""
+        self.token.may_edit_portfolio = True
+        self.token.save(update_fields=["may_edit_portfolio"])
+
+    def _blocks(self):
+        return PortfolioBlock.objects.filter(user=self.user)
+
+    @staticmethod
+    def _block_pk(answer) -> int:
+        return int(answer["id"].partition(":")[2])
+
+
+class ConnectorPortfolioReadTests(_PortfolioCase):
+    """`get_portfolio` reads on any token: the rules, what's on the portfolio, and what a plan
+    picks from, without a second call."""
+
+    def _portfolio(self):
+        data, is_error = self._call("get_portfolio")
+        self.assertFalse(is_error, data)
+        return data
+
+    def test_it_hands_over_the_rules_with_the_portfolio(self):
+        data = self._portfolio()
+        self.assertIn("Invent nothing", data["rules"])
+        self.assertFalse(data["rules"].startswith("---"))
+        portfolio = data["portfolio"]
+        self.assertEqual(portfolio["handle"], self.user.profile.handle)
+        self.assertIs(portfolio["published"], False)
+        self.assertEqual(portfolio["home_url"], portfolio_home_url(self.user))
+
+    def test_the_rules_cover_the_yes_the_undo_the_remove_and_the_uploads(self):
+        text = self._portfolio()["rules"]
+        for phrase in (
+            "noindex",
+            "yes",
+            "`before`",
+            "`is_active: false`",
+            "`revoke: true`",
+            "uploaded in jac",
+            "`url`",
+            "Nothing private",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_it_says_whether_this_token_may_edit(self):
+        self.assertIs(self._portfolio()["portfolio"]["may_edit"], False)
+        self._allow()
+        self.assertIs(self._portfolio()["portfolio"]["may_edit"], True)
+
+    def test_blocks_carry_their_ids_kinds_and_domains_by_name(self):
+        blocks = {b["id"]: b for b in self._portfolio()["portfolio"]["blocks"]}
+        self.assertEqual(
+            set(blocks), {f"block:{self.text.pk}", f"block:{self.photo.pk}"}
+        )
+        text = blocks[f"block:{self.text.pk}"]
+        self.assertEqual(text["kind"], "text")
+        self.assertEqual(text["body"], "Small steps.")
+        self.assertEqual(text["domains"], ["Backend"])
+        self.assertEqual(text["data"], {})
+        for key in ("title", "alt_text", "links", "favourite", "order", "is_active"):
+            with self.subTest(key=key):
+                self.assertIn(key, text)
+        photo = blocks[f"block:{self.photo.pk}"]
+        self.assertIs(photo["has_image"], True)
+        self.assertIs(photo["has_media"], False)
+        self.assertIs(text["has_image"], False)
+        # Whether there is a file, never where it is.
+        self.assertNotIn("stage.png", json.dumps(photo))
+
+    def test_manual_links_with_the_revoked_ones_marked(self):
+        links = {row["id"]: row for row in self._portfolio()["portfolio"]["links"]}
+        # The application's link belongs to it, and someone else's isn't listed.
+        self.assertEqual(set(links), {self.link.pk, self.gone.pk})
+        acme = links[self.link.pk]
+        self.assertEqual(acme["slug"], "acme-k7m2")
+        self.assertEqual(acme["title"], "For Acme")
+        self.assertEqual(acme["featured"], [f"job:{self.job.pk}"])
+        self.assertEqual(acme["domains"], ["Backend"])
+        self.assertIs(acme["hide_explore"], True)
+        self.assertIs(acme["is_default"], False)
+        self.assertIs(acme["revoked"], False)
+        self.assertEqual(acme["url"], public_portfolio_url(self.link))
+        self.assertIs(links[self.gone.pk]["revoked"], True)
+
+    def test_the_standard_page_before_anything_wrote_it(self):
+        standard = self._portfolio()["portfolio"]["standard"]
+        self.assertEqual(
+            (standard["title"], standard["intro"], standard["featured"]), ("", "", [])
+        )
+        self.assertEqual(standard["url"], standard_page_url(self.user))
+        self.assertIsNone(standard_page(self.user), "reading makes no row")
+
+    def test_the_standard_page_once_written(self):
+        page = PortfolioLink.objects.create(
+            user=self.user,
+            kind=PortfolioLink.Kind.standard,
+            slug="",
+            title="Hi",
+            intro="Backend dev.",
+            content={"featured": [f"block:{self.text.pk}"]},
+        )
+        portfolio = self._portfolio()["portfolio"]
+        standard = portfolio["standard"]
+        self.assertEqual(
+            (standard["title"], standard["intro"], standard["featured"]),
+            ("Hi", "Backend dev.", [f"block:{self.text.pk}"]),
+        )
+        self.assertNotIn(page.pk, [row["id"] for row in portfolio["links"]])
+
+    def test_the_career_and_the_domains_to_pick_from(self):
+        portfolio = self._portfolio()["portfolio"]
+        index = {e["id"]: e for e in portfolio["career"]}
+        self.assertEqual(
+            set(index),
+            {
+                f"job:{self.job.pk}",
+                f"skill:{self.python.pk}",
+                f"education:{self.master.pk}",
+            },
+        )
+        self.assertEqual(
+            index[f"job:{self.job.pk}"],
+            {"id": f"job:{self.job.pk}", "title": "Backend Dev", "subtitle": "Acme"},
+        )
+        self.assertIn("Backend", portfolio["domains"])
+        self.assertNotIn("Secret", portfolio["domains"])
+
+
+class ConnectorPortfolioSwitchTests(_PortfolioCase):
+    """A token changes the portfolio only when the user allowed it for that token: every
+    visitor sees what a write changes."""
+
+    def _writes(self):
+        return (
+            ("save_portfolio_block", {"kind": "text", "body": "New."}),
+            (
+                "save_portfolio_block",
+                {"id": f"block:{self.text.pk}", "title": "Changed"},
+            ),
+            ("save_portfolio_page", {"standard": True, "title": "Changed"}),
+            ("save_portfolio_page", {"slug": "new-page", "title": "New"}),
+            ("save_portfolio_page", {"id": self.link.pk, "revoke": True}),
+        )
+
+    def test_every_write_is_refused_without_the_switch(self):
+        for name, args in self._writes():
+            with self.subTest(tool=name, args=args):
+                data, is_error = self._call(name, args)
+                self.assertTrue(is_error, data)
+                # It says how the user allows it.
+                self.assertIn("May change your public portfolio", data["detail"])
+        self.text.refresh_from_db()
+        self.link.refresh_from_db()
+        self.assertEqual(self.text.title, "How I work")
+        self.assertIsNone(self.link.revoked_at)
+        self.assertEqual(self._blocks().count(), 2)
+        self.assertIsNone(standard_page(self.user))
+        self.assertFalse(PortfolioLink.objects.filter(slug="new-page").exists())
+
+    def test_the_switch_is_the_one_tokens(self):
+        _, allowed = mint_token(self.user, "allowed", may_edit_portfolio=True)
+        _, is_error = self._call("save_portfolio_block", {"kind": "text", "body": "a"})
+        self.assertTrue(is_error)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {allowed}")
+        data, is_error = self._call(
+            "save_portfolio_block", {"kind": "text", "body": "b"}
+        )
+        self.assertFalse(is_error, data)
+        self.assertEqual(self._blocks().count(), 3)
+
+
+class ConnectorPortfolioBlockTests(_PortfolioCase):
+    """`save_portfolio_block`: through the blocks' own serializer, live at once, answering with
+    what it replaced."""
+
+    def setUp(self):
+        super().setUp()
+        self._allow()
+
+    def _save(self, **args):
+        return self._call("save_portfolio_block", args)
+
+    def test_it_creates_each_kind_claude_may_make(self):
+        kinds = {
+            "text": {"body": "## How I work\n\nSmall steps."},
+            "quote": {
+                "body": "She shipped it.",
+                "data": {"by": "Jane Roe", "role": "CTO"},
+            },
+            "figures": {
+                "data": {
+                    "figures": [
+                        {"value": "40 %", "label": "faster builds"},
+                        {"value": "3", "label": "teams"},
+                    ]
+                }
+            },
+            "cta": {
+                "body": "Let's talk.",
+                "data": {"label": "Write me", "url": "mailto:me@example.org"},
+            },
+            "linklist": {
+                "data": {
+                    "items": [{"title": "My talk", "url": "https://example.org/talk"}]
+                }
+            },
+        }
+        for kind, fields in kinds.items():
+            with self.subTest(kind=kind):
+                data, is_error = self._save(kind=kind, **fields)
+                self.assertFalse(is_error, data)
+                block = self._blocks().get(pk=self._block_pk(data))
+                self.assertEqual((block.kind, data["kind"]), (kind, kind))
+                self.assertEqual(block.data, data["data"])
+                self.assertIsNone(data["before"])
+                self.assertEqual(data["url"], standard_page_url(self.user))
+        quote = self._blocks().get(kind="quote")
+        self.assertEqual(quote.data, {"by": "Jane Roe", "role": "CTO"})
+
+    def test_a_change_sends_only_what_changes_and_answers_with_before(self):
+        data, is_error = self._save(id=f"block:{self.text.pk}", title="How we work")
+        self.assertFalse(is_error, data)
+        self.text.refresh_from_db()
+        self.assertEqual(self.text.title, "How we work")
+        self.assertEqual(self.text.body, "Small steps.")
+        self.assertEqual(data["title"], "How we work")
+        self.assertEqual(data["before"]["title"], "How I work")
+        self.assertEqual(data["before"]["domains"], ["Backend"])
+        self.assertEqual(data["url"], standard_page_url(self.user))
+
+    def test_saving_before_back_is_the_undo(self):
+        first, is_error = self._save(
+            id=f"block:{self.text.pk}",
+            title="New",
+            body="Other.",
+            domains=[],
+            favourite=True,
+        )
+        self.assertFalse(is_error, first)
+        undone, is_error = self._save(**first["before"])
+        self.assertFalse(is_error, undone)
+        self.text.refresh_from_db()
+        self.assertEqual(
+            (self.text.title, self.text.body, self.text.favourite),
+            ("How I work", "Small steps.", False),
+        )
+        self.assertEqual([d.name for d in self.text.domains.all()], ["Backend"])
+
+    def test_the_id_takes_its_number_alone_too(self):
+        data, is_error = self._save(id=self.text.pk, title="Plain")
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["id"], f"block:{self.text.pk}")
+
+    def test_domains_go_by_name_in_any_case(self):
+        data, is_error = self._save(kind="text", body="New.", domains=["backend"])
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["domains"], ["Backend"])
+        block = self._blocks().get(pk=self._block_pk(data))
+        self.assertEqual(list(block.domains.all()), [self.backend])
+
+    def test_an_unknown_domain_names_the_known_ones(self):
+        for names in (["Backend", "Gardening"], ["Secret"]):
+            with self.subTest(names=names):
+                data, is_error = self._save(kind="text", body="New.", domains=names)
+                self.assertTrue(is_error, data)
+                self.assertIn(names[-1], json.dumps(data["errors"]["domains"]))
+                self.assertIn("Backend", data["known_domains"])
+                self.assertNotIn("Secret", data["known_domains"])
+        self.assertEqual(self._blocks().count(), 2)
+
+    def test_images_and_media_are_uploaded_in_jac(self):
+        for args in (
+            {"kind": "image", "title": "Me"},
+            {"kind": "media", "title": "My talk"},
+            {"kind": "text", "body": "x", "image": "https://example.org/me.png"},
+            {"id": f"block:{self.photo.pk}", "media": "https://example.org/a.mp4"},
+        ):
+            with self.subTest(args=args):
+                data, is_error = self._save(**args)
+                self.assertTrue(is_error, data)
+                self.assertIn("uploaded in jac", data["detail"])
+        self.assertEqual(self._blocks().count(), 2)
+        self.photo.refresh_from_db()
+        self.assertFalse(self.photo.media)
+
+    def test_an_image_block_keeps_its_file(self):
+        data, is_error = self._save(
+            id=f"block:{self.photo.pk}", body="PyCon 2026", alt_text="Me, talking"
+        )
+        self.assertFalse(is_error, data)
+        self.photo.refresh_from_db()
+        self.assertEqual(self.photo.image.name, "portfolio/blocks/1/stage.png")
+        self.assertEqual(
+            (self.photo.body, self.photo.alt_text), ("PyCon 2026", "Me, talking")
+        )
+        self.assertIs(data["has_image"], True)
+
+    def test_a_block_keeps_its_kind(self):
+        data, is_error = self._save(
+            id=f"block:{self.text.pk}", kind="quote", data={"by": "Jane"}
+        )
+        self.assertTrue(is_error, data)
+        self.text.refresh_from_db()
+        self.assertEqual(self.text.kind, "text")
+
+    def test_a_new_block_needs_a_kind(self):
+        data, is_error = self._save(body="No kind.")
+        self.assertTrue(is_error, data)
+        self.assertIn("kind", data["detail"])
+        self.assertEqual(self._blocks().count(), 2)
+
+    def test_what_the_kind_refuses_comes_back_by_field(self):
+        for args in (
+            {"kind": "figures", "data": {"figures": [{"value": "1", "label": "one"}]}},
+            {"kind": "quote", "body": "Said it."},
+            {"kind": "cta", "data": {"label": "Go", "url": "javascript:alert(1)"}},
+            {"kind": "text", "body": ""},
+        ):
+            with self.subTest(args=args):
+                data, is_error = self._save(**args)
+                self.assertTrue(is_error, data)
+                self.assertIn("errors", data)
+        self.assertEqual(self._blocks().count(), 2)
+
+    def test_switching_off_is_how_a_block_goes(self):
+        data, is_error = self._save(id=f"block:{self.text.pk}", is_active=False)
+        self.assertFalse(is_error, data)
+        self.assertIs(data["is_active"], False)
+        self.assertIs(data["before"]["is_active"], True)
+        self.assertTrue(
+            PortfolioBlock.objects.filter(pk=self.text.pk, is_active=False).exists()
+        )
+
+    def test_someone_elses_block_reads_like_a_missing_one(self):
+        missing = PortfolioBlock.objects.order_by("-pk").first().pk + 100
+        theirs, is_error = self._save(
+            id=f"block:{self.their_block.pk}", body="Mine now."
+        )
+        self.assertTrue(is_error)
+        gone, _ = self._save(id=f"block:{missing}", body="Mine now.")
+        self.assertEqual(
+            theirs["detail"].replace(str(self.their_block.pk), "N"),
+            gone["detail"].replace(str(missing), "N"),
+        )
+        self.their_block.refresh_from_db()
+        self.assertEqual(self.their_block.body, "Not yours.")
+
+    def test_links_take_only_ids_get_portfolio_shows(self):
+        for ids in (
+            [f"skill:{self.theirs.pk}"],
+            [f"block:{self.their_block.pk}"],
+            ["job:999999"],
+        ):
+            with self.subTest(ids=ids):
+                data, is_error = self._save(id=f"block:{self.text.pk}", links=ids)
+                self.assertTrue(is_error, data)
+                self.assertIn("links", data["errors"])
+        ids = [f"job:{self.job.pk}", f"block:{self.photo.pk}"]
+        data, is_error = self._save(id=f"block:{self.text.pk}", links=ids)
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["links"], ids)
+
+
+class ConnectorPortfolioPageTests(_PortfolioCase):
+    """`save_portfolio_page`: the standard page, or a link the user made. Never an
+    application's link, and nothing deleted: a link is revoked."""
+
+    def setUp(self):
+        super().setUp()
+        self._allow()
+
+    def _save(self, **args):
+        return self._call("save_portfolio_page", args)
+
+    def test_the_first_write_of_the_standard_page_makes_it(self):
+        featured = [f"block:{self.text.pk}", f"job:{self.job.pk}"]
+        data, is_error = self._save(standard=True, title="Hi", featured=featured)
+        self.assertFalse(is_error, data)
+        self.assertIs(data["standard"], True)
+        self.assertIsNone(data["before"])
+        self.assertEqual(data["featured"], featured)
+        self.assertEqual(data["url"], standard_page_url(self.user))
+        page = standard_page(self.user)
+        self.assertEqual(page.title, "Hi")
+        self.assertEqual(page.content, {"featured": featured})
+
+    def test_a_standard_page_change_answers_with_before_which_undoes_it(self):
+        self._save(standard=True, title="Hi", intro="First.")
+        data, is_error = self._save(standard=True, intro="Second.")
+        self.assertFalse(is_error, data)
+        self.assertEqual((data["title"], data["intro"]), ("Hi", "Second."))
+        before = data["before"]
+        self.assertEqual(before["intro"], "First.")
+        undone, is_error = self._save(
+            standard=True,
+            title=before["title"],
+            intro=before["intro"],
+            featured=before["featured"],
+        )
+        self.assertFalse(is_error, undone)
+        self.assertEqual(standard_page(self.user).intro, "First.")
+        self.assertEqual(
+            PortfolioLink.objects.filter(
+                user=self.user, kind=PortfolioLink.Kind.standard
+            ).count(),
+            1,
+        )
+
+    def test_a_refused_first_write_leaves_no_standard_page(self):
+        data, is_error = self._save(standard=True, title="x" * 201)
+        self.assertTrue(is_error, data)
+        self.assertIn("title", data["errors"])
+        self.assertIsNone(standard_page(self.user))
+
+    def test_the_standard_page_takes_no_link_fields(self):
+        for extra in (
+            {"slug": "home"},
+            {"domains": ["Backend"]},
+            {"revoke": True},
+            {"id": self.link.pk},
+        ):
+            with self.subTest(extra=extra):
+                data, is_error = self._save(standard=True, title="Hi", **extra)
+                self.assertTrue(is_error, data)
+        self.assertIsNone(standard_page(self.user))
+
+    def test_highlights_take_only_ids_get_portfolio_shows(self):
+        data, is_error = self._save(standard=True, featured=[f"skill:{self.theirs.pk}"])
+        self.assertTrue(is_error, data)
+        self.assertIn("featured", data["errors"])
+        data, is_error = self._save(
+            id=self.link.pk, featured=[f"block:{self.their_block.pk}"]
+        )
+        self.assertTrue(is_error, data)
+        self.assertIn("featured", data["errors"])
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.content["featured"], [f"job:{self.job.pk}"])
+
+    def test_a_link_is_created_with_a_slug(self):
+        data, is_error = self._save(
+            slug="Globex-K3P9",
+            title="For Globex",
+            intro="Hello.",
+            featured=[f"job:{self.job.pk}"],
+            domains=["backend"],
+        )
+        self.assertFalse(is_error, data)
+        link = PortfolioLink.objects.get(pk=data["id"])
+        self.assertEqual(
+            (link.user, link.kind, link.slug),
+            (self.user, PortfolioLink.Kind.manual, "globex-k3p9"),
+        )
+        self.assertEqual(
+            link.content,
+            {
+                "featured": [f"job:{self.job.pk}"],
+                "domains": ["Backend"],
+                "hide_explore": False,
+            },
+        )
+        self.assertIsNone(data["before"])
+        self.assertEqual(data["url"], public_portfolio_url(link))
+
+    def test_a_new_link_needs_a_free_slug(self):
+        for args in ({"title": "No address"}, {"slug": "acme-k7m2", "title": "Again"}):
+            with self.subTest(args=args):
+                data, is_error = self._save(**args)
+                self.assertTrue(is_error, data)
+                self.assertIn("slug", data["errors"])
+
+    def test_a_link_change_keeps_what_isnt_sent_and_before_undoes_it(self):
+        data, is_error = self._save(id=self.link.pk, featured=[f"block:{self.text.pk}"])
+        self.assertFalse(is_error, data)
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.title, "For Acme")
+        self.assertEqual(
+            self.link.content,
+            {
+                "featured": [f"block:{self.text.pk}"],
+                "domains": ["Backend"],
+                "hide_explore": True,
+            },
+        )
+        self.assertEqual(data["before"]["featured"], [f"job:{self.job.pk}"])
+        undone, is_error = self._save(**data["before"])
+        self.assertFalse(is_error, undone)
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.content["featured"], [f"job:{self.job.pk}"])
+
+    def test_revoking_takes_a_link_down_for_good(self):
+        data, is_error = self._save(id=self.link.pk, revoke=True)
+        self.assertFalse(is_error, data)
+        self.assertIs(data["revoked"], True)
+        self.assertIs(data["before"]["revoked"], False)
+        self.link.refresh_from_db()
+        self.assertIsNotNone(self.link.revoked_at)  # kept, as history
+        data, is_error = self._save(id=self.link.pk, title="Back?")
+        self.assertTrue(is_error, data)
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.title, "For Acme")
+
+    def test_revoke_takes_the_id_alone(self):
+        for args in (
+            {"revoke": True},
+            {"id": self.link.pk, "revoke": True, "title": "x"},
+        ):
+            with self.subTest(args=args):
+                data, is_error = self._save(**args)
+                self.assertTrue(is_error, data)
+        self.link.refresh_from_db()
+        self.assertIsNone(self.link.revoked_at)
+
+    def test_an_applications_link_is_refused(self):
+        for args in (
+            {"id": self.app_link.pk, "title": "Mine"},
+            {"id": self.app_link.pk, "revoke": True},
+        ):
+            with self.subTest(args=args):
+                data, is_error = self._save(**args)
+                self.assertTrue(is_error, data)
+                self.assertIn("application", data["detail"])
+        self.app_link.refresh_from_db()
+        self.assertEqual(self.app_link.title, "Backend")
+        self.assertIsNone(self.app_link.revoked_at)
+
+    def test_someone_elses_link_reads_like_a_missing_one(self):
+        missing = PortfolioLink.objects.order_by("-pk").first().pk + 100
+        theirs, is_error = self._save(id=self.their_link.pk, title="Mine now")
+        self.assertTrue(is_error)
+        gone, _ = self._save(id=missing, title="Mine now")
+        self.assertEqual(
+            theirs["detail"].replace(str(self.their_link.pk), "N"),
+            gone["detail"].replace(str(missing), "N"),
+        )
+        self.their_link.refresh_from_db()
+        self.assertEqual(self.their_link.title, "")
+
+    def test_the_standard_page_is_no_link(self):
+        self._save(standard=True, title="Hi")
+        data, is_error = self._save(id=standard_page(self.user).pk, title="Changed")
+        self.assertTrue(is_error, data)
+        self.assertEqual(standard_page(self.user).title, "Hi")
+
+
 class McpProtocolTests(_McpCase):
     def test_initialize_echoes_a_known_version_and_names_the_tools_capability(self):
         r = self._rpc(
@@ -3619,6 +4334,9 @@ class McpProtocolTests(_McpCase):
                 "apply_career_changes",
                 "list_career_changes",
                 "undo_career_changes",
+                "get_portfolio",
+                "save_portfolio_block",
+                "save_portfolio_page",
             },
         )
         for tool in tools:
@@ -3637,8 +4355,13 @@ class McpProtocolTests(_McpCase):
                 "show_application",
                 "application_preview",
                 "list_career_changes",
+                "get_portfolio",
             },
         )
+
+    def test_the_instructions_name_the_portfolio(self):
+        r = self._rpc("initialize", {"protocolVersion": "2025-06-18"})
+        self.assertIn("`get_portfolio`", r.json()["result"]["instructions"])
 
     def test_an_unknown_tool_is_invalid_params(self):
         body = self._rpc("tools/call", {"name": "drop_tables"}).json()

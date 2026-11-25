@@ -6,6 +6,9 @@ never calls a model here. What comes back is an ordinary application, shaped exa
 generated one (`cv_content` per section, the letter body + `letter_meta`), so the editor, the fit
 and the export treat it the same. The highest completed degree is added if Claude left it out:
 the same domain rule the pipeline force-keeps (`CV.highest_degree_id`).
+
+The public portfolio travels in the shapes `save_portfolio_block` and `save_portfolio_page` take
+(the end of this file), so a write's `before` saved back is its undo.
 """
 
 from __future__ import annotations
@@ -38,7 +41,20 @@ from jac.models import (
 )
 from jac.register import register_leaks, resolve_address_form
 from jac.style import style_checks, style_rules, style_warnings
-from spa.models import PersonalityProfile, PersonalityQuestion
+from spa.models import (
+    PersonalityProfile,
+    PersonalityQuestion,
+    PortfolioBlock,
+    PortfolioLink,
+)
+from spa.portfolio import (
+    _entries,
+    is_published,
+    portfolio_home_url,
+    public_portfolio_url,
+    standard_page,
+    standard_page_url,
+)
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
 # What `get_career` and `get_career_review` hand over: the rules live here, on the server.
@@ -460,3 +476,93 @@ def skill_bundle() -> bytes:
             if path.is_file() and "__pycache__" not in path.parts:
                 z.write(path, f"{SKILL_NAME}/{path.relative_to(SKILL_DIR)}")
     return buf.getvalue()
+
+
+# --- the public portfolio -----------------------------------------------------------------------
+
+
+def portfolio_block(block: PortfolioBlock) -> dict:
+    """A block in the shape `save_portfolio_block` takes, so saving `before` back undoes a write.
+    Its files stay in jac: only whether it has one."""
+    return {
+        "id": f"block:{block.pk}",
+        "kind": block.kind,
+        "title": block.title,
+        "body": block.body,
+        "data": block.data or {},
+        "alt_text": block.alt_text,
+        "domains": sorted(d.name for d in block.domains.all()),
+        "links": list(block.links or []),
+        "favourite": block.favourite,
+        "order": block.order,
+        "is_active": block.is_active,
+        "has_image": bool(block.image),
+        "has_media": bool(block.media),
+        "updated_at": block.updated_at.isoformat(timespec="seconds"),
+    }
+
+
+def portfolio_link(link: PortfolioLink) -> dict:
+    """A link in the shape `save_portfolio_page` takes. Its `content` goes by its keys, so a
+    write that sends only `featured` keeps the link's scope."""
+    content = link.content or {}
+    return {
+        "id": link.pk,
+        "slug": link.slug,
+        "title": link.title,
+        "intro": link.intro,
+        "featured": list(content.get("featured") or []),
+        "domains": list(content.get("domains") or []),
+        "hide_explore": bool(content.get("hide_explore")),
+        "is_default": link.is_default,
+        "revoked": link.revoked_at is not None,
+        "url": public_portfolio_url(link),
+        "updated_at": link.updated_at.isoformat(timespec="seconds"),
+    }
+
+
+def portfolio_standard(user, page: PortfolioLink | None) -> dict:
+    """The standard page, also before anything wrote it: empty, so the favourites fill it."""
+    content = (page.content if page else None) or {}
+    return {
+        "title": page.title if page else "",
+        "intro": page.intro if page else "",
+        "featured": list(content.get("featured") or []),
+        "url": standard_page_url(user),
+        "updated_at": page.updated_at.isoformat(timespec="seconds") if page else None,
+    }
+
+
+def career_index(user) -> list[dict]:
+    """Every career entry by its id, with the title and subtitle the public page shows: what
+    Highlights and a block's links pick from. The full text is `get_career`'s. The portfolio's
+    own builder, reused (private by name only), so the titles are the page's."""
+    return [
+        {"id": item["id"], "title": item["title"], "subtitle": item["subtitle"]}
+        for item in _entries(user)
+    ]
+
+
+def portfolio_payload(user, *, may_edit: bool) -> dict:
+    """What `get_portfolio` shows: all a plan for the public portfolio needs, and whether this
+    token may carry it out. Application links aren't in it: they belong to their application."""
+    links = (
+        PortfolioLink.objects.filter(user=user, kind=PortfolioLink.Kind.manual)
+        .select_related("user__profile")
+        .order_by("-created_at")
+    )
+    blocks = PortfolioBlock.objects.filter(user=user).prefetch_related("domains")
+    return {
+        "may_edit": may_edit,
+        "handle": user.profile.handle,
+        "published": is_published(user),
+        "home_url": portfolio_home_url(user),
+        "standard": portfolio_standard(user, standard_page(user)),
+        "links": [portfolio_link(link) for link in links],
+        "blocks": [portfolio_block(block) for block in blocks],
+        # The names a block or a link may be tagged with: jac's defaults and the user's own.
+        "domains": sorted(
+            set(Domain.objects.for_user(user).values_list("name", flat=True))
+        ),
+        "career": career_index(user),
+    }

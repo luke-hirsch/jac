@@ -11,12 +11,20 @@ export type AccessTokenRow = {
   name: string;
   prefix: string; // the key's first 12 characters, to tell tokens apart
   transfer_consent_at: string; // the "I agree" it was created on
+  may_edit_portfolio: boolean; // Claude may change the public portfolio with it
   created_at: string;
   last_used_at: string | null;
 };
 
 /** What minting a token answers: the row plus its key, in this one response only. */
 export type NewAccessToken = AccessTokenRow & { key: string };
+
+/** What the create form sends. */
+export type NewTokenInput = {
+  name: string;
+  transferConsent: boolean; // only after the user agreed: the server refuses a token without it
+  mayEditPortfolio: boolean; // off unless the box is ticked
+};
 
 /** A field's value in a career change. A string[] is a relation list: skill ids ("skill:12")
  *  or domain names. */
@@ -211,6 +219,34 @@ export async function fetchSkillBundle(): Promise<Blob> {
   return res.blob();
 }
 
+/** POST a new token. The portfolio switch goes with it, so a token never has a moment with
+ *  more than the user ticked. */
+export function createAccessToken({
+  name,
+  transferConsent,
+  mayEditPortfolio,
+}: NewTokenInput): Promise<NewAccessToken> {
+  return api<NewAccessToken>(`${SKILL_API}tokens/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      transfer_consent: transferConsent,
+      may_edit_portfolio: mayEditPortfolio,
+    }),
+  });
+}
+
+/** PATCH one token's portfolio switch. It asks for no consent: the token was made on one. */
+export function setTokenPortfolio(
+  id: number,
+  allowed: boolean,
+): Promise<AccessTokenRow> {
+  return api<AccessTokenRow>(`${SKILL_API}tokens/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ may_edit_portfolio: allowed }),
+  });
+}
+
 export function useAccessTokens() {
   return useQuery({
     queryKey: KEY,
@@ -223,19 +259,18 @@ export function useAccessTokens() {
 export function useCreateAccessToken() {
   const qc = useQueryClient();
   return useMutation({
-    /** Only after the user agreed to the transfer: the server refuses a token without it. */
-    mutationFn: ({
-      name,
-      transferConsent,
-    }: {
-      name: string;
-      transferConsent: boolean;
-    }) =>
-      api<NewAccessToken>(`${SKILL_API}tokens/`, {
-        method: "POST",
-        body: JSON.stringify({ name, transfer_consent: transferConsent }),
-      }),
+    mutationFn: createAccessToken,
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+export function useSetTokenPortfolio() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, allowed }: { id: number; allowed: boolean }) =>
+      setTokenPortfolio(id, allowed),
+    // On a failure too: the switch shows what the server holds.
+    onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 }
 

@@ -4,10 +4,12 @@ import {
   changeRows,
   connectorHeader,
   connectorUrl,
+  createAccessToken,
   errorLines,
   expandedBatch,
   fetchSkillBundle,
   keepCareerChange,
+  setTokenPortfolio,
   staleLines,
   validationLines,
   type CareerChange,
@@ -16,8 +18,8 @@ import {
 /**
  * The connector's SPA side (Account → LLM, under Connectors): its URL and header, DRF errors
  * as readable lines, a career change as display rows, the 409's stale entries by name, which
- * batch the log starts expanded, keeping a batch, and the bundle's raw fetch (`fetch` +
- * `document.cookie` stubbed per test, node env).
+ * batch the log starts expanded, keeping a batch, a token's portfolio switch, and the bundle's
+ * raw fetch (`fetch` + `document.cookie` stubbed per test, node env).
  */
 
 afterEach(() => vi.unstubAllGlobals());
@@ -393,5 +395,72 @@ describe("fetchSkillBundle", () => {
     const error = await fetchSkillBundle().catch((e: unknown) => e);
     expect((error as ApiError).status).toBe(502);
     expect((error as ApiError).data).toBeNull();
+  });
+});
+
+describe("a token's portfolio switch", () => {
+  function answer(status: number, body: unknown) {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: {
+        get: (h: string) => (h === "content-type" ? "application/json" : null),
+      },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+
+  function stub(status: number, body: unknown = {}) {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      answer(status, body),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("document", { cookie: "csrftoken=tok123" });
+    return fetchMock;
+  }
+
+  it("goes with a new token: ticked or not, the server hears it", async () => {
+    const fetchMock = stub(201, { id: 3, key: "jac_x" });
+    for (const mayEditPortfolio of [false, true]) {
+      await createAccessToken({
+        name: "Claude",
+        transferConsent: true,
+        mayEditPortfolio,
+      });
+    }
+    const bodies = fetchMock.mock.calls.map(([url, init]) => {
+      expect(url).toBe("/api/jac/skill/tokens/");
+      expect(init.method).toBe("POST");
+      return JSON.parse(init.body as string);
+    });
+    expect(bodies).toEqual([
+      { name: "Claude", transfer_consent: true, may_edit_portfolio: false },
+      { name: "Claude", transfer_consent: true, may_edit_portfolio: true },
+    ]);
+  });
+
+  it("PATCHes one token's switch, with the CSRF token and nothing else", async () => {
+    const fetchMock = stub(200, { id: 7, may_edit_portfolio: true });
+
+    await expect(setTokenPortfolio(7, true)).resolves.toEqual({
+      id: 7,
+      may_edit_portfolio: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/jac/skill/tokens/7/");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({
+      may_edit_portfolio: true,
+    });
+    expect(new Headers(init.headers).get("X-CSRFToken")).toBe("tok123");
+  });
+
+  it("throws what the server refused", async () => {
+    stub(404, { detail: "No AccessToken matches the given query." });
+
+    const error = await setTokenPortfolio(7, false).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
   });
 });
