@@ -129,6 +129,13 @@ http {
             proxy_read_timeout 300s;
             # The chat's stream is also marked X-Accel-Buffering: no.
         }
+        # A block's audio or video: the serializer caps the file at 50 MB, and a poster image (5 MB)
+        # can ride along in the same request.
+        location /api/spa/portfolio/manage/blocks/ {
+            proxy_pass http://app;
+            include /app/proxy_params;
+            client_max_body_size 56m;
+        }
 
         # Nothing lives here. Without it the SPA's try_files answers 200 text/html, and Claude's
         # connector reads /.well-known/oauth-* as an OAuth setup it can't parse (jac/mcp.py: the

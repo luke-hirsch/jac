@@ -60,6 +60,7 @@ def purge_user_uploads(user_id: int) -> None:
         (PrivateStorage(), f"cv_attachments/{user_id}"),
         (PrivateStorage(), f"signatures/{user_id}"),
         (default_storage, f"portfolio/blocks/{user_id}"),
+        (default_storage, f"portfolio/media/{user_id}"),
     ):
         shutil.rmtree(storage.path(prefix), ignore_errors=True)
     avatars = Path(default_storage.path("avatars"))

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { BlockEditor } from "@/components/portfolio/block-editor";
+import { blockSummary, kindLabel } from "@/lib/portfolio/block-form";
 import {
   usePortfolioBlocks,
   useDeleteBlock,
@@ -37,7 +38,8 @@ function BlocksTab() {
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (blocks.data ?? []).length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No blocks yet — add text groups or images the career DB can't hold.
+          No blocks yet. Add what the career DB can't hold: text, a quote, key
+          figures, a call to action, links, an image, audio or video.
         </p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -45,13 +47,13 @@ function BlocksTab() {
             <Card key={b.id}>
               <CardContent className="p-4 space-y-2">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary">{b.kind}</Badge>
+                  <Badge variant="secondary">{kindLabel(b.kind)}</Badge>
                   {b.favourite ? <Badge>featured</Badge> : null}
                   {!b.is_active ? (
                     <Badge variant="outline">hidden</Badge>
                   ) : null}
                   <span className="font-medium truncate">
-                    {b.title || `${b.kind} block`}
+                    {b.title || `${kindLabel(b.kind)} block`}
                   </span>
                 </div>
                 {b.kind === "image" && b.image ? (
@@ -62,7 +64,7 @@ function BlocksTab() {
                   />
                 ) : (
                   <p className="text-sm text-muted-foreground line-clamp-3">
-                    {b.body}
+                    {blockSummary(b)}
                   </p>
                 )}
                 <div className="flex justify-end gap-1">

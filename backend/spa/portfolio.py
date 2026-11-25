@@ -21,6 +21,7 @@ from jac.llm_prompts import Embed  # no spa import in jac.llm_prompts — cycle-
 from llm_connector import complete
 from llm_connector.conf import HIRSCHAI_PROVIDER
 from llm_connector.executor import Executor
+from spa.blocks import block_text, media_type, public_block_data, takes_file
 from spa.models import PortfolioBlock, PortfolioLink, PortfolioVisit, UserProfile
 
 logger = logging.getLogger(__name__)
@@ -321,14 +322,21 @@ def _career_item(type_name: str, obj) -> dict:
 
 
 def _block_item(block: PortfolioBlock, *, nest: bool = True) -> dict:
+    # A file left over from an earlier kind stays stored, not shown (PortfolioBlockSerializer).
+    media = block.media if takes_file(block.kind, "media") else None
     item = {
         "id": f"block:{block.pk}",
         "type": "block",
         "kind": block.kind,
         "title": block.title,
         "body": block.body,
-        # MEDIA_URL-relative; dev Vite proxies /media, prod nginx must serve it.
+        # The kind's own fields, by the kind's rules: only the keys spa.blocks allows.
+        "data": public_block_data(block.kind, block.data),
+        # MEDIA_URL-relative; dev Vite proxies /media, prod nginx must serve it. A media
+        # block's image is its poster.
         "image_url": block.image.url if block.image else None,
+        "media_url": media.url if media else None,
+        "media_type": media_type(media),
         "alt_text": block.alt_text,
         "domains": sorted(d.name for d in block.domains.all()),
         "links": [],
@@ -618,9 +626,7 @@ def rank_for_query(owner, query: str, domains: list[str]) -> list[dict]:
     blocks = PortfolioBlock.objects.filter(user=owner, is_active=True)
     if matched:
         blocks = blocks.filter(domains__in=matched).distinct()
-    docs += [
-        {"id": f"block:{b.pk}", "text": f"{b.title}\n{b.body}".strip()} for b in blocks
-    ]
+    docs += [{"id": f"block:{b.pk}", "text": block_text(b)} for b in blocks]
     docs = docs[:MAX_RANK_DOCS]
     if not docs:
         return []

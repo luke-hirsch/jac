@@ -63,5 +63,5 @@ def _delete_profile_files(sender, instance, **kwargs):
 
 
 @receiver(post_delete, sender=PortfolioBlock)
-def _delete_block_image(sender, instance, **kwargs):
-    delete_on_commit(instance.image)
+def _delete_block_files(sender, instance, **kwargs):
+    delete_on_commit(instance.image, instance.media)

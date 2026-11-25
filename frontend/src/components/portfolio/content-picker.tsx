@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { useCvEntries, useFullList, type DomainRow } from "@/lib/queries/jac";
 import { usePortfolioBlocks, useSaveBlock } from "@/lib/queries/portfolio";
+import { formFromBlock } from "@/lib/portfolio/block-form";
 import {
   candidates,
   filterCandidates,
@@ -125,15 +126,10 @@ export function ContentPicker({
     // false so the public renderer skips it until it's finished in the Blocks tab.
     saveBlock.mutate(
       {
-        input: {
-          kind: "text",
+        form: {
+          ...formFromBlock(null),
           title: "Untitled block",
           body: "(placeholder — edit later)",
-          alt_text: "",
-          domains: [],
-          links: [],
-          favourite: false,
-          order: 0,
           is_active: false,
         },
       },
