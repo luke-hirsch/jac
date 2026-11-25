@@ -9,7 +9,7 @@ export type StepState = "done" | "active" | "todo";
 export type Step = { key: StepKey; state: StepState };
 
 export type PersonaliseView =
-  /** Nothing to wait for: a lucky draw uses no AI. */
+  /** Nothing to wait for: the standard page and a lucky draw use no AI. */
   | { phase: "off" }
   | { phase: "working"; steps: Step[]; waking: boolean }
   /** What arrived. `ranked` null: the page keeps its usual order. */
@@ -18,7 +18,8 @@ export type PersonaliseView =
   | { phase: "failed" };
 
 export type PersonaliseInput = {
-  lucky: boolean;
+  /** needsPersonalise(search): a topic, a question, or a style other than the default. */
+  needed: boolean;
   /** The visitor wrote what they're looking for, so there's a ranking to wait for. */
   hasQuery: boolean;
   /** The job couldn't be queued: throttled, or the server is down. */
@@ -31,7 +32,7 @@ export type PersonaliseInput = {
 };
 
 export function personaliseView(i: PersonaliseInput): PersonaliseView {
-  if (i.lucky) return { phase: "off" };
+  if (!i.needed) return { phase: "off" };
   if (i.startFailed) return { phase: "failed" };
   const job = i.job;
 

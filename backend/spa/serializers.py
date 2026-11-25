@@ -504,6 +504,39 @@ class PortfolioLinkSerializer(serializers.ModelSerializer):
         }
 
 
+class PortfolioStandardSerializer(serializers.ModelSerializer):
+    """The owner's standard page: the title, the intro and the Highlights their home shows a
+    visitor who skips the questions. A link without the link parts: no slug, no explore
+    scope, no default flag. `url` is the address that shows it at once. The connector writes
+    through this too, so every rule a write must keep lives here."""
+
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PortfolioLink
+        fields = ("title", "intro", "content", "url", "updated_at")
+        read_only_fields = ("updated_at",)
+
+    def get_url(self, obj) -> str:
+        from spa.portfolio import standard_page_url
+
+        return standard_page_url(obj.user)
+
+    def validate_content(self, value):
+        """`featured` only, in the link grammar, deduped in order. Anything else is dropped:
+        the standard page has no explore scope of its own (a visitor's picks are the scope)."""
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Expected an object.")
+        featured = value.get("featured", [])
+        if not isinstance(featured, list) or not all(
+            isinstance(i, str) and FEATURED_ID_RE.match(i) for i in featured
+        ):
+            raise serializers.ValidationError(
+                "featured must be a list of '<type>:<pk>' ids."
+            )
+        return {"featured": list(dict.fromkeys(featured))}
+
+
 class PortfolioPersonaliseSerializer(serializers.Serializer):
     """Input for a questionnaire visit's AI job: a one-tweet query (the questionnaire's own
     MAX_ANSWER_LEN), at most 10 domain names, and the style axis (the personality tone/focus

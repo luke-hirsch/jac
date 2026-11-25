@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { LinkEditor } from "@/components/portfolio/link-editor";
+import { StandardPageCard } from "@/components/portfolio/standard-page-card";
 import {
   usePortfolioLinks,
   useDeleteLink,
@@ -41,6 +42,8 @@ function LinksTab() {
 
   return (
     <div className="space-y-4">
+      <StandardPageCard />
+
       <div className="flex justify-end">
         <Button onClick={openNew}>New manual link</Button>
       </div>

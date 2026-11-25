@@ -53,11 +53,25 @@ class PortfolioBlockAdmin(admin.ModelAdmin):
 
 @admin.register(PortfolioLink)
 class PortfolioLinkAdmin(admin.ModelAdmin):
-    list_display = ["slug", "kind", "user", "application", "revoked_at", "created_at"]
+    # __str__ first: a standard page's slug is blank, and a blank first column can't be clicked.
+    list_display = [
+        "__str__",
+        "kind",
+        "user",
+        "application",
+        "revoked_at",
+        "created_at",
+    ]
     list_filter = ["kind"]
     search_fields = ["slug", "title"]
     raw_id_fields = ["user", "application"]
     readonly_fields = ["created_at", "updated_at"]
+
+    def get_readonly_fields(self, request, obj=None):
+        # A standard page has no slug, and a required field left blank would refuse every save.
+        if obj is not None and obj.kind == PortfolioLink.Kind.standard:
+            return [*self.readonly_fields, "slug", "kind"]
+        return self.readonly_fields
 
 
 @admin.register(PortfolioVisit)

@@ -17,6 +17,7 @@ from spa.views import (
     PortfolioPersonaliseView,
     PortfolioPrewarmView,
     PortfolioResolveView,
+    PortfolioStandardView,
     SignatureFileView,
     UserProfileView,
 )
@@ -65,6 +66,11 @@ urlpatterns = [
         "portfolio/manage/links/<int:pk>/revoke/",
         PortfolioLinkRevokeView.as_view(),
         name="portfolio-link-revoke",
+    ),
+    path(
+        "portfolio/manage/standard/",
+        PortfolioStandardView.as_view(),
+        name="portfolio-standard",
     ),
     # Public: anonymous, the owner named by the handle in the path (never the Host header).
     path(

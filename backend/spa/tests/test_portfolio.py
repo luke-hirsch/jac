@@ -1,9 +1,10 @@
 """Portfolio tests — the flow-rework + handle-resolution acceptance set.
 
 Covers the flow-rework payload/intro logic (`owner_domains` / `section_order` /
-`default_link` / `PortfolioIntroWriter` / `build_intro`) and the multi-user portfolios
+`default_link` / `PortfolioIntroWriter` / `build_intro`), the multi-user portfolios
 (`owner_for_handle` / `random_handle` / per-user slugs / `application_slug` /
-`public_portfolio_url`). Every portfolio lives at `portfolio.<domain>/<handle>/`, so the public
+`public_portfolio_url`) and the stored standard page (`standard_page` and what the native page
+reads from it). Every portfolio lives at `portfolio.<domain>/<handle>/`, so the public
 endpoints carry the handle in their path (`/api/spa/public/<handle>/…`), and the Host header
 plays no part.
 
@@ -36,6 +37,7 @@ from jac.models import (
 from llm_connector.base import WAITING_STAGE, LLMTransportError
 from llm_connector.models import AiJob
 from llm_connector.tasks import run_ai_job
+from spa import portfolio  # the standard-page helpers by module: guide 27 adds them
 from spa.models import PortfolioBlock, PortfolioLink, UserProfile
 from spa.portfolio import (
     SLUG_SUFFIX_ALPHABET,
@@ -44,6 +46,7 @@ from spa.portfolio import (
     application_slug,
     build_intro,
     build_payload,
+    carry_domain_rename,
     default_link,
     freeze_link,
     link_for_application,
@@ -93,6 +96,14 @@ def _application(owner, company="Acme", role="Backend Engineer"):
     )
     JobPostAddress.objects.create(job_posting=posting, company=company)
     return JobApplication.objects.create(user=owner, posting=posting)
+
+
+def _standard(owner, **fields):
+    """A standard page straight in the ORM, as `standard_page_for` makes it. The kind as a plain
+    string, so a test that only needs the row runs before the kind exists."""
+    fields.setdefault("slug", "")
+    fields.setdefault("content", {"featured": []})
+    return PortfolioLink.objects.create(user=owner, kind="standard", **fields)
 
 
 # ── handle-based owner resolution (multi-user portfolios) ───────────────────────
@@ -631,6 +642,195 @@ class PublicPortfolioUrlTests(TestCase):
         self.assertEqual(row["url"], "http://portfolio.example.test/jane/acme/")
 
 
+@override_settings(PORTFOLIO_URL="http://portfolio.example.test")
+class StandardPageManageTests(TestCase):
+    """`/api/spa/portfolio/manage/standard/`: the owner reads and writes their standard page.
+    Reading writes nothing; the first write makes the row."""
+
+    URL = "/api/spa/portfolio/manage/standard/"
+    ADDRESS = "http://portfolio.example.test/jane/?focus=balanced&tone=neutral"
+
+    def setUp(self):
+        self.jane = _owner("jane")
+        self.client.force_login(self.jane)
+
+    def _patch(self, **body):
+        return self.client.patch(
+            self.URL, data=json.dumps(body), content_type="application/json"
+        )
+
+    def _row(self):
+        return PortfolioLink.objects.get(user=self.jane, kind="standard")
+
+    def test_reading_it_before_any_write_shows_an_empty_page_and_writes_nothing(self):
+        r = self.client.get(self.URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            r.json(),
+            {
+                "title": "",
+                "intro": "",
+                "content": {"featured": []},
+                "url": self.ADDRESS,
+                "updated_at": None,
+            },
+        )
+        self.assertFalse(PortfolioLink.objects.filter(user=self.jane).exists())
+
+    def test_the_first_write_makes_it(self):
+        job = _job(self.jane)
+        r = self._patch(
+            title="Hi, I'm Jane",
+            intro="I build things.",
+            content={"featured": [f"job:{job.pk}"]},
+        )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["title"], "Hi, I'm Jane")
+        self.assertEqual(body["content"], {"featured": [f"job:{job.pk}"]})
+        self.assertEqual(body["url"], self.ADDRESS)
+        self.assertIsNotNone(body["updated_at"])
+        row = self._row()
+        self.assertEqual(
+            (row.slug, row.title, row.intro, row.is_default),
+            ("", "Hi, I'm Jane", "I build things.", False),
+        )
+
+    def test_a_second_write_edits_the_same_row(self):
+        self._patch(title="One")
+        self._patch(intro="Two")
+        row = self._row()
+        self.assertEqual((row.title, row.intro), ("One", "Two"))
+        self.assertEqual(PortfolioLink.objects.filter(user=self.jane).count(), 1)
+
+    def test_a_write_without_content_keeps_the_highlights(self):
+        self._patch(content={"featured": ["job:1"]})
+        self._patch(title="New title")
+        self.assertEqual(self._row().content, {"featured": ["job:1"]})
+
+    def test_the_highlights_are_link_ids_deduped_in_order(self):
+        r = self._patch(content={"featured": ["job:2", "block:1", "job:2"]})
+        self.assertEqual(r.json()["content"], {"featured": ["job:2", "block:1"]})
+
+    def test_a_malformed_highlight_is_refused(self):
+        for content in (
+            {"featured": ["not-an-id"]},
+            {"featured": "job:1"},
+            {"featured": [1]},
+            ["job:1"],
+        ):
+            with self.subTest(content=content):
+                r = self._patch(content=content)
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("content", r.json())
+
+    def test_the_link_parts_dont_get_in(self):
+        """No explore scope, no slug, no default flag: the visitor's picks are the scope, and the
+        standard page is no link."""
+        r = self._patch(
+            slug="mine",
+            is_default=True,
+            kind="manual",
+            content={"featured": [], "domains": ["music"], "hide_explore": True},
+        )
+        self.assertEqual(r.status_code, 200)
+        row = self._row()
+        self.assertEqual((row.slug, row.is_default), ("", False))
+        self.assertEqual(row.content, {"featured": []})
+
+    def test_each_owner_has_their_own(self):
+        self._patch(title="Jane's")
+        self.client.force_login(_owner("kim"))
+        body = self.client.get(self.URL).json()
+        self.assertEqual(body["title"], "")
+        self.assertEqual(
+            body["url"],
+            "http://portfolio.example.test/kim/?focus=balanced&tone=neutral",
+        )
+
+    def test_it_needs_a_login(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(self.URL).status_code, 403)
+        self.assertEqual(self._patch(title="x").status_code, 403)
+
+
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
+class StandardPageIsNoLinkTests(TestCase):
+    """The standard page shares the links' table, not their endpoints: the owner's link list,
+    a link's own endpoints and the public resolve view never see it."""
+
+    LINKS = "/api/spa/portfolio/manage/links/"
+
+    def setUp(self):
+        cache.clear()
+        self.jane = _owner("jane")
+        self.client.force_login(self.jane)
+        self.page = _standard(self.jane, title="Standard")
+        self.link = PortfolioLink.objects.create(
+            user=self.jane, kind=PortfolioLink.Kind.manual, slug="for-acme"
+        )
+
+    def test_the_link_list_leaves_it_out(self):
+        rows = self.client.get(self.LINKS).json()
+        self.assertEqual([r["id"] for r in rows], [self.link.pk])
+
+    def test_a_links_endpoints_dont_reach_it(self):
+        url = f"{self.LINKS}{self.page.pk}/"
+        self.assertEqual(self.client.get(url).status_code, 404)
+        patch = {"data": json.dumps({"slug": "x"}), "content_type": "application/json"}
+        self.assertEqual(self.client.patch(url, **patch).status_code, 404)
+        self.assertEqual(self.client.post(f"{url}revoke/").status_code, 404)
+        self.assertEqual(self.client.delete(url).status_code, 404)
+        self.page.refresh_from_db()
+        self.assertEqual((self.page.slug, self.page.revoked_at), ("", None))
+
+    def test_no_public_path_resolves_it(self):
+        """Its slug is blank, which no path can name. Even a row that somehow holds one stays
+        out of the resolve view."""
+        PortfolioLink.objects.filter(pk=self.page.pk).update(slug="standard")
+        r = self.client.get("/api/spa/public/jane/links/standard/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_a_domain_rename_leaves_it_alone(self):
+        """`carry_domain_rename` walks the links that keep a scope by name. The standard page
+        keeps none (its content is `featured` only), so a rename passes it by. A guard: green
+        before this guide too."""
+        self.link.content = {"featured": [], "domains": ["music"]}
+        self.link.save()
+        before = self.page.updated_at
+        carry_domain_rename(self.jane, "music", "sound")
+        self.link.refresh_from_db()
+        self.page.refresh_from_db()
+        self.assertEqual(self.link.content["domains"], ["sound"])
+        self.assertEqual(self.page.content, {"featured": []})
+        self.assertEqual(self.page.updated_at, before)
+
+    def test_the_admin_saves_it_without_a_slug(self):
+        """A blank slug is right for a standard page, and the admin's change form must not
+        demand one."""
+        admin = User.objects.create_superuser(username="root", password="pw")
+        self.client.force_login(admin)
+        url = f"/admin/spa/portfoliolink/{self.page.pk}/change/"
+        r = self.client.get(url)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, 'name="slug"')
+        r = self.client.post(
+            url,
+            {
+                "user": self.jane.pk,
+                "title": "Edited in the admin",
+                "intro": "",
+                "content": json.dumps({"featured": []}),
+                "application": "",
+                "revoked_at_0": "",
+                "revoked_at_1": "",
+            },
+        )
+        self.assertEqual(r.status_code, 302)
+        self.page.refresh_from_db()
+        self.assertEqual((self.page.title, self.page.slug), ("Edited in the admin", ""))
+
+
 # ── dynamic domains + style axis ────────────────────────────────────────────────
 
 
@@ -693,7 +893,7 @@ class BuildPayloadStyleTests(TestCase):
         )
 
 
-# ── default / standard-portfolio fallback ───────────────────────────────────────
+# ── the standard page and the default-link fallback ─────────────────────────────
 
 
 class DefaultFallbackTests(TestCase):
@@ -742,6 +942,209 @@ class IsDefaultExclusivityTests(TestCase):
         self.assertEqual(default_link(owner), a)
         a.revoke()
         self.assertIsNone(default_link(owner))
+
+
+class StandardPageRowTests(TestCase):
+    """One standard page per owner, made on its first write, at an address that shows it
+    without the questions."""
+
+    def test_there_is_none_until_the_first_write(self):
+        owner = _owner()
+        self.assertIsNone(portfolio.standard_page(owner))
+
+    def test_the_first_write_makes_an_empty_one(self):
+        owner = _owner()
+        page = portfolio.standard_page_for(owner)
+        self.assertEqual(page.kind, PortfolioLink.Kind.standard)
+        self.assertEqual(
+            (page.slug, page.title, page.intro, page.content, page.is_default),
+            ("", "", "", {"featured": []}, False),
+        )
+        self.assertEqual(portfolio.standard_page(owner), page)
+
+    def test_the_next_write_finds_the_same_row(self):
+        owner = _owner()
+        first = portfolio.standard_page_for(owner)
+        self.assertEqual(portfolio.standard_page_for(owner), first)
+        self.assertEqual(PortfolioLink.objects.filter(user=owner).count(), 1)
+
+    def test_one_active_standard_page_per_owner(self):
+        owner = _owner()
+        _standard(owner)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            _standard(owner, slug="other")  # past the slug constraint: this one's own
+
+    def test_a_revoked_one_makes_room(self):
+        owner = _owner()
+        old = _standard(owner)
+        old.revoke()
+        self.assertIsNone(portfolio.standard_page(owner))
+        self.assertNotEqual(portfolio.standard_page_for(owner), old)
+
+    def test_two_first_writes_at_once_end_on_one_row(self):
+        """The loser of the race trips `one_standard_page_per_user` and reads the winner's row."""
+        owner = _owner()
+        winner = _standard(owner)
+        with mock.patch("spa.portfolio.standard_page", return_value=None):
+            self.assertEqual(portfolio.standard_page_for(owner), winner)
+
+    @override_settings(PORTFOLIO_URL="http://portfolio.example.test")
+    def test_its_address_is_the_home_with_the_questions_skipped(self):
+        """What the questionnaire's "Skip the questions" sends: the SPA's
+        `formToSearch(EMPTY_FORM)`, no picks and no free text, so no AI job."""
+        self.assertEqual(
+            portfolio.standard_page_url(_owner("jane")),
+            "http://portfolio.example.test/jane/?focus=balanced&tone=neutral",
+        )
+
+
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
+class StandardPagePayloadTests(TestCase):
+    """The native page reads the standard page: its title, its intro, its Highlights in the
+    owner's order. Without one, or with an empty list, the favourites stand in, as before."""
+
+    def setUp(self):
+        cache.clear()
+        self.owner = _owner()
+        self.music = Domain.objects.create(user=self.owner, name="music")
+        self.code = Domain.objects.create(user=self.owner, name="code")
+        self.fav = _job(self.owner, favourite=True, title="Favourite job")
+        self.gig = _job(self.owner, title="Gig")
+        self.gig.domains.add(self.music)
+        self.python = _skill(self.owner, name="Python")
+        self.python.domains.add(self.code)
+        self.block = PortfolioBlock.objects.create(
+            user=self.owner, kind="text", title="About me", body="hi"
+        )
+        self.block.domains.add(self.music)
+        self.fav_id, self.gig_id = f"job:{self.fav.pk}", f"job:{self.gig.pk}"
+        self.python_id = f"skill:{self.python.pk}"
+        self.block_id = f"block:{self.block.pk}"
+
+    def _ids(self, items):
+        return [i["id"] for i in items]
+
+    def _pick(self, *ids, **fields):
+        return _standard(self.owner, content={"featured": list(ids)}, **fields)
+
+    def test_without_one_nothing_changes(self):
+        """An owner who never writes one: no title or intro (the SPA shows the display name and
+        the bio), and the favourites are the Highlights. A guard: green before this guide too."""
+        payload = build_payload(self.owner)
+        self.assertEqual((payload["title"], payload["intro"]), ("", ""))
+        self.assertEqual(self._ids(payload["featured"]), [self.fav_id])
+
+    def test_an_empty_one_changes_nothing_either(self):
+        _standard(self.owner)
+        payload = build_payload(self.owner)
+        self.assertEqual((payload["title"], payload["intro"]), ("", ""))
+        self.assertEqual(self._ids(payload["featured"]), [self.fav_id])
+
+    def test_its_title_and_intro_head_the_page(self):
+        _standard(self.owner, title="Hi, I'm Lukas", intro="I build things.")
+        payload = build_payload(self.owner)
+        self.assertEqual(payload["title"], "Hi, I'm Lukas")
+        self.assertEqual(payload["intro"], "I build things.")
+        self.assertEqual(payload["kind"], "native")
+
+    def test_its_highlights_replace_the_favourites_in_its_order(self):
+        self._pick(self.block_id, self.python_id, self.gig_id)
+        payload = build_payload(self.owner)
+        self.assertEqual(
+            self._ids(payload["featured"]), [self.block_id, self.python_id, self.gig_id]
+        )
+        more = self._ids(payload["more"])
+        self.assertIn(self.fav_id, more)  # still on the page, below them
+        for picked in (self.block_id, self.python_id, self.gig_id):
+            self.assertNotIn(picked, more)
+
+    def test_the_style_axis_leaves_its_order_alone(self):
+        expected = [self.gig_id, self.python_id, self.block_id]
+        self._pick(*expected)
+        for style in ({"focus": "technical"}, {"tone": "personal"}):
+            with self.subTest(**style):
+                payload = build_payload(self.owner, **style)
+                self.assertEqual(self._ids(payload["featured"]), expected)
+
+    def test_under_a_scope_only_its_highlights_in_that_scope_stay(self):
+        self._pick(self.python_id, self.gig_id, self.block_id)
+        payload = build_payload(self.owner, domains=["music"])
+        self.assertEqual(self._ids(payload["featured"]), [self.gig_id, self.block_id])
+        self.assertNotIn(self.python_id, self._ids(payload["more"]))
+
+    def test_a_scope_none_of_them_meet_falls_back_to_its_favourites(self):
+        self._pick(self.gig_id)
+        fav_code = _skill(self.owner, favourite=True, name="Rust")
+        fav_code.domains.add(self.code)
+        payload = build_payload(self.owner, domains=["code"])
+        self.assertEqual(self._ids(payload["featured"]), [f"skill:{fav_code.pk}"])
+
+    def test_a_language_drops_out_under_a_scope(self):
+        """A language has no domains, so a scope never meets it: as in the rest of the page."""
+        from jac.models import Language
+
+        german = Language.objects.create(user=self.owner, name="German")
+        self._pick(f"language:{german.pk}", self.gig_id)
+        scoped = build_payload(self.owner, domains=["music"])
+        self.assertEqual(self._ids(scoped["featured"]), [self.gig_id])
+        whole = build_payload(self.owner)
+        self.assertEqual(
+            self._ids(whole["featured"]), [f"language:{german.pk}", self.gig_id]
+        )
+
+    def test_gone_and_hidden_highlights_drop_out(self):
+        hidden = PortfolioBlock.objects.create(
+            user=self.owner, kind="text", body="draft", is_active=False
+        )
+        self._pick("job:99999", f"block:{hidden.pk}", self.gig_id)
+        payload = build_payload(self.owner)
+        self.assertEqual(self._ids(payload["featured"]), [self.gig_id])
+
+    def test_nothing_left_of_them_is_the_favourites(self):
+        self._pick("job:99999")
+        payload = build_payload(self.owner)
+        self.assertEqual(self._ids(payload["featured"]), [self.fav_id])
+
+    def test_a_lucky_draw_leads_with_them_unscoped(self):
+        self._pick(self.python_id, self.gig_id)
+        payload = build_payload(self.owner, lucky=True, seed=1)
+        self.assertEqual(self._ids(payload["featured"]), [self.python_id, self.gig_id])
+        self.assertNotIn(self.gig_id, self._ids(payload["more"]))
+
+    def test_a_lucky_draw_without_them_leads_with_the_favourites(self):
+        _standard(self.owner)
+        payload = build_payload(self.owner, lucky=True, seed=1)
+        self.assertEqual(self._ids(payload["featured"]), [self.fav_id])
+
+    def test_the_default_link_still_catches_an_empty_page(self):
+        """A guard: green before this guide too."""
+        Domain.objects.create(user=self.owner, name="empty")
+        self._pick(self.gig_id)
+        PortfolioLink.objects.create(
+            user=self.owner,
+            kind=PortfolioLink.Kind.manual,
+            slug="for-all",
+            is_default=True,
+            content={"featured": [self.fav_id], "hide_explore": True},
+        )
+        payload = build_payload(self.owner, domains=["empty"])
+        self.assertEqual(self._ids(payload["featured"]), [self.fav_id])
+        self.assertEqual(payload["kind"], "native")
+
+    @mock.patch("spa.portfolio.complete", return_value="Hello.")
+    def test_the_ai_welcome_is_grounded_in_them(self, m_complete):
+        self._pick(self.gig_id)
+        build_intro(self.owner, domains=["music"], question="gigs")
+        prompt = m_complete.call_args.kwargs["prompt"]
+        self.assertIn("HIGHLIGHTS:\n- Gig\n", prompt)
+
+    def test_the_standard_address_shows_it(self):
+        """What the SPA asks for at `standard_page_url`."""
+        self._pick(self.gig_id, title="Hi, I'm Lukas")
+        r = self.client.get("/api/spa/public/lukas/native/?focus=balanced&tone=neutral")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["title"], "Hi, I'm Lukas")
+        self.assertEqual(self._ids(r.json()["featured"]), [self.gig_id])
 
 
 # ── the AI intro (the one generative anonymous call) ────────────────────────────

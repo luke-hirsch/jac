@@ -65,6 +65,26 @@ export function luckySearch(): ExploreSearch {
   return { lucky: true };
 }
 
+/** "Skip the questions": the owner's standard page, which is the questionnaire answered with
+ *  nothing picked. spa.portfolio.standard_page_url is the same address, ?focus=balanced&tone=neutral. */
+export function standardSearch(): ExploreSearch {
+  return formToSearch(EMPTY_FORM);
+}
+
+/** Does this answer start the AI job (the ranking and the welcome)? Whenever the visitor told us
+ *  something: a topic, what they're looking for, or a style other than the default, which the
+ *  welcome is written in. The default answer is the standard page ("Skip the questions", and the
+ *  address jac hands out for it), and it shows at once, without a waiting card; so does a lucky
+ *  draw. */
+export function needsPersonalise(search: ExploreSearch): boolean {
+  if (search.lucky) return false;
+  if (search.d?.length || search.q?.trim()) return true;
+  return (
+    (search.focus ?? DEFAULT_FOCUS) !== DEFAULT_FOCUS ||
+    (search.tone ?? DEFAULT_TONE) !== DEFAULT_TONE
+  );
+}
+
 /** Has the visitor answered? The home route shows the result when true, the questionnaire
  *  when false. focus/tone are always present on a real answer; lucky/d/q also count. */
 export function hasAnswer(search: ExploreSearch): boolean {

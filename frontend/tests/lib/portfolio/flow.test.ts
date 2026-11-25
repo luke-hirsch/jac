@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FOCUS,
   DEFAULT_TONE,
+  exploreSearchSchema,
   formToSearch,
   hasAnswer,
   luckySearch,
+  needsPersonalise,
   searchToForm,
   splitQuery,
+  standardSearch,
 } from "@/lib/portfolio/questionnaire";
 import { nativeStamp, readStamp, writeStamp } from "@/lib/portfolio/stamp";
 
@@ -27,7 +30,12 @@ function memStorage() {
 }
 
 describe("formToSearch", () => {
-  const base = { domains: [] as string[], focus: "balanced", tone: "neutral", query: "" };
+  const base = {
+    domains: [] as string[],
+    focus: "balanced",
+    tone: "neutral",
+    query: "",
+  };
 
   it("always carries focus and tone (so the result URL is never param-empty)", () => {
     const s = formToSearch({ ...base, focus: "technical", tone: "personal" });
@@ -83,6 +91,58 @@ describe("luckySearch", () => {
   });
 });
 
+describe("standardSearch", () => {
+  it("is the questionnaire answered with nothing picked", () => {
+    expect(standardSearch()).toEqual({
+      focus: DEFAULT_FOCUS,
+      tone: DEFAULT_TONE,
+    });
+  });
+
+  it("is an answer, so the owner's home shows the page and not the questions", () => {
+    expect(hasAnswer(standardSearch())).toBe(true);
+  });
+
+  it("is what the backend's standard address says (spa.portfolio.standard_page_url)", () => {
+    const params = new URLSearchParams("focus=balanced&tone=neutral");
+    expect(exploreSearchSchema.parse(Object.fromEntries(params))).toEqual(
+      standardSearch(),
+    );
+  });
+});
+
+describe("needsPersonalise", () => {
+  const style = { focus: "technical", tone: "personal" };
+
+  it("is false for the standard page", () => {
+    expect(needsPersonalise(standardSearch())).toBe(false);
+    expect(needsPersonalise({ ...standardSearch(), d: [] })).toBe(false);
+    expect(needsPersonalise({ ...standardSearch(), q: "   " })).toBe(false);
+  });
+
+  it("is true for a style other than the default: the welcome is written in it", () => {
+    expect(needsPersonalise(style)).toBe(true);
+    expect(needsPersonalise({ ...standardSearch(), tone: "formal" })).toBe(
+      true,
+    );
+    expect(needsPersonalise({ ...standardSearch(), focus: "technical" })).toBe(
+      true,
+    );
+  });
+
+  it("is true once a topic is picked or a question written", () => {
+    expect(needsPersonalise({ ...style, d: ["music"] })).toBe(true);
+    expect(needsPersonalise({ ...style, q: "jazz" })).toBe(true);
+  });
+
+  it("is false for a lucky draw, picks or not", () => {
+    expect(needsPersonalise({ lucky: true })).toBe(false);
+    expect(needsPersonalise({ lucky: true, d: ["music"], q: "jazz" })).toBe(
+      false,
+    );
+  });
+});
+
 describe("hasAnswer", () => {
   it("is false for an empty search (show the questionnaire)", () => {
     expect(hasAnswer({})).toBe(false);
@@ -132,7 +192,12 @@ describe("nativeStamp (style preserved)", () => {
       }),
     ).toEqual({
       kind: "native",
-      search: { d: ["music"], lucky: false, focus: "technical", tone: "personal" },
+      search: {
+        d: ["music"],
+        lucky: false,
+        focus: "technical",
+        tone: "personal",
+      },
     });
   });
 
@@ -150,7 +215,11 @@ describe("nativeStamp (style preserved)", () => {
     );
     expect(readStamp("jane", storage)).toEqual({
       kind: "native",
-      search: { d: ["software development"], focus: "soft_skill", tone: "formal" },
+      search: {
+        d: ["software development"],
+        focus: "soft_skill",
+        tone: "formal",
+      },
     });
   });
 });

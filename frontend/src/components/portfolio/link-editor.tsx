@@ -13,12 +13,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ContentPicker } from "@/components/portfolio/content-picker";
+import { baseDomain } from "@/lib/host";
+import { portfolioAddress } from "@/lib/portfolio/publish";
 import { useFullList, type DomainRow } from "@/lib/queries/jac";
 import {
   useCreateLink,
   useUpdateLink,
   type PortfolioLinkRow,
 } from "@/lib/queries/portfolio";
+import { useProfile } from "@/lib/queries/profile";
 import { toggleName } from "@/lib/portfolio/link-form";
 
 const RESERVED = new Set(["links", "blocks"]); // the /portfolio tab paths
@@ -56,6 +59,7 @@ export function LinkEditor({
 }) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(link));
   const domains = useFullList<DomainRow>("domains");
+  const profile = useProfile();
   const create = useCreateLink();
   const update = useUpdateLink();
   const isApplication = link?.kind === "application";
@@ -113,7 +117,9 @@ export function LinkEditor({
               onChange={(e) => set("slug", e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Public at /portfolio/{draft.slug || "…"}
+              Public at{" "}
+              {portfolioAddress(profile.data?.handle ?? "…", baseDomain())}
+              {draft.slug || "…"}/
             </p>
           </div>
           <div className="grid gap-2">
