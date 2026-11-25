@@ -869,9 +869,10 @@ class CvAttachment(models.Model):
 
 
 class AccessToken(models.Model):
-    """A personal token for the jac connector: it reads the career DB, writes applications and
-    edits career entries over `/api/jac/mcp/`, and nothing else (`jac.tokens`' classes sit on
-    that view only, never in DRF's defaults). It deletes nothing but a skill its own batch
+    """A personal token for the jac connector: it reads the career DB and the portfolio, writes
+    applications and edits career entries over `/api/jac/mcp/`, and nothing else (`jac.tokens`'
+    classes sit on that view only, never in DRF's defaults). It changes the public portfolio only
+    when the user switched that on for it. It deletes nothing but a skill its own batch
     created, on undo. Only the SHA-256
     of the key is stored; the key itself is shown once. Revoking is deleting the row."""
 
@@ -888,6 +889,10 @@ class AccessToken(models.Model):
     # Claude, and so to Anthropic, also outside the EU. Revoking the token withdraws it. No token
     # exists without one: the serializer refuses, and the migration revoked the older tokens.
     transfer_consent_at = models.DateTimeField()
+    # Whether Claude may change the public portfolio with this token: blocks, links and the
+    # standard page. Off until the user switches it on, per token: a portfolio write is the
+    # first thing a leaked token could change that every visitor sees.
+    may_edit_portfolio = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
 

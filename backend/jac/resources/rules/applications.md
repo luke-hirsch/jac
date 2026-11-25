@@ -9,7 +9,8 @@ You reach jac through its tools: `get_career` (these rules came with it), `save_
 `show_application`, `list_applications`, `get_application`, and for the career itself
 `get_career_review`, `apply_career_changes`, `list_career_changes` and `undo_career_changes`.
 **When the user wants their career data checked or improved, call `get_career_review` first**:
-it brings the rules for that. The rest of this file is about applications.
+it brings the rules for that. **For their public portfolio, call `get_portfolio` first**, which
+brings its own. The rest of this file is about applications.
 
 ## The flow
 

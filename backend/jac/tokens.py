@@ -24,7 +24,9 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-def mint_token(user, name: str = "") -> tuple[AccessToken, str]:
+def mint_token(
+    user, name: str = "", *, may_edit_portfolio: bool = False
+) -> tuple[AccessToken, str]:
     """A new token row and its key. The key exists only in this return value. Call it only once
     the user agreed to the transfer (`AccessTokenSerializer` checks): the row records it."""
     key = KEY_PREFIX + secrets.token_urlsafe(32)
@@ -34,6 +36,7 @@ def mint_token(user, name: str = "") -> tuple[AccessToken, str]:
         prefix=key[:12],
         key_hash=hash_key(key),
         transfer_consent_at=timezone.now(),
+        may_edit_portfolio=may_edit_portfolio,
     )
     return token, key
 

@@ -1082,7 +1082,8 @@ class SkillCareerChangesSerializer(serializers.Serializer):
 class AccessTokenSerializer(serializers.ModelSerializer):
     """A token is minted only on the user's "I agree": it sends the career to Anthropic through
     their Claude account, the same transfer as an API key (`LLMConfigSerializer`). The consent is
-    kept (`TransferConsent`, scope `claude`): ticked with this create, or given before."""
+    kept (`TransferConsent`, scope `claude`): ticked with this create, or given before. A PATCH
+    switches `may_edit_portfolio` (or renames the token) and asks nothing again."""
 
     transfer_consent = serializers.BooleanField(write_only=True, default=False)
 
@@ -1094,6 +1095,7 @@ class AccessTokenSerializer(serializers.ModelSerializer):
             "prefix",
             "transfer_consent",
             "transfer_consent_at",
+            "may_edit_portfolio",
             "created_at",
             "last_used_at",
         ]
@@ -1106,6 +1108,10 @@ class AccessTokenSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        if self.instance is not None:
+            # The token exists, so it was made on an "I agree", and withdrawing deletes it.
+            attrs.pop("transfer_consent", None)
+            return attrs
         user = self.context["request"].user
         if attrs.get("transfer_consent"):
             TransferConsent.give(user, TransferConsent.Scope.claude)

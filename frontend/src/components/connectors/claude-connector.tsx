@@ -12,6 +12,7 @@ import {
 import { Lines } from "@/components/toast-lines";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -36,6 +37,7 @@ import {
   useKeepAllCareerChanges,
   useKeepCareerChange,
   useRevokeAccessToken,
+  useSetTokenPortfolio,
   useUndoCareerChange,
   type AccessTokenRow,
   type CareerChange,
@@ -81,8 +83,10 @@ export function ClaudeConnector() {
             Write applications with Claude, on your own subscription: paste a
             posting into a chat, talk the CV and the letter through, and Claude
             saves them here, where you check the layout and export the PDF.
-            jac's own AI isn't used for any of it. Claude reaches your career
-            and your applications, never your account or your API keys.
+            jac's own AI isn't used for any of it. Claude reaches your career,
+            your applications and your portfolio, never your account or your API
+            keys. It changes your public portfolio only with a token you allow
+            to.
           </p>
         </div>
         {!consentUnknown && !agreed && (
@@ -137,8 +141,9 @@ function ClaudeConsent({
     >
       <p>
         With a token, Claude reads your career, your contact details, your
-        personality answers and writing sample, and your applications from jac,
-        and saves applications and career changes here. That data goes to
+        personality answers and writing sample, your applications and your
+        portfolio from jac, and saves applications and career changes here, and
+        portfolio changes with a token you allow to. That data goes to
         Anthropic, under your Claude account. Anthropic may process it in the
         USA, where data protection can be weaker than in the EU and authorities
         may be able to access it.
@@ -508,16 +513,23 @@ function FieldText({
 function CreateToken({ agreed }: { agreed: boolean }) {
   const create = useCreateAccessToken();
   const [name, setName] = useState("");
+  // Off unless ticked: a portfolio write is public the moment Claude makes it.
+  const [portfolio, setPortfolio] = useState(false);
   // Held for this visit only: dismissing the box forgets the key.
   const [minted, setMinted] = useState<NewAccessToken | null>(null);
 
   function onCreate() {
     create.mutate(
-      { name: name.trim(), transferConsent: agreed },
+      {
+        name: name.trim(),
+        transferConsent: agreed,
+        mayEditPortfolio: portfolio,
+      },
       {
         onSuccess: (token) => {
           setMinted(token);
           setName("");
+          setPortfolio(false);
         },
         onError: (e) =>
           toast.error(errorLines(e, "Could not create the token.")[0]),
@@ -528,24 +540,44 @@ function CreateToken({ agreed }: { agreed: boolean }) {
   return minted ? (
     <NewTokenBox token={minted} onDismiss={() => setMinted(null)} />
   ) : (
-    <div className="flex items-end gap-2">
-      <div className="flex-1 space-y-1">
-        <Label htmlFor="token-name">Token name</Label>
-        <Input
-          id="token-name"
-          value={name}
-          maxLength={60}
-          disabled={!agreed}
-          placeholder={agreed ? "e.g. Claude" : "Agree above first"}
-          onChange={(e) => setName(e.target.value)}
-        />
+    <div className="space-y-2">
+      <div className="flex items-end gap-2">
+        <div className="flex-1 space-y-1">
+          <Label htmlFor="token-name">Token name</Label>
+          <Input
+            id="token-name"
+            value={name}
+            maxLength={60}
+            disabled={!agreed}
+            placeholder={agreed ? "e.g. Claude" : "Agree above first"}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <Button
+          onClick={onCreate}
+          disabled={!agreed || create.isPending || !name.trim()}
+        >
+          {create.isPending ? "Creating…" : "Create token"}
+        </Button>
       </div>
-      <Button
-        onClick={onCreate}
-        disabled={!agreed || create.isPending || !name.trim()}
-      >
-        {create.isPending ? "Creating…" : "Create token"}
-      </Button>
+      <div className="flex items-start gap-2">
+        <Checkbox
+          id="token-portfolio"
+          checked={portfolio}
+          disabled={!agreed}
+          onCheckedChange={(v) => setPortfolio(v === true)}
+        />
+        <div className="space-y-0.5">
+          <Label htmlFor="token-portfolio">
+            May change your public portfolio
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Its blocks, its links and the standard page, live, after your yes in
+            the chat. Without it, Claude only reads them. You can switch it for
+            each token below.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -606,7 +638,29 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
 function TokenList() {
   const tokens = useAccessTokens();
   const revoke = useRevokeAccessToken();
+  const portfolio = useSetTokenPortfolio();
   const rows = tokens.data ?? [];
+
+  function onPortfolio(row: AccessTokenRow, allowed: boolean) {
+    if (
+      allowed &&
+      !confirm(
+        `Let "${row.name || row.prefix}" change your public portfolio? Whatever uses it can then change what every visitor sees.`,
+      )
+    )
+      return;
+    portfolio.mutate(
+      { id: row.id, allowed },
+      {
+        onSuccess: () =>
+          toast.success(
+            allowed ? "It may change your portfolio" : "Portfolio: read only",
+          ),
+        onError: (e) =>
+          toast.error(errorLines(e, "Couldn't switch it. Try again.")[0]),
+      },
+    );
+  }
 
   function onRevoke(row: AccessTokenRow) {
     if (
@@ -632,6 +686,7 @@ function TokenList() {
               <TableHead>Key</TableHead>
               <TableHead>Created</TableHead>
               <TableHead>Last used</TableHead>
+              <TableHead>Portfolio</TableHead>
               <TableHead className="text-right" />
             </TableRow>
           </TableHeader>
@@ -653,6 +708,14 @@ function TokenList() {
                   {row.last_used_at
                     ? new Date(row.last_used_at).toLocaleDateString()
                     : "never"}
+                </TableCell>
+                <TableCell>
+                  <Checkbox
+                    aria-label={`${row.name || row.prefix} may change your public portfolio`}
+                    checked={row.may_edit_portfolio}
+                    disabled={portfolio.isPending}
+                    onCheckedChange={(v) => onPortfolio(row, v === true)}
+                  />
                 </TableCell>
                 <TableCell className="text-right">
                   <Button

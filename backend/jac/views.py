@@ -1342,15 +1342,19 @@ class ClaudeConsentView(ConsentView):
 class AccessTokenViewSet(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
+    mixins.UpdateModelMixin,
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    """The user's connector tokens: list, mint (the key is in this one response only), revoke.
-    Session only: a token can't mint more of itself."""
+    """The user's connector tokens: list, mint (the key is in this one response only), switch
+    the portfolio on or off (PATCH), revoke. Session only: a token can't mint more of itself,
+    or allow itself the portfolio."""
 
     serializer_class = AccessTokenSerializer
     permission_classes = [IsAuthenticated]
     throttle_scope = None
+    # PATCH only: a PUT would have to send the whole row for one switch.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         return AccessToken.objects.filter(user=self.request.user)
@@ -1374,7 +1378,13 @@ class AccessTokenViewSet(
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        token, key = mint_token(request.user, serializer.validated_data.get("name", ""))
+        token, key = mint_token(
+            request.user,
+            serializer.validated_data.get("name", ""),
+            may_edit_portfolio=serializer.validated_data.get(
+                "may_edit_portfolio", False
+            ),
+        )
         return Response(
             {**AccessTokenSerializer(token).data, "key": key},
             status=status.HTTP_201_CREATED,

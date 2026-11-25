@@ -23,16 +23,25 @@ session and no network: its only way to jac is `application_preview`, a tool onl
 call, through this same connector and token. It reads no more than `get_career` already gives
 Claude (privacy §8): no signature image, no attachments. Clients without MCP Apps ignore the
 `_meta`.
+
+The public portfolio is read on any token (`get_portfolio`) and written only on a token the user
+allowed (`AccessToken.may_edit_portfolio`, off by default). Writes go live at once, after the
+user's yes in the chat, through the serializers jac's own editor uses. There are no drafts: every
+write answers with what it replaced (`before`), and saving that back is the undo. Nothing is
+deleted: a block is switched off, a link revoked. No files either: images and media are
+uploaded in jac, never fetched from a URL, so a token can't pull outside content onto the page.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import cache
 from pathlib import Path
 
 from django.conf import settings
+from django.db import transaction
 
 from jac.career_changes import (
     ChangeError,
@@ -45,7 +54,7 @@ from jac.career_changes import (
 )
 from jac.career_review import review_career
 from jac.cv import CV
-from jac.models import CareerChange, CvAttachment, JobApplication
+from jac.models import CareerChange, CvAttachment, Domain, JobApplication
 from jac.serializers import (
     CvSerializer,
     JobApplicationSerializer,
@@ -57,11 +66,22 @@ from jac.skill import (
     application_payload,
     application_summary,
     application_url,
+    career_index,
     career_payload,
+    portfolio_block,
+    portfolio_link,
+    portfolio_payload,
+    portfolio_standard,
     save_application,
 )
-from spa.models import PersonalityProfile, UserProfile
-from spa.serializers import UserProfileSerializer
+from spa.models import PersonalityProfile, PortfolioBlock, PortfolioLink, UserProfile
+from spa.portfolio import standard_page, standard_page_for, standard_page_url
+from spa.serializers import (
+    PortfolioBlockSerializer,
+    PortfolioLinkSerializer,
+    PortfolioStandardSerializer,
+    UserProfileSerializer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +122,10 @@ INSTRUCTIONS = (
     "`get_career_review`, which brings its own rules. Nothing is saved until the user says so; "
     "after `save_application`, give them the link it returns: they look at the result and "
     "export the PDF in jac. In the Claude app, `save_application` and `show_application` "
-    "also show the PDF preview in the chat."
+    "also show the PDF preview in the chat. For the user's public portfolio (its standard "
+    "page, its links and its blocks), call `get_portfolio` first: it brings the portfolio and "
+    "the rules for changing it. A change goes live at once, so make it only after the user's "
+    "yes, and only a token the user allowed can make one."
 )
 
 
@@ -124,7 +147,7 @@ class ResourceNotFound(Exception):
 
 @cache
 def rules(name: str) -> str:
-    """One of the connector's rulebooks (`applications`, `review`)."""
+    """One of the connector's rulebooks (`applications`, `review`, `portfolio`)."""
     return (RULES_DIR / f"{name}.md").read_text().strip()
 
 
@@ -316,6 +339,260 @@ def undo_career_changes(request, args):
         ) from err
 
 
+# --- the public portfolio -----------------------------------------------------------------------
+
+# What Claude can create. Image and media blocks need a file, and files are uploaded in jac.
+BLOCK_KINDS = (
+    PortfolioBlock.Kind.text,
+    PortfolioBlock.Kind.quote,
+    PortfolioBlock.Kind.figures,
+    PortfolioBlock.Kind.cta,
+    PortfolioBlock.Kind.linklist,
+)
+_BLOCK_FIELDS = (
+    "kind",
+    "title",
+    "body",
+    "data",
+    "alt_text",
+    "domains",
+    "links",
+    "favourite",
+    "order",
+    "is_active",
+)
+_BLOCK_ID = re.compile(r"^(?:block:)?(\d+)$")
+_LINK_FIELDS = ("slug", "title", "intro", "is_default")
+# A link's `content`, sent by its keys: what isn't sent keeps its stored value.
+_LINK_CONTENT = ("featured", "domains", "hide_explore")
+# What only a link takes: sent with `standard: true`, it's a mix-up worth saying so.
+_LINK_ONLY = {"id", "slug", "domains", "hide_explore", "is_default", "revoke"}
+
+UPLOADS_IN_JAC = (
+    "Images and media are uploaded in jac, on the portfolio's blocks page: the connector "
+    "carries no files, and jac fetches none from a URL. The user adds the block there; then "
+    "you can change its title, caption and alt text here."
+)
+
+
+def _may_edit(request) -> bool:
+    return bool(getattr(request.auth, "may_edit_portfolio", False))
+
+
+def _check_may_edit(request) -> None:
+    if not _may_edit(request):
+        raise ToolError(
+            {
+                "detail": "This token may not change the portfolio. The user allows it in "
+                "jac, Account → LLM, under Connectors: “May change your public portfolio” on "
+                "this token. Until then, show them what you would change."
+            }
+        )
+
+
+def _domains(request, names) -> list[Domain]:
+    """Domains by name, case-insensitive against the user's visible taxonomy (jac's defaults
+    and their own; their own wins a tie). jac creates none here: an unknown name is refused
+    with the names it knows."""
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ToolError({"errors": {"domains": ["A list of domain names."]}})
+    rows = sorted(
+        Domain.objects.for_user(request.user),
+        key=lambda d: d.user_id == request.user.pk,
+    )
+    by_name = {d.name.lower(): d for d in rows}
+    unknown = [n for n in names if n.strip().lower() not in by_name]
+    if unknown:
+        raise ToolError(
+            {
+                "errors": {"domains": [f"No domain named {', '.join(unknown)}."]},
+                "known_domains": sorted({d.name for d in rows}),
+            }
+        )
+    return list(dict.fromkeys(by_name[n.strip().lower()] for n in names))
+
+
+def _check_ids(request, field: str, ids) -> None:
+    """Highlights and block links must be ids `get_portfolio` showed. jac's own editor takes
+    any well-formed id (a dead one drops when the page renders), but one Claude made up would
+    sit in the page unseen."""
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        return  # the serializer names what's wrong with the shape
+    known = {item["id"] for item in career_index(request.user)}
+    known |= {
+        f"block:{pk}"
+        for pk in PortfolioBlock.objects.filter(user=request.user).values_list(
+            "pk", flat=True
+        )
+    }
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        message = f"Not in the portfolio: {', '.join(unknown)}. Use the ids it shows."
+        raise ToolError({"errors": {field: [message]}})
+
+
+def _block(request, args: dict) -> PortfolioBlock:
+    match = _BLOCK_ID.match(str(args.get("id")))
+    if match is None:
+        raise ToolError(
+            {
+                "detail": "`id` is a block's id as `get_portfolio` shows it, e.g. block:12."
+            }
+        )
+    block = PortfolioBlock.objects.filter(
+        pk=int(match.group(1)), user=request.user
+    ).first()
+    if block is None:
+        # Someone else's id reads like a missing one.
+        raise ToolError(
+            {
+                "detail": f"There is no block block:{match.group(1)}. `get_portfolio` "
+                "shows yours."
+            }
+        )
+    return block
+
+
+def _link(request, pk: int) -> PortfolioLink:
+    link = (
+        PortfolioLink.objects.filter(pk=pk, user=request.user)
+        .exclude(kind=PortfolioLink.Kind.standard)
+        .select_related("user__profile")
+        .first()
+    )
+    if link is None:
+        raise ToolError(
+            {"detail": f"There is no link {pk}. `get_portfolio` shows yours."}
+        )
+    if link.kind == PortfolioLink.Kind.application:
+        raise ToolError(
+            {
+                "detail": f"Link {pk} belongs to an application: it shows what that "
+                "application sent. It changes in jac, with the application."
+            }
+        )
+    return link
+
+
+def get_portfolio(request, args):
+    return {
+        "rules": rules("portfolio"),
+        "portfolio": portfolio_payload(request.user, may_edit=_may_edit(request)),
+    }
+
+
+def save_portfolio_block(request, args):
+    _check_may_edit(request)
+    if "image" in args or "media" in args:
+        raise ToolError({"detail": UPLOADS_IN_JAC})
+    data = {field: args[field] for field in _BLOCK_FIELDS if field in args}
+    block = before = None
+    if "id" in args:
+        block = _block(request, args)
+        before = portfolio_block(block)
+        if data.get("kind", block.kind) != block.kind:
+            raise ToolError(
+                {
+                    "detail": "A block keeps its kind. Create a new block of the other "
+                    "kind, and switch this one off (`is_active: false`)."
+                }
+            )
+    elif data.get("kind") in (PortfolioBlock.Kind.image, PortfolioBlock.Kind.media):
+        raise ToolError({"detail": UPLOADS_IN_JAC})
+    elif data.get("kind") not in BLOCK_KINDS:
+        raise ToolError(
+            {"detail": f"A new block needs a `kind`: one of {', '.join(BLOCK_KINDS)}."}
+        )
+    if "domains" in data:
+        data["domains"] = [d.pk for d in _domains(request, data["domains"])]
+    if "links" in data:
+        _check_ids(request, "links", data["links"])
+    serializer = PortfolioBlockSerializer(
+        block, data=data, partial=block is not None, context={"request": request}
+    )
+    if not serializer.is_valid():
+        raise ToolError({"errors": serializer.errors})
+    block = serializer.save()
+    return {
+        **portfolio_block(block),
+        "before": before,
+        # Every active block shows on the standard page: in the Highlights or below them.
+        "url": standard_page_url(request.user),
+    }
+
+
+def _save_standard(request, args: dict) -> dict:
+    mixed = sorted(_LINK_ONLY & set(args))
+    if mixed:
+        raise ToolError(
+            {
+                "detail": "The standard page takes `title`, `intro` and `featured`, not "
+                f"{', '.join(mixed)}. Those are a link's."
+            }
+        )
+    data = {field: args[field] for field in ("title", "intro") if field in args}
+    if "featured" in args:
+        _check_ids(request, "featured", args["featured"])
+        data["content"] = {"featured": args["featured"]}
+    page = standard_page(request.user)
+    before = portfolio_standard(request.user, page) if page else None
+    with transaction.atomic():
+        # The first write makes the row; a refused one leaves none behind.
+        serializer = PortfolioStandardSerializer(
+            standard_page_for(request.user),
+            data=data,
+            partial=True,
+            context={"request": request},
+        )
+        if not serializer.is_valid():
+            raise ToolError({"errors": serializer.errors})
+        page = serializer.save()
+    return {
+        "standard": True,
+        **portfolio_standard(request.user, page),
+        "before": before,
+    }
+
+
+def save_portfolio_page(request, args):
+    _check_may_edit(request)
+    if args.get("standard"):
+        return _save_standard(request, args)
+    link = before = None
+    if "id" in args:
+        link = _link(request, _pk(args, "link"))
+        before = portfolio_link(link)
+    if args.get("revoke"):
+        if link is None or set(args) - {"id", "revoke"}:
+            raise ToolError(
+                {"detail": "`revoke: true` takes the link's `id` and nothing else."}
+            )
+        link.revoke()
+        return {**portfolio_link(link), "before": before}
+    if link is not None and link.revoked_at is not None:
+        raise ToolError(
+            {
+                "detail": f"Link {link.pk} is revoked, and its address stays dead. Create "
+                "a new link instead."
+            }
+        )
+    data = {field: args[field] for field in _LINK_FIELDS if field in args}
+    sent = {key: args[key] for key in _LINK_CONTENT if key in args}
+    if "domains" in sent:
+        sent["domains"] = [d.name for d in _domains(request, sent["domains"])]
+    if "featured" in sent:
+        _check_ids(request, "featured", sent["featured"])
+    if link is None or sent:
+        data["content"] = {**((link.content if link else None) or {}), **sent}
+    serializer = PortfolioLinkSerializer(
+        link, data=data, partial=link is not None, context={"request": request}
+    )
+    if not serializer.is_valid():
+        raise ToolError({"errors": serializer.errors})
+    link = serializer.save()
+    return {**portfolio_link(link), "before": before}
+
+
 # --- what tools/list shows ----------------------------------------------------------------------
 
 _NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -411,6 +688,113 @@ _CHANGES = {
         },
     },
     "required": ["changes"],
+    "additionalProperties": False,
+}
+
+
+_DOMAIN_NAMES = {
+    "type": "array",
+    "items": _TEXT,
+    "description": "Domain names, from `get_portfolio`'s `domains`.",
+}
+
+_BLOCK = {
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": ["string", "integer"],
+            "description": "A block's id (block:12), to change it: then only what you send "
+            "changes. Leave it out to create a block.",
+        },
+        "kind": {
+            "type": "string",
+            "enum": list(BLOCK_KINDS),
+            "description": "A new block's kind. A block keeps its kind; image and media "
+            "blocks are made in jac.",
+        },
+        "title": _TEXT,
+        "body": {
+            **_TEXT,
+            "description": "text: the markdown. quote: the quote. figures, linklist: one "
+            "lead line. cta: the pitch. image, media: the caption.",
+        },
+        "data": {
+            "type": "object",
+            "description": "The kind's own fields, the whole set: quote {by, role}; figures "
+            "{figures: [{value, label}], 2 to 4}; cta {label, url}; linklist {items: "
+            "[{title, url, note}], 1 to 12}. Text, image and media take none.",
+        },
+        "alt_text": {
+            **_TEXT,
+            "description": "What an image or a poster shows, for screen readers.",
+        },
+        "domains": {
+            **_DOMAIN_NAMES,
+            "description": "The questionnaire topics the block shows under, by name from "
+            "`get_portfolio`.",
+        },
+        "links": {
+            **_IDS,
+            "description": "Entries and blocks shown beneath this one, by the ids "
+            "`get_portfolio` shows.",
+        },
+        "favourite": {
+            "type": "boolean",
+            "description": "A Highlight while the standard page has none of its own.",
+        },
+        "order": {"type": "integer", "minimum": 0},
+        "is_active": {
+            "type": "boolean",
+            "description": "false takes the block off every page. Nothing is deleted.",
+        },
+    },
+    "additionalProperties": False,
+}
+
+_PAGE = {
+    "type": "object",
+    "properties": {
+        "standard": {
+            "type": "boolean",
+            "description": "true: write the standard page. It takes title, intro and "
+            "featured only.",
+        },
+        "id": {
+            **_ID,
+            "description": "A link's id, to change or revoke it: then only what you send "
+            "changes. Leave it out, and send a `slug`, to create a link.",
+        },
+        "slug": {
+            **_TEXT,
+            "description": "The link's address: <home_url><slug>/. Lower case, words "
+            "joined by hyphens.",
+        },
+        "title": _TEXT,
+        "intro": {**_TEXT, "description": "The paragraph under the title."},
+        "featured": {
+            **_IDS,
+            "description": "The Highlights, in order, by the ids `get_portfolio` shows.",
+        },
+        "domains": {
+            **_DOMAIN_NAMES,
+            "description": "A link's explore-more part: what it shows below the "
+            "Highlights. Empty: the favourites.",
+        },
+        "hide_explore": {
+            "type": "boolean",
+            "description": "A link with its Highlights only, no explore-more part.",
+        },
+        "is_default": {
+            "type": "boolean",
+            "description": "The page a visit falls back to when its own selection comes "
+            "out empty. One link at a time.",
+        },
+        "revoke": {
+            "type": "boolean",
+            "description": "true: take the link down for good, its address stops working. "
+            "With the `id` alone.",
+        },
+    },
     "additionalProperties": False,
 }
 
@@ -554,6 +938,46 @@ TOOLS = {
                 "required": ["id"],
                 "additionalProperties": False,
             },
+            "annotations": _hints(read_only=False, destructive=True),
+        },
+    ),
+    "get_portfolio": (
+        get_portfolio,
+        {
+            "title": "Read the portfolio",
+            "description": "The user's public portfolio in jac (the standard page, the "
+            "links, every block, the domains and an index of the career entries) and the "
+            "rules for changing it with them. Call it first when the user wants to see or "
+            "change their portfolio, and follow the rules it returns. `may_edit` says "
+            "whether this token may change it.",
+            "inputSchema": _NO_ARGS,
+            "annotations": _hints(read_only=True),
+        },
+    ),
+    "save_portfolio_block": (
+        save_portfolio_block,
+        {
+            "title": "Save a portfolio block",
+            "description": "Create a block (text, quote, figures, cta, linklist), or "
+            "change one by its `id`: only what you send changes. It goes live at once, so "
+            "only after the user's yes. `is_active: false` takes a block off the "
+            "portfolio; nothing is deleted. Answers with the block, `before` (what it "
+            "replaced, null for a new block: saving it back undoes the change) and the "
+            "`url` to give the user. Images and media are uploaded in jac.",
+            "inputSchema": _BLOCK,
+            "annotations": _hints(read_only=False, destructive=True),
+        },
+    ),
+    "save_portfolio_page": (
+        save_portfolio_page,
+        {
+            "title": "Save a portfolio page",
+            "description": "With `standard: true`, write the standard page (title, intro, "
+            "Highlights). Otherwise create a link (with a `slug`), change one by its `id` "
+            "(only what you send changes) or revoke it (`id` and `revoke: true`). It goes "
+            "live at once, so only after the user's yes. Answers with the page, `before` "
+            "(what it replaced, null for a new one) and the `url` to give the user.",
+            "inputSchema": _PAGE,
             "annotations": _hints(read_only=False, destructive=True),
         },
     ),
