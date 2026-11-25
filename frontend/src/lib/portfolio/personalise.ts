@@ -11,6 +11,7 @@ export type Step = { key: StepKey; state: StepState };
 export type PersonaliseView =
   /** Nothing to wait for: the standard page and a lucky draw use no AI. */
   | { phase: "off" }
+  | { phase: "unchecked" }
   | { phase: "working"; steps: Step[]; waking: boolean }
   /** What arrived. `ranked` null: the page keeps its usual order. */
   | { phase: "ready"; ranked: RankedId[] | null; intro: string }
@@ -20,6 +21,12 @@ export type PersonaliseView =
 export type PersonaliseInput = {
   /** needsPersonalise(search): a topic, a question, or a style other than the default. */
   needed: boolean;
+  /** The answer carries a solved check (search.captcha). The stamp and a shared address don't. */
+  checked: boolean;
+  /** This tab has queued the job already (a cached start): it carries on without the check. */
+  started: boolean;
+  /** The server refused the check (isCaptchaRefusal): spent by an earlier load, or expired. */
+  refused: boolean;
   /** The visitor wrote what they're looking for, so there's a ranking to wait for. */
   hasQuery: boolean;
   /** The job couldn't be queued: throttled, or the server is down. */
@@ -33,6 +40,7 @@ export type PersonaliseInput = {
 
 export function personaliseView(i: PersonaliseInput): PersonaliseView {
   if (!i.needed) return { phase: "off" };
+  if (i.refused || (!i.checked && !i.started)) return { phase: "unchecked" };
   if (i.startFailed) return { phase: "failed" };
   const job = i.job;
 

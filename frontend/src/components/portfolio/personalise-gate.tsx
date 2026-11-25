@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckIcon, CircleIcon, Loader2Icon, SparklesIcon } from "lucide-react";
 import { StudioButton } from "@/components/portfolio/studio";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import type {
   PersonaliseView,
   Step,
@@ -125,11 +126,14 @@ export function PersonaliseNotice({
   browsing,
   hasQuery,
   onShow,
+  onAsk,
 }: {
   view: PersonaliseView;
   browsing: boolean;
   hasQuery: boolean;
   onShow: () => void;
+  /** Back to the questionnaire, for a fresh check. */
+  onAsk: () => void;
 }) {
   const bar =
     "flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b px-4 py-2.5 text-sm backdrop-blur";
@@ -167,6 +171,18 @@ export function PersonaliseNotice({
         >
           Show it
         </StudioButton>
+      </div>
+    );
+  } else if (view.phase === "unchecked") {
+    body = (
+      <div className={cn(bar, "bg-muted/80 text-muted-foreground")}>
+        <span>
+          The AI part starts with the tick on the questions page, so this is the
+          standard portfolio.
+        </span>
+        <Button size="sm" variant="secondary" className="h-7" onClick={onAsk}>
+          Back to the questions
+        </Button>
       </div>
     );
   } else if (view.phase === "failed") {

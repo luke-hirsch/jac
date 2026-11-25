@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { CaptchaCheck } from "@/components/captcha-check";
 import { Studio, StudioButton } from "@/components/portfolio/studio";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,7 @@ import {
   DEFAULT_FOCUS,
   DEFAULT_TONE,
   EMPTY_FORM,
-  formToSearch,
+  checkedAnswer,
   luckySearch,
   standardSearch,
   type ExploreSearch,
@@ -64,9 +65,9 @@ export function Questionnaire({
   onDone: (search: ExploreSearch) => void;
 }) {
   const meta = useNativeMeta(handle);
-  const prewarm = () => prewarmForVisitor(handle);
   const [form, setForm] = useState<QuestForm>(EMPTY_FORM);
-
+  const [captcha, setCaptcha] = useState<string | null>(null);
+  const answer = checkedAnswer(form, captcha);
   function toggleDomain(name: string) {
     setForm((f) => ({
       ...f,
@@ -83,11 +84,7 @@ export function Questionnaire({
       className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10"
     >
       {/* The first click or key in here, not the page load: only a person gets this far. */}
-      <Card
-        className="w-full max-w-lg rounded-[18px] border shadow-none ring-0"
-        onPointerDownCapture={prewarm}
-        onKeyDownCapture={prewarm}
-      >
+      <Card className="w-full max-w-lg rounded-[18px] border shadow-none ring-0">
         <CardHeader>
           <CardTitle className="font-display text-2xl font-bold tracking-[-0.02em] normal-case">
             What do you want to see?
@@ -146,9 +143,17 @@ export function Questionnaire({
               }
             />
           </div>
-
+          <CaptchaCheck
+            onChange={(payload) => {
+              setCaptcha(payload);
+              if (payload) prewarmForVisitor(handle, payload);
+            }}
+          />
           <div className="flex flex-wrap gap-2">
-            <StudioButton onClick={() => onDone(formToSearch(form))}>
+            <StudioButton
+              disabled={!answer}
+              onClick={() => answer && onDone(answer)}
+            >
               Show me
             </StudioButton>
             <StudioButton
@@ -164,6 +169,12 @@ export function Questionnaire({
               Skip the questions
             </StudioButton>
           </div>
+          {answer ? null : (
+            <p className="text-xs text-muted-foreground">
+              “Show me” has AI pick and introduce the entries, so it waits for
+              the tick. The other two don't.
+            </p>
+          )}
         </CardContent>
       </Card>
 

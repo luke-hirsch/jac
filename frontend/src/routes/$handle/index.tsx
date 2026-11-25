@@ -20,6 +20,7 @@ import { useNativeMeta } from "@/lib/queries/portfolio";
 declare module "@tanstack/history" {
   interface HistoryState {
     visitorQuery?: string; // splitQuery: the free text, kept out of the URL
+    visitorCaptcha?: string; // splitQuery: the solved check, single use, kept out of the URL
   }
 }
 
@@ -34,6 +35,7 @@ function HandleHome() {
   const handle = Route.useParams({ select: (p) => p.handle.toLowerCase() });
   const search = Route.useSearch();
   const q = useLocation({ select: (l) => l.state.visitorQuery });
+  const captcha = useLocation({ select: (l) => l.state.visitorCaptcha });
   const navigate = useNavigate();
   const goHome = useOwnerHome(handle);
 
@@ -61,15 +63,15 @@ function HandleHome() {
 
   if (toLink || toResult) return null;
   if (hasAnswer(search))
-    return <ExploreResult handle={handle} search={{ ...search, q }} />;
+    return <ExploreResult handle={handle} search={{ ...search, q, captcha }} />;
 
   return (
     <AskOrMissing
       handle={handle}
       onDone={(s) => {
         writeStamp(handle, nativeStamp(s)); // written ONCE, at answer time
-        const { url, q: visitorQuery } = splitQuery(s);
-        goHome({ search: url, state: { visitorQuery } });
+        const { url, q: visitorQuery, captcha: visitorCaptcha } = splitQuery(s);
+        goHome({ search: url, state: { visitorQuery, visitorCaptcha } });
       }}
     />
   );

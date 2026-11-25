@@ -8,17 +8,21 @@ import { publicPaths } from "@/lib/queries/portfolio";
 const QUIET_MS = 5 * 60 * 1000;
 const lastSent = new Map<string, number>();
 
-function knock(url: string): void {
+function knock(url: string, body?: object): void {
   const now = Date.now();
   const last = lastSent.get(url);
   if (last !== undefined && now - last < QUIET_MS) return;
   lastSent.set(url, now);
-  api(url, { method: "POST" }).catch(() => {});
+  api(url, {
+    method: "POST",
+    body: body ? JSON.stringify(body) : undefined,
+  }).catch(() => {});
 }
 
 /** Someone signed in is about to edit or generate. The server skips users on their own key. */
 export const prewarmForEditing = () => knock("/api/llm/prewarm/");
 
-/** A visitor has started an owner's questionnaire: the rank and the AI intro are coming. */
-export const prewarmForVisitor = (handle: string) =>
-  knock(publicPaths.prewarm(handle));
+/** A visitor ticked an owner's questionnaire check: the rank and the AI intro are coming. The
+ *  solved check goes with it, since nothing anonymous wakes the tower without one (spa/captcha.py). */
+export const prewarmForVisitor = (handle: string, captcha: string) =>
+  knock(publicPaths.prewarm(handle), { captcha });

@@ -180,7 +180,9 @@ export type PersonaliseStatus = {
 
 /** Queue the job, once per answer: POST, but cached like a read, and never retried, because the
  *  6/h throttle makes retries actively harmful. Only for an answer with picks or a question
- *  (needsPersonalise): the standard page and a lucky reshuffle mustn't burn the budget.
+ *  (needsPersonalise): the standard page and a lucky reshuffle mustn't burn the budget. And only
+ *  with a solved check (spa/captcha.py), which the POST carries. The key leaves the check out: it
+ *  is a ticket, not part of the answer, so the same answer again in this tab reuses its job.
  *  `startedAt` dates the give-up. */
 export const personaliseStartQuery = (handle: string, search: ExploreSearch) =>
   queryOptions({
@@ -204,12 +206,13 @@ export const personaliseStartQuery = (handle: string, search: ExploreSearch) =>
             domains: search.d ?? [],
             focus: search.focus ?? "balanced",
             tone: search.tone ?? "neutral",
+            captcha: search.captcha,
           }),
         },
       );
       return { id, startedAt: Date.now() };
     },
-    enabled: needsPersonalise(search),
+    enabled: needsPersonalise(search) && Boolean(search.captcha),
     staleTime: Infinity,
     retry: false,
   });

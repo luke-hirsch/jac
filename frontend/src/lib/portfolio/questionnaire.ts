@@ -10,8 +10,8 @@ export type ExploreSearch = {
   q?: string;
   focus?: string;
   tone?: string;
+  captcha?: string;
 };
-
 /** The answer as the URL carries it (no `q`, see splitQuery). An owner's home validates its search
  *  with it, and a native stamp stores the same shape. */
 export const exploreSearchSchema = z.object({
@@ -55,9 +55,10 @@ export function formToSearch(form: QuestForm): ExploreSearch {
 export function splitQuery(search: ExploreSearch): {
   url: ExploreSearch;
   q: string | undefined;
+  captcha: string | undefined;
 } {
-  const { q, ...url } = search;
-  return { url, q };
+  const { q, captcha, ...url } = search;
+  return { url, q, captcha };
 }
 
 /** "I feel lucky" — random picks, no style/domains. */
@@ -84,7 +85,14 @@ export function needsPersonalise(search: ExploreSearch): boolean {
     (search.tone ?? DEFAULT_TONE) !== DEFAULT_TONE
   );
 }
-
+export function checkedAnswer(
+  form: QuestForm,
+  captcha: string | null,
+): ExploreSearch | null {
+  const search = formToSearch(form);
+  if (!needsPersonalise(search)) return search;
+  return captcha ? { ...search, captcha } : null;
+}
 /** Has the visitor answered? The home route shows the result when true, the questionnaire
  *  when false. focus/tone are always present on a real answer; lucky/d/q also count. */
 export function hasAnswer(search: ExploreSearch): boolean {

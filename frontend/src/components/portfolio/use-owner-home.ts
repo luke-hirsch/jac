@@ -3,8 +3,8 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ExploreSearch } from "@/lib/portfolio/questionnaire";
 
 type HomeNav = {
-  search?: Omit<ExploreSearch, "q">; // q never goes into the URL (splitQuery)
-  state?: { visitorQuery?: string };
+  search?: Omit<ExploreSearch, "q" | "captcha">; // neither goes into the URL (splitQuery)
+  state?: { visitorQuery?: string; visitorCaptcha?: string };
   replace?: boolean;
 };
 

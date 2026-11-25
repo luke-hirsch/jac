@@ -13,7 +13,7 @@ import {
   personaliseJobQuery,
   personaliseStartQuery,
 } from "@/lib/queries/portfolio";
-
+import { isCaptchaRefusal } from "@/lib/captcha";
 /** True from `startedAt + ms` on. A timer, not a poll: the page must flip even when nothing else
  *  changes. */
 function useExpired(startedAt: number | undefined, ms: number): boolean {
@@ -46,6 +46,9 @@ export function usePersonalise(
 
   return personaliseView({
     needed: needsPersonalise(search),
+    checked: Boolean(search.captcha),
+    started: start.data !== undefined,
+    refused: isCaptchaRefusal(start.error),
     hasQuery: Boolean(search.q?.trim()),
     startFailed: start.isError,
     job: job.data,

@@ -19,7 +19,8 @@ import { useNativePortfolio } from "@/lib/queries/portfolio";
  *  model server wakes. Until it's done the visitor sees a waiting card and chooses: wait, or
  *  browse the standard portfolio and switch when the note says it's ready. Nothing reorders
  *  under a reader. An answer without picks or a question has no job (needsPersonalise): it is
- *  the owner's standard page, at once. */
+ *  the owner's standard page, at once. Neither has one without a solved check (a return visit,
+ *  a shared address, a reload): the standard page, with a word why. */
 export function ExploreResult({
   handle,
   search,
@@ -80,6 +81,7 @@ export function ExploreResult({
   const personal = view.phase === "ready" && !browsing ? view : null;
   const standard =
     view.phase === "failed" ||
+    view.phase === "unchecked" ||
     (view.phase === "off" && !search.lucky) ||
     (browsing && !personal);
   const more = personal?.ranked
@@ -102,6 +104,10 @@ export function ExploreResult({
         onShow={() => {
           setBrowsing(false);
           window.scrollTo({ top: 0, behavior: scrollMotion() });
+        }}
+        onAsk={() => {
+          clearStamp(handle);
+          goHome();
         }}
       />
       <PortfolioPage
