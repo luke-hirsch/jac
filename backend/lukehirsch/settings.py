@@ -421,39 +421,23 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # Throttle identity = REMOTE_ADDR, never X-Forwarded-For. In prod daphne sets REMOTE_ADDR from
-    # nginx's X-Real-IP, which a client can't forge. DRF's default (NUM_PROXIES=None) keys the
-    # bucket on the raw XFF string instead, so a visitor could dodge the portfolio throttles by
-    # sending their own header. Not the 1 a bare Django behind one proxy would use: allauth keys
-    # on REMOTE_ADDR too, so that's the one place the real address has to land.
     "NUM_PROXIES": 0,
     "DEFAULT_THROTTLE_RATES": {
         "llm-chat": os.getenv("LLM_CHAT_RATE", "20/min"),
         "llm-chat-daily": os.getenv("LLM_CHAT_DAILY_RATE", "100/day"),
         "portfolio": os.getenv("PORTFOLIO_RATE", "60/hour"),
-        # The ranking and the welcome of a questionnaire visit, one job: anonymous model-server
-        # compute.
         "portfolio-personalise": os.getenv("PORTFOLIO_PERSONALISE_RATE", "6/hour"),
-        # A page polling for that job: one request every few seconds, for a few minutes.
         "portfolio-poll": os.getenv("PORTFOLIO_POLL_RATE", "600/hour"),
         "generation": os.getenv("GENERATION_RATE", "20/day"),
-        # The daily cap only counts runs: past it, an application still gets created.
         "application-create": os.getenv("APPLICATION_CREATE_RATE", "100/day"),
-        # The editor's AI tools + dossier rebuilds: free compute on an open-signup site.
         "ai-job": os.getenv("AI_JOB_RATE", "60/hour"),
-        # Asking for the model server ahead of a request. The real limit is the site-wide cooldown
-        # (llm_connector/tasks.py); this one keeps a single address from leaning on it.
         "prewarm": os.getenv("PREWARM_RATE", "30/hour"),
-        # Only a user who keeps emptying their career can get past the 409 to the writes.
+        "captcha": os.getenv("CAPTCHA_RATE", "30/hour"),
         "sample-career": "20/hour",
-        # Filling an empty career or application list from a downloaded file.
         "career-import": "20/hour",
         "application-import": "20/hour",
-        # Anything that puts a file on disk, per account.
         "uploads": os.getenv("UPLOAD_RATE", "100/day"),
-        # The Claude skill, per account: a conversation reads the career and saves a few times.
         "skill": os.getenv("SKILL_RATE", "300/hour"),
-        # Minting a token for Claude Code.
         "skill-token": os.getenv("SKILL_TOKEN_RATE", "20/hour"),
     },
 }
@@ -526,7 +510,9 @@ EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", not EMAIL_USE_SSL)
 EMAIL_PORT = env_int("EMAIL_PORT", 465 if EMAIL_USE_SSL else 587)
 if EMAIL_USE_SSL and EMAIL_USE_TLS:
     # Django only refuses the pair when the first mail goes out, in the worker.
-    raise ImproperlyConfigured("EMAIL_USE_SSL and EMAIL_USE_TLS are both on: set one of them.")
+    raise ImproperlyConfigured(
+        "EMAIL_USE_SSL and EMAIL_USE_TLS are both on: set one of them."
+    )
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 # Django's default is none: one hung connection would hold worker-mail's single slot.
@@ -541,13 +527,9 @@ PORTFOLIO_OWNER_USERNAME = os.getenv("PORTFOLIO_OWNER_USERNAME", "lukas")
 # Imprint / privacy contact. Blank = the operator's (PORTFOLIO_OWNER_USERNAME) login email.
 LEGAL_CONTACT_EMAIL = os.getenv("LEGAL_CONTACT_EMAIL", "")
 
-# Handles nobody can hold, because the first path segment on portfolio.<BASE_DOMAIN> would mean
-# something else: the host's own top-level paths (dev's Vite forwards /_allauth/ on every host; a
-# claim can't spell it, slugify strips the underscore, but an admin edit can), the SPA's top-level
-# routes (the same build serves it), and "system", which the inactive system user's handle used to
-# be. A constant, not an env var: it follows the routes, not the DNS zone. Checked on claim
-# (validate_handle), on minting (random_handle) and on every public lookup, so a row that holds one
-# anyway still shows nothing.
+CAPTCHA_MAX_NUMBER = env_int("CAPTCHA_MAX_NUMBER", 1_000)
+CAPTCHA_LIFETIME_S = env_int("CAPTCHA_LIFETIME_S", 20 * 60)
+
 RESERVED_HANDLES = {
     "_allauth",
     "about",

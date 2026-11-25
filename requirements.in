@@ -4,6 +4,7 @@
 # Install from the lock: pip install -r requirements.txt  (hashes are checked automatically)
 
 # Django
+altcha              # the portfolio's proof-of-work check (spa/captcha.py); the browser solves with altcha-lib
 celery
 channels
 channels-redis      # CHANNEL_LAYERS is channels_redis.pubsub (settings.py), never the core layer
