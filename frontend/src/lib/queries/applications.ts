@@ -131,13 +131,128 @@ export function parseStatusFilter(raw: unknown): ApplicationStatus | undefined {
   return APPLICATION_STATUSES.find((s) => s === raw);
 }
 
-export type ApplicationsSearch = { status?: ApplicationStatus };
+/** The list's orders. `newest` is the default and stays out of the URL. */
+export const SORT_LABELS = {
+  newest: "Newest first",
+  oldest: "Oldest first",
+  title: "Title A–Z",
+  deadline: "Next deadline",
+} as const;
 
-/** validateSearch for the applications section (the list and, retained, the detail page). */
+export type ApplicationSort = keyof typeof SORT_LABELS;
+
+export const APPLICATION_SORTS = Object.keys(SORT_LABELS) as ApplicationSort[];
+
+/** The list's `?sort=`: a known order other than the default, anything else is the default. */
+export function parseSort(
+  raw: unknown,
+): Exclude<ApplicationSort, "newest"> | undefined {
+  return APPLICATION_SORTS.find(
+    (s): s is Exclude<ApplicationSort, "newest"> => s !== "newest" && s === raw,
+  );
+}
+
+export type ApplicationsSearch = {
+  status?: ApplicationStatus;
+  q?: string;
+  sort?: Exclude<ApplicationSort, "newest">;
+};
+
+/** validateSearch for the applications section (the list and, retained, the detail page).
+ *  `q` stays as typed (the input writes it on every keystroke); only matching trims it. The
+ *  router parses `?q=2026` as a number, so numbers come back as text. */
 export function applicationsSearch(
   search: Record<string, unknown>,
 ): ApplicationsSearch {
-  return { status: parseStatusFilter(search.status) };
+  const q =
+    typeof search.q === "string" || typeof search.q === "number"
+      ? String(search.q)
+      : "";
+  return {
+    status: parseStatusFilter(search.status),
+    q: q || undefined,
+    sort: parseSort(search.sort),
+  };
+}
+
+/** What the search and the orders read of a row. */
+type ListedApplication = {
+  posting_detail: Pick<PostingDetail, "title" | "posting_text">;
+  notes: string;
+  created_at: string;
+  deadline: string | null;
+};
+
+/** Lower case, accents off, ß as ss: "München" finds "munchen", "Straße" finds "strasse". */
+function fold(text: string): string {
+  return text
+    .toLocaleLowerCase("de")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/ß/g, "ss");
+}
+
+/** The rows whose title, posting or notes hold every word of the search, in any order. */
+export function searchApplications<T extends ListedApplication>(
+  rows: T[],
+  q: string | undefined,
+): T[] {
+  const words = fold(q ?? "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return rows;
+  return rows.filter((r) => {
+    const text = fold(
+      `${r.posting_detail.title}\n${r.posting_detail.posting_text}\n${r.notes}`,
+    );
+    return words.every((w) => text.includes(w));
+  });
+}
+
+const titleOrder = new Intl.Collator("de", {
+  sensitivity: "base",
+  numeric: true,
+});
+
+/** A local YYYY-MM-DD, comparable with `deadline` as text. */
+function localDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** A sorted copy. `deadline`: the coming ones (today included) soonest first, then the passed
+ *  ones most recent first, then those without; ties go newest first. */
+export function sortApplications<T extends ListedApplication>(
+  rows: T[],
+  sort: ApplicationSort | undefined,
+  now: Date = new Date(),
+): T[] {
+  const newest = (a: T, b: T) => b.created_at.localeCompare(a.created_at);
+  const today = localDay(now);
+  const deadlineRank = (r: T) =>
+    r.deadline === null ? 2 : r.deadline >= today ? 0 : 1;
+
+  const compare: Record<ApplicationSort, (a: T, b: T) => number> = {
+    newest,
+    oldest: (a, b) => -newest(a, b),
+    title: (a, b) => {
+      const at = a.posting_detail.title.trim();
+      const bt = b.posting_detail.title.trim();
+      if (!at || !bt) return Number(!at) - Number(!bt) || newest(a, b);
+      return titleOrder.compare(at, bt) || newest(a, b);
+    },
+    deadline: (a, b) => {
+      const rank = deadlineRank(a) - deadlineRank(b);
+      if (rank || a.deadline === null || b.deadline === null)
+        return rank || newest(a, b);
+      const byDay =
+        deadlineRank(a) === 0
+          ? a.deadline.localeCompare(b.deadline)
+          : b.deadline.localeCompare(a.deadline);
+      return byDay || newest(a, b);
+    },
+  };
+  return [...rows].sort(compare[sort ?? "newest"]);
 }
 
 /** The filter's options: each status the list holds, in lifecycle order, with its count. */

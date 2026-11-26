@@ -4,7 +4,10 @@ import {
   applicationsSearch,
   filterByStatus,
   parseStatusFilter,
+  parseSort,
   runToApplicationPatch,
+  searchApplications,
+  sortApplications,
   statusCounts,
   toApplicationPayload,
   type ApplicationStatus,
@@ -162,6 +165,133 @@ describe("applicationsSearch", () => {
     expect(applicationsSearch({ status: "sent" })).toEqual({ status: "sent" });
     expect(applicationsSearch({ status: "nope" }).status).toBeUndefined();
     expect(applicationsSearch({}).status).toBeUndefined();
+  });
+
+  it("reads the search text and the sort, dropping what it doesn't know", () => {
+    expect(applicationsSearch({ q: "berlin ", sort: "title" })).toEqual({
+      status: undefined,
+      q: "berlin ", // kept as typed: trimming here would eat the space being typed
+      sort: "title",
+    });
+    expect(applicationsSearch({ q: "", sort: "nope" })).toEqual({
+      status: undefined,
+      q: undefined,
+      sort: undefined,
+    });
+  });
+
+  it("takes a search the router parsed as a number back as text", () => {
+    expect(applicationsSearch({ q: 2026 }).q).toBe("2026");
+  });
+});
+
+describe("parseSort", () => {
+  it("knows the four orders and nothing else", () => {
+    expect(parseSort("oldest")).toBe("oldest");
+    expect(parseSort("deadline")).toBe("deadline");
+    expect(parseSort("newest")).toBeUndefined(); // the default: kept out of the URL
+    expect(parseSort("toString")).toBeUndefined();
+  });
+});
+
+type Searchable = Parameters<typeof searchApplications>[0][number];
+
+const app = (
+  id: number,
+  over: {
+    title?: string;
+    text?: string;
+    notes?: string;
+    created?: string;
+    deadline?: string | null;
+  } = {},
+): Searchable & { id: number } => ({
+  id,
+  posting_detail: { title: over.title ?? "", posting_text: over.text ?? "" },
+  notes: over.notes ?? "",
+  created_at: over.created ?? "2026-11-01T10:00:00Z",
+  deadline: over.deadline ?? null,
+});
+
+describe("searchApplications", () => {
+  const list = [
+    app(1, { title: "Backend Engineer", text: "Python in Berlin" }),
+    app(2, { title: "Frontend Entwickler", text: "React in München" }),
+    app(3, { title: "Data Analyst", notes: "Called Anna on Monday" }),
+  ];
+  const ids = (q: string | undefined) =>
+    searchApplications(list, q).map((r) => r.id);
+
+  it("returns the whole list for an empty or blank search", () => {
+    expect(searchApplications(list, undefined)).toBe(list);
+    expect(searchApplications(list, "   ")).toBe(list);
+  });
+
+  it("matches the title, the posting and the notes, ignoring case", () => {
+    expect(ids("engineer")).toEqual([1]);
+    expect(ids("BERLIN")).toEqual([1]);
+    expect(ids("anna")).toEqual([3]);
+  });
+
+  it("needs every word, in any order", () => {
+    expect(ids("berlin python")).toEqual([1]);
+    expect(ids("berlin react")).toEqual([]);
+  });
+
+  it("ignores accents and spells ß both ways", () => {
+    expect(ids("munchen")).toEqual([2]);
+    expect(
+      searchApplications([app(4, { text: "Straße" })], "strasse"),
+    ).toHaveLength(1);
+    expect(
+      searchApplications([app(5, { text: "Strasse" })], "straße"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("sortApplications", () => {
+  const ids = (rows: { id: number }[]) => rows.map((r) => r.id);
+
+  it("puts the newest first by default, and the oldest first on request", () => {
+    const list = [
+      app(1, { created: "2026-10-01T00:00:00Z" }),
+      app(2, { created: "2026-11-20T00:00:00Z" }),
+      app(3, { created: "2026-11-01T00:00:00Z" }),
+    ];
+    expect(ids(sortApplications(list, undefined))).toEqual([2, 3, 1]);
+    expect(ids(sortApplications(list, "oldest"))).toEqual([1, 3, 2]);
+  });
+
+  it("sorts by title alphabetically, numbers by value, untitled last", () => {
+    const list = [
+      app(1, { title: "" }),
+      app(2, { title: "Übersetzer" }),
+      app(3, { title: "analyst 10" }),
+      app(4, { title: "Analyst 9" }),
+      app(5, { title: "Zoologist" }),
+    ];
+    expect(ids(sortApplications(list, "title"))).toEqual([4, 3, 2, 5, 1]);
+  });
+
+  it("puts the next deadline first, then the passed ones, then those without", () => {
+    const today = new Date(2026, 10, 26); // 26 Nov 2026, local
+    const list = [
+      app(1, { deadline: null }),
+      app(2, { deadline: "2026-12-10" }),
+      app(3, { deadline: "2026-11-20" }), // passed
+      app(4, { deadline: "2026-11-26" }), // today still counts as coming
+      app(5, { deadline: "2026-11-25" }), // passed, more recently
+    ];
+    expect(ids(sortApplications(list, "deadline", today))).toEqual([
+      4, 2, 5, 3, 1,
+    ]);
+  });
+
+  it("never reorders the list it was given", () => {
+    const list = [app(1, { created: "2026-01-01T00:00:00Z" }), app(2)];
+    const copy = [...list];
+    sortApplications(list, undefined);
+    expect(list).toEqual(copy);
   });
 });
 
