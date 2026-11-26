@@ -5,6 +5,7 @@ import {
   filterByStatus,
   parseStatusFilter,
   parseSort,
+  portfolioLinkNote,
   runToApplicationPatch,
   searchApplications,
   sortApplications,
@@ -341,5 +342,18 @@ describe("filterByStatus", () => {
 
   it("returns nothing when no row has the status", () => {
     expect(filterByStatus(rows("draft"), "response")).toEqual([]);
+  });
+});
+
+describe("portfolioLinkNote", () => {
+  it("says the application's own choice wins over the default", () => {
+    expect(portfolioLinkNote(true, false)).toBe("Chosen for this application.");
+    expect(portfolioLinkNote(false, true)).toBe("Chosen for this application.");
+  });
+
+  it("names the default while the application follows it", () => {
+    expect(portfolioLinkNote(null, true)).toBe("On by your default.");
+    expect(portfolioLinkNote(null, false)).toBe("Off by your default.");
+    expect(portfolioLinkNote(null, undefined)).toBe("Off by your default.");
   });
 });

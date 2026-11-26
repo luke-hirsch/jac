@@ -60,7 +60,14 @@ HISTORY_FIELDS = (
     "sent_at",
     "responded_at",
 )
-EDITABLE_FIELDS = ("cover_letter", "letter_meta", "sections_off", "deadline", "notes")
+EDITABLE_FIELDS = (
+    "cover_letter",
+    "letter_meta",
+    "sections_off",
+    "deadline",
+    "notes",
+    "include_portfolio_link",
+)
 MAX_IMPORT_APPLICATIONS = 500
 
 

@@ -635,6 +635,9 @@ class JobApplication(models.Model):
         max_length=12, choices=ResponseOutcome.choices, blank=True
     )
     notes = models.TextField(blank=True)
+    # The portfolio link + QR on this application's exports: None follows the owner's
+    # `profile.portfolio_link_by_default`, True/False is this application's own choice.
+    include_portfolio_link = models.BooleanField(null=True, blank=True, default=None)
     sent_by_system = models.BooleanField(default=False)
     approved_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
@@ -647,6 +650,15 @@ class JobApplication(models.Model):
 
     def __str__(self) -> str:
         return f"Application for {self.posting.title or 'posting'} ({self.status})"
+
+    @property
+    def portfolio_link_on(self) -> bool:
+        """Whether the exports carry the portfolio link: this application's choice, else the
+        owner's default (off)."""
+        if self.include_portfolio_link is not None:
+            return self.include_portfolio_link
+        profile = getattr(self.user, "profile", None)
+        return bool(profile and profile.portfolio_link_by_default)
 
     def clean(self) -> None:
         if (

@@ -672,7 +672,7 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return (
             JobApplication.objects.filter(user=self.request.user)
-            .select_related("posting", "layout")
+            .select_related("posting__address", "layout", "user__profile")
             .prefetch_related("runs")
         )
 
