@@ -8,6 +8,7 @@ export type ProfileRow = {
   username: string;
   handle: string;
   portfolio_public: boolean;
+  portfolio_link_by_default: boolean; // every application's export carries the link unless it says no
   portfolio_always_public: boolean; // read-only: the site owner's portfolio can't be unpublished
   email: string;
   first_name: string;

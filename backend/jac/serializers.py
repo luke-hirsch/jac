@@ -715,6 +715,8 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
     )
     posting_detail = JobPostingSerializer(source="posting", read_only=True)
     runs = GenerationRunSummarySerializer(many=True, read_only=True)
+    # What the export card starts from: the application's choice, else the owner's default.
+    portfolio_link_on = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = JobApplication
@@ -735,6 +737,8 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "delivery_method",
             "response_outcome",
             "notes",
+            "include_portfolio_link",
+            "portfolio_link_on",
             "sent_by_system",
             "approved_at",
             "sent_at",

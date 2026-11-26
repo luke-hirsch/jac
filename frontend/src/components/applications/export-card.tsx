@@ -39,8 +39,10 @@ import {
   type ExportScope,
 } from "@/lib/export";
 
-import { PortfolioLinkSection } from "@/components/applications/portfolio-link-section";
-import { type PortfolioLinkRow } from "@/lib/queries/portfolio";
+import {
+  PortfolioLinkSection,
+  usePortfolioLinkChoice,
+} from "@/components/applications/portfolio-link-section";
 
 export function ExportCard({
   app,
@@ -59,8 +61,7 @@ export function ExportCard({
   const library = useAttachments();
   const [scope, setScope] = useState<ExportScope>("complete");
   const [busy, setBusy] = useState(false);
-  const [link, setLink] = useState<PortfolioLinkRow | null>(null);
-  const [includeQr, setIncludeQr] = useState(false);
+  const portfolio = usePortfolioLinkChoice(app);
   const [preview, setPreview] = useState<{
     url: string;
     info: BuiltPdf;
@@ -86,7 +87,7 @@ export function ExportCard({
       db: careerDb.data,
       profile: profile.data,
       scope,
-      portfolioUrl: includeQr && link ? link.url : undefined,
+      portfolioUrl: await portfolio.exportUrl(),
       cachedFit: (key) => readPreflightCache(key)?.result,
     });
   }
@@ -216,13 +217,7 @@ export function ExportCard({
           page budget by dropping the lowest-ranked entries; the letter is never
           cut, only flagged.
         </p>
-        <PortfolioLinkSection
-          app={app}
-          link={link}
-          onLink={setLink}
-          includeQr={includeQr}
-          onIncludeQr={setIncludeQr}
-        />
+        <PortfolioLinkSection app={app} choice={portfolio} />
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label className="text-xs">Scope</Label>

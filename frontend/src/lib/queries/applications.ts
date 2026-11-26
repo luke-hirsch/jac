@@ -56,6 +56,8 @@ export type ApplicationRow = {
   delivery_method: DeliveryMethod | "";
   response_outcome: ResponseOutcome | "";
   notes: string;
+  include_portfolio_link: boolean | null; // null = follow the profile's portfolio_link_by_default
+  portfolio_link_on: boolean; // read-only: the choice above, else the default
   sent_by_system: boolean;
   approved_at: string | null;
   sent_at: string | null;
@@ -78,6 +80,7 @@ export type ApplicationPatch = Partial<{
   pinned_entries?: string[];
   sections_off?: string[];
   attachments: number[];
+  include_portfolio_link: boolean | null;
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */
@@ -103,6 +106,15 @@ export function runToApplicationPatch(
     letter_meta: letterMetaFromResult(result.cover_letter),
     pinned_entries: pinnedIds(cv),
   };
+}
+
+/** Where the export card's portfolio-link choice comes from, said beside the switch. */
+export function portfolioLinkNote(
+  include: boolean | null,
+  byDefault: boolean | undefined,
+): string {
+  if (include !== null) return "Chosen for this application.";
+  return byDefault ? "On by your default." : "Off by your default.";
 }
 
 export const STATUS_LABELS: Record<ApplicationStatus, string> = {

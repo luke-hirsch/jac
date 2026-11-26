@@ -461,6 +461,20 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(self.alice.profile.display_name, "Alice A.")
         self.assertEqual(self.alice.profile.theme, "dark")
 
+    def test_the_portfolio_link_is_off_by_default_and_switches_on(self):
+        """jac is public: an account doesn't point its CVs at this site until its owner says so."""
+        self.client.force_login(self.alice)
+        data = self.client.get(self.PROFILE_URL).json()
+        self.assertIs(data["portfolio_link_by_default"], False)
+        resp = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"portfolio_link_by_default": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.alice.profile.refresh_from_db()
+        self.assertTrue(self.alice.profile.portfolio_link_by_default)
+
     def test_each_user_sees_only_their_own_profile(self):
         self.client.force_login(self.alice)
         alice_id = self.client.get(self.PROFILE_URL).json()["id"]

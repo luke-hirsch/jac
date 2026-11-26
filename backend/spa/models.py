@@ -80,6 +80,10 @@ class UserProfile(models.Model):
     # so: a handle is minted at signup, and trying jac must not publish anyone's career DB. A link
     # the owner shares works either way (spa.portfolio.is_published).
     portfolio_public = models.BooleanField(default=False)
+    # Whether an application's exports carry its portfolio link + QR unless the application says
+    # otherwise (JobApplication.include_portfolio_link). Off until the owner says so: jac is
+    # public, and someone trying it doesn't want their CV pointing at this site.
+    portfolio_link_by_default = models.BooleanField(default=False)
 
     # Professional contact — also used to pre-fill job applications in JAC
     phone = models.CharField(max_length=30, blank=True)

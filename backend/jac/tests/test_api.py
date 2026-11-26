@@ -1064,6 +1064,78 @@ class PinnedEntriesApiTests(APITestCase):
         self.assertEqual(self._patch_pins(pins).status_code, 400)
 
 
+class PortfolioLinkChoiceApiTests(APITestCase):
+    """Whether an application's exports carry the portfolio link + QR: its own choice
+    (`include_portfolio_link`), else the owner's `portfolio_link_by_default`, which is off.
+    jac is public, and someone trying it doesn't want their CV pointing at this site."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/"
+
+    def _by_default(self, on):
+        self.user.profile.portfolio_link_by_default = on
+        self.user.profile.save(update_fields=["portfolio_link_by_default"])
+
+    def _row(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200)
+        return r.data
+
+    def test_off_unless_someone_says_otherwise(self):
+        row = self._row()
+        self.assertIsNone(row["include_portfolio_link"])
+        self.assertFalse(row["portfolio_link_on"])
+
+    def test_the_default_turns_it_on_for_every_application_that_hasnt_chosen(self):
+        later = make_application(self.user)
+        self._by_default(True)
+        self.assertTrue(self._row()["portfolio_link_on"])
+        rows = self.client.get(APPS_URL).data["results"]
+        self.assertEqual(
+            {r["id"]: r["portfolio_link_on"] for r in rows},
+            {self.application.pk: True, later.pk: True},
+        )
+
+    def test_an_application_turns_it_off_against_the_default(self):
+        self._by_default(True)
+        r = self.client.patch(
+            self.url, {"include_portfolio_link": False}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertFalse(r.data["include_portfolio_link"])
+        self.assertFalse(r.data["portfolio_link_on"])
+
+    def test_an_application_turns_it_on_without_the_default(self):
+        r = self.client.patch(self.url, {"include_portfolio_link": True}, format="json")
+        self.assertTrue(r.data["portfolio_link_on"])
+
+    def test_null_follows_the_default_again(self):
+        self._by_default(True)
+        self.client.patch(self.url, {"include_portfolio_link": False}, format="json")
+        r = self.client.patch(self.url, {"include_portfolio_link": None}, format="json")
+        self.assertIsNone(r.data["include_portfolio_link"])
+        self.assertTrue(r.data["portfolio_link_on"])
+
+    def test_the_list_reads_the_default_with_the_rows_not_once_per_row(self):
+        from django.test.utils import CaptureQueriesContext
+
+        def queries():
+            with CaptureQueriesContext(connection) as ctx:
+                self.assertEqual(self.client.get(APPS_URL).status_code, 200)
+            return len(ctx)
+
+        one = queries()
+        for _ in range(3):
+            make_application(self.user)
+        self.assertEqual(queries(), one)
+
+
 @override_settings(HIRSCHAI=TEST_HIRSCHAI)
 class GenerationRunParamsTests(APITestCase):
     """[fullstack]-model-knobs: per-run effort (`params`), validated against the run's
@@ -1960,6 +2032,7 @@ class ApplicationTransferApiTests(APITestCase):
             sections_off=["certifications"],
             notes="Called on Monday.",
             deadline="2026-12-01",
+            include_portfolio_link=True,
             status=JobApplication.StatusChoices.sent,
             delivery_method=JobApplication.DeliveryMethod.email,
             sent_at=timezone.now() - timedelta(days=3),
@@ -2019,6 +2092,7 @@ class ApplicationTransferApiTests(APITestCase):
         self.assertFalse(GenerationRun.objects.exists())
         self.assertEqual(self._export(), data)
         imported = JobApplication.objects.get(user=self.other, status="sent")
+        self.assertTrue(imported.include_portfolio_link)
         job = Job.objects.get(user=self.other, title=self.job.title)
         self.assertEqual(imported.pinned_entries, [f"job:{job.pk}"])
         self.assertEqual(imported.cv_content["jobs"][0]["id"], f"job:{job.pk}")

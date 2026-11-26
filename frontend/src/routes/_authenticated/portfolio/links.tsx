@@ -3,6 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -19,6 +22,7 @@ import {
   useRevokeLink,
   type PortfolioLinkRow,
 } from "@/lib/queries/portfolio";
+import { useProfile, useUpdateProfile } from "@/lib/queries/profile";
 
 export const Route = createFileRoute("/_authenticated/portfolio/links")({
   component: LinksTab,
@@ -43,6 +47,7 @@ function LinksTab() {
   return (
     <div className="space-y-4">
       <StandardPageCard />
+      <LinkByDefaultCard />
 
       <div className="flex justify-end">
         <Button onClick={openNew}>New manual link</Button>
@@ -52,7 +57,8 @@ function LinksTab() {
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (links.data ?? []).length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No links yet. Create a manual link, or add one from an application's export card.
+          No links yet. Create a manual link, or add one from an application's
+          export card.
         </p>
       ) : (
         <Table>
@@ -67,7 +73,10 @@ function LinksTab() {
           </TableHeader>
           <TableBody>
             {(links.data ?? []).map((link) => (
-              <TableRow key={link.id} className={link.revoked_at ? "opacity-50" : ""}>
+              <TableRow
+                key={link.id}
+                className={link.revoked_at ? "opacity-50" : ""}
+              >
                 <TableCell className="font-mono">
                   <a
                     href={link.url}
@@ -100,7 +109,11 @@ function LinksTab() {
                   >
                     Copy
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(link)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openEdit(link)}
+                  >
                     Edit
                   </Button>
                   {link.revoked_at ? (
@@ -133,5 +146,43 @@ function LinksTab() {
         <LinkEditor open={open} link={editing} onOpenChange={setOpen} />
       ) : null}
     </div>
+  );
+}
+
+/** The account's default for the export card's portfolio-link switch. Off out of the box:
+ *  jac is public, and most people trying it don't want their CV pointing at this site. */
+function LinkByDefaultCard() {
+  const profile = useProfile();
+  const update = useUpdateProfile();
+  if (!profile.data) return null;
+  const on = profile.data.portfolio_link_by_default;
+
+  return (
+    <Card>
+      <CardContent className="flex items-start gap-2">
+        <Checkbox
+          id="portfolio-link-by-default"
+          checked={on}
+          disabled={update.isPending}
+          onCheckedChange={(v) =>
+            update.mutate(
+              { portfolio_link_by_default: v === true },
+              { onError: () => toast.error("Couldn't save the default") },
+            )
+          }
+          className="mt-0.5"
+        />
+        <div className="space-y-0.5">
+          <Label htmlFor="portfolio-link-by-default">
+            Add my portfolio link to every application by default
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Each application gets its own link here, with a QR code in its CV
+            header. An application can still switch it off on its export card,
+            and one you've switched by hand keeps its choice.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

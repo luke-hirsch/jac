@@ -89,6 +89,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "username",
             "handle",
             "portfolio_public",
+            "portfolio_link_by_default",
             "portfolio_always_public",
             "email",
             "first_name",
