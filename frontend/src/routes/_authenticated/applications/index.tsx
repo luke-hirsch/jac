@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { SearchIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,20 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
@@ -19,8 +33,12 @@ import { ExportButton, ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
 import {
+  APPLICATION_SORTS,
   filterByStatus,
   postingsToBatch,
+  searchApplications,
+  SORT_LABELS,
+  sortApplications,
   STATUS_LABELS,
   statusCounts,
   useApplications,
@@ -28,6 +46,7 @@ import {
   useCreateApplicationsBatch,
   useDeleteApplication,
   type ApplicationRow,
+  type ApplicationSort,
   type ApplicationStatus,
 } from "@/lib/queries/applications";
 import {
@@ -55,8 +74,11 @@ function runBadge(row: ApplicationRow): string | null {
 function ApplicationsPage() {
   const navigate = useNavigate();
   const apps = useApplications();
-  const { status } = Route.useSearch();
-  const shown = filterByStatus(apps.data ?? [], status);
+  const { status, q, sort } = Route.useSearch();
+  const shown = sortApplications(
+    filterByStatus(searchApplications(apps.data ?? [], q), status),
+    sort,
+  );
   const create = useCreateApplication();
   const batch = useCreateApplicationsBatch();
   const destroy = useDeleteApplication();
@@ -176,13 +198,17 @@ function ApplicationsPage() {
           ) : null}
         </CardHeader>
         <CardContent>
+          {apps.data && (apps.data.length > 1 || q || sort) ? (
+            <ListTools
+              rows={apps.data}
+              found={q?.trim() ? shown.length : null}
+            />
+          ) : null}
           {apps.data?.length ? (
             <StatusFilter rows={apps.data} active={status} />
           ) : null}
-          {apps.data?.length && status && !shown.length ? (
-            <p className="py-3 text-sm text-muted-foreground">
-              No application has the status {STATUS_LABELS[status]}.
-            </p>
+          {apps.data?.length && !shown.length ? (
+            <NothingShown q={q} status={status} />
           ) : apps.data?.length ? (
             <ul className="divide-y">
               {shown.map((a) => (
@@ -261,6 +287,131 @@ function ApplicationsPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** The search over title, posting and notes, and the order. Both live in the URL like the
+ *  status. The input keeps its own text so typing never waits on the router. */
+function ListTools({
+  rows,
+  found,
+}: {
+  rows: ApplicationRow[];
+  found: number | null;
+}) {
+  const navigate = useNavigate({ from: Route.fullPath });
+  const { q, sort } = Route.useSearch();
+  const [text, setText] = useState(q ?? "");
+  // Sorting by deadline only means something once an application has one.
+  const sorts = APPLICATION_SORTS.filter(
+    (s) =>
+      s !== "deadline" || sort === "deadline" || rows.some((r) => r.deadline),
+  );
+
+  const search = (value: string) => {
+    setText(value);
+    navigate({
+      search: (prev) => ({ ...prev, q: value || undefined }),
+      replace: true,
+    });
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pb-2">
+      <InputGroup className="min-w-48 flex-1">
+        <InputGroupAddon>
+          <SearchIcon />
+        </InputGroupAddon>
+        <InputGroupInput
+          type="text"
+          enterKeyHint="search"
+          aria-label="Search applications"
+          placeholder="Search title, posting, notes…"
+          value={text}
+          onChange={(e) => search(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && text) {
+              e.preventDefault();
+              search("");
+            }
+          }}
+        />
+        {text && (
+          <InputGroupAddon align="inline-end">
+            {found !== null && (
+              <span className="tabular-nums" aria-live="polite">
+                {found} found
+              </span>
+            )}
+            <InputGroupButton
+              size="icon-xs"
+              aria-label="Clear the search"
+              onClick={() => search("")}
+            >
+              <XIcon />
+            </InputGroupButton>
+          </InputGroupAddon>
+        )}
+      </InputGroup>
+      <Select
+        value={sort ?? "newest"}
+        onValueChange={(v) =>
+          navigate({
+            search: (prev) => ({
+              ...prev,
+              sort: v === "newest" ? undefined : (v as typeof sort),
+            }),
+            replace: true,
+          })
+        }
+      >
+        <SelectTrigger className="w-44" aria-label="Sort applications">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {sorts.map((s: ApplicationSort) => (
+            <SelectItem key={s} value={s}>
+              {SORT_LABELS[s]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Why the list is empty although applications exist, and the way back to all of them. */
+function NothingShown({
+  q,
+  status,
+}: {
+  q: string | undefined;
+  status: ApplicationStatus | undefined;
+}) {
+  const navigate = useNavigate({ from: Route.fullPath });
+  const words = q?.trim();
+  return (
+    <div className="flex flex-wrap items-center gap-2 py-3 text-sm text-muted-foreground">
+      <p>
+        {words
+          ? `Nothing matches “${words}”${status ? ` among ${STATUS_LABELS[status]}` : ""}.`
+          : `No application has the status ${STATUS_LABELS[status!]}.`}
+      </p>
+      {words && status && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            navigate({
+              search: (prev) => ({ ...prev, status: undefined }),
+              replace: true,
+            })
+          }
+        >
+          Search every status
+        </Button>
+      )}
     </div>
   );
 }
