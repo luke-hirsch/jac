@@ -56,9 +56,9 @@ import {
 
 function toneClass(tone: "green" | "amber" | "muted") {
   return tone === "green"
-    ? "bg-green-100 text-green-800"
+    ? "bg-success/15 text-success"
     : tone === "amber"
-      ? "bg-amber-100 text-amber-900"
+      ? "bg-warning/15 text-warning"
       : "bg-muted text-muted-foreground";
 }
 
@@ -410,7 +410,7 @@ export function GeneratePanel({
               : "Generate"}
           </Button>
           {!running && pickedReason && (
-            <span className="text-sm text-amber-700">
+            <span className="text-sm text-warning">
               {providerLabel(rows, picked!.provider)}: {pickedReason}. See
               Account → LLM providers.
             </span>
@@ -436,10 +436,10 @@ export function GeneratePanel({
           </p>
         )}
 
-        {hint && <p className="text-xs text-amber-700">{hint}</p>}
+        {hint && <p className="text-xs text-warning">{hint}</p>}
 
         {stuckInQueue && (
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-warning">
             Nothing is ahead of this run, and nobody has picked it up for{" "}
             {ageSeconds}s — the generation worker may not be running. It stays
             in line; you can abort it.
@@ -461,7 +461,7 @@ export function GeneratePanel({
           )}
 
         {running && socket.kind === "retrying" && (
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-warning">
             Live connection lost — retrying in{" "}
             {Math.max(1, Math.round(socket.delayMs / 1000))}s…
           </p>
@@ -479,16 +479,16 @@ export function GeneratePanel({
         )}
 
         {result?.cover_letter.is_stub && (
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-warning">
             The model couldn't write a letter for this run, so the letter below
             is a placeholder. Export refuses it until it's replaced: generate
             again, or write it by hand.
           </p>
         )}
         {result && grounding && (
-          <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/40 p-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2 rounded-sm border bg-muted/40 p-2 text-sm">
             <span
-              className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+              className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground"
               title="How this run was produced."
             >
               {result.meta.mode} · {providerLabel(rows, result.meta.provider)}
@@ -496,7 +496,7 @@ export function GeneratePanel({
             </span>
 
             <span
-              className={`rounded px-2 py-0.5 text-xs ${toneClass(grounding.tone)}`}
+              className={`rounded-sm px-2 py-0.5 text-xs ${toneClass(grounding.tone)}`}
               title={result.cover_letter.grounding.claims.join("\n")}
             >
               {grounding.label}
@@ -504,7 +504,7 @@ export function GeneratePanel({
 
             {register && (
               <span
-                className={`rounded px-2 py-0.5 text-xs ${toneClass(register.tone)}`}
+                className={`rounded-sm px-2 py-0.5 text-xs ${toneClass(register.tone)}`}
                 title={
                   register.tone === "amber"
                     ? "These pronouns contradict the letter's form of address. Flagged, not rewritten — fix them in the letter editor."
@@ -517,7 +517,7 @@ export function GeneratePanel({
 
             {style && (
               <span
-                className={`rounded px-2 py-0.5 text-xs ${toneClass(style.tone)}`}
+                className={`rounded-sm px-2 py-0.5 text-xs ${toneClass(style.tone)}`}
                 title={result.cover_letter.style_warnings?.join("\n")}
               >
                 {style.label}
@@ -551,7 +551,7 @@ export function GeneratePanel({
                     <button
                       type="button"
                       onClick={() => onRunSelected(r.id)}
-                      className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-muted ${
+                      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-muted ${
                         r.id === activeRunId ? "bg-muted" : ""
                       }`}
                     >

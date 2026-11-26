@@ -140,7 +140,7 @@ function LinkBadge({ a }: { a: Attachment }) {
   const link = linkOf(a);
   if (!link) return null;
   return (
-    <Badge variant="secondary" className="text-[10px]">
+    <Badge variant="secondary">
       {LINK_LABELS[link]}
     </Badge>
   );

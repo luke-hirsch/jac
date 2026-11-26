@@ -32,6 +32,7 @@ from spa.models import (
     UserProfile,
 )
 from spa.portfolio import (
+    brand_for,
     build_payload,
     bump_visit,
     link_owner_for_handle,
@@ -365,8 +366,8 @@ class PortfolioNativeView(PublicPortfolioAPIView):
 
 class PortfolioMetaView(PublicPortfolioAPIView):
     """GET: the questionnaire's building blocks — the owner's REAL domain shortlist (only
-    domains with content, so no branch dead-ends) plus the style-axis vocab, and the owner's
-    accent, which the questionnaire wears before there's a payload to carry it."""
+    domains with content, so no branch dead-ends) plus the style-axis vocab, and the colour the
+    questionnaire wears before there's a payload to carry it (`brand_for`, as the payload's)."""
 
     def get(self, request, handle):
         owner = owner_for_handle(handle)
@@ -375,7 +376,7 @@ class PortfolioMetaView(PublicPortfolioAPIView):
         return Response(
             {
                 "domains": owner_domains(owner),
-                "accent": owner.profile.accent_color or "",  # type: ignore
+                "accent": brand_for(owner),
                 "tones": [
                     {"value": v, "label": str(label)}
                     for v, label in PersonalityProfile.Tone.choices
@@ -386,6 +387,17 @@ class PortfolioMetaView(PublicPortfolioAPIView):
                 ],
             }
         )
+
+
+class SiteBrandView(PublicPortfolioAPIView):
+    """GET: the site owner's colour, `""` when they have none. The SPA wears it wherever no page
+    names its own: the sign-in pages, the about page, a 404 (components/brand-provider.tsx). Not
+    throttled: every SPA load asks once, and it's what the apex landing prints for anyone."""
+
+    throttle_classes = []
+
+    def get(self, request):
+        return Response({"brand": brand_for(None)})
 
 
 class PortfolioPersonaliseView(PublicPortfolioAPIView):

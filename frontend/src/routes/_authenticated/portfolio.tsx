@@ -1,5 +1,7 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { Page } from "@/components/page";
+import { Switch } from "@/components/ui/switch";
 import { baseDomain } from "@/lib/host";
 import {
   isLive,
@@ -7,6 +9,7 @@ import {
   publishNotice,
 } from "@/lib/portfolio/publish";
 import { useProfile, useUpdateProfile } from "@/lib/queries/profile";
+import { PageTitle } from "@/components/heading";
 
 const TABS = [
   { to: "/portfolio/links", label: "Links" },
@@ -24,16 +27,14 @@ function PublishSwitch() {
   const p = profile.data;
   const base = baseDomain();
   return (
-    <section className="space-y-1 rounded-md border p-4">
-      <label className="flex items-center gap-2 text-sm font-medium">
-        <input
-          type="checkbox"
-          role="switch"
+    <section className="space-y-2 border p-4 md:p-6">
+      <label className="flex items-center gap-3 text-sm font-medium">
+        <Switch
           checked={isLive(p)}
           disabled={p.portfolio_always_public || update.isPending}
-          onChange={(e) =>
+          onCheckedChange={(on) =>
             update.mutate(
-              { portfolio_public: e.target.checked },
+              { portfolio_public: on },
               { onError: () => toast.error("Could not save that") },
             )
           }
@@ -50,9 +51,9 @@ function PublishSwitch() {
 
 function PortfolioLayout() {
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
+    <Page width="default">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Portfolio</h1>
+        <PageTitle>Portfolio</PageTitle>
         <p className="text-sm text-muted-foreground">
           The personalised pages recruiters and visitors see.
         </p>
@@ -71,6 +72,6 @@ function PortfolioLayout() {
         ))}
       </nav>
       <Outlet />
-    </div>
+    </Page>
   );
 }

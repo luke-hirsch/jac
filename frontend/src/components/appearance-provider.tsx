@@ -7,18 +7,26 @@
  *
  * The profile query only runs on the jac host: on the apex and the portfolio host the
  * visitor is anonymous, and firing a 403 on every public page view is noise. Anonymous
- * visitors get the system preference, which is what they want anyway.
+ * visitors get the system preference until they pick something with the footer's switch
+ * (components/appearance-switch.tsx), which writes localStorage, like the pre-paint script reads.
  *
  * The appearance is derived, not mirrored into state: the profile page writes its PATCH
  * response into the `["profile"]` cache, so a changed setting re-renders this provider
  * and applies without a reload.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { siteHost } from "@/lib/host";
 import {
   ALL_APPEARANCE_CLASSES,
+  type Appearance,
   APPEARANCE_KEY,
   coerceAppearance,
   readAppearance,
@@ -26,7 +34,10 @@ import {
   themeClasses,
 } from "@/lib/appearance";
 import type { ProfileRow } from "@/lib/queries/profile";
-import { ResolvedThemeContext } from "./appearance-context";
+import {
+  AppearanceSettingContext,
+  ResolvedThemeContext,
+} from "./appearance-context";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -53,7 +64,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia(DARK_QUERY).matches,
   );
-  const [stored] = useState(() => readAppearance(readStored()));
+  const [stored, setStored] = useState(() => readAppearance(readStored()));
 
   // `theme: system` must keep following the OS while the tab is open, not just at load.
   useEffect(() => {
@@ -88,9 +99,21 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     el.classList.add(...themeClasses({ theme, contrast }, systemDark));
   }, [theme, contrast, systemDark]);
 
+  // A visitor's own pick (the footer's switch). Not on jac, where the profile decides.
+  const pick = useCallback((a: Appearance) => {
+    writeStored(JSON.stringify(a));
+    setStored(a);
+  }, []);
+  const setting = useMemo(
+    () => ({ appearance: { theme, contrast }, set: onJacHost ? null : pick }),
+    [theme, contrast, onJacHost, pick],
+  );
+
   return (
-    <ResolvedThemeContext.Provider value={resolveTheme(theme, systemDark)}>
-      {children}
-    </ResolvedThemeContext.Provider>
+    <AppearanceSettingContext.Provider value={setting}>
+      <ResolvedThemeContext.Provider value={resolveTheme(theme, systemDark)}>
+        {children}
+      </ResolvedThemeContext.Provider>
+    </AppearanceSettingContext.Provider>
   );
 }

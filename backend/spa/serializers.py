@@ -80,6 +80,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
     # The site owner's portfolio is public whatever `portfolio_public` says; the SPA must not
     # offer them a switch that does nothing.
     portfolio_always_public = serializers.SerializerMethodField()
+    # The colour jac wears for this user (spa.portfolio.brand_for): `accent_color`, else the site
+    # owner's, else "" for the theme's fallback. `accent_color` stays the field they set.
+    brand = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
@@ -106,6 +109,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "theme",
             "contrast",
             "accent_color",
+            "brand",
             "email_reminders",
             "updated_at",
             "street",
@@ -128,6 +132,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
         from spa.portfolio import is_site_owner
 
         return is_site_owner(obj.user)
+
+    def get_brand(self, obj) -> str:
+        from spa.portfolio import brand_for
+
+        return brand_for(obj.user)
 
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", None)

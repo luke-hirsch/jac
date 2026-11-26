@@ -97,7 +97,7 @@ export function MediaPlayer({ item }: { item: PortfolioItem }) {
           onClick={toggle}
           aria-label={`${playing ? "Pause" : "Play"} ${name}`}
           aria-describedby={descId}
-          className="flex size-[60px] shrink-0 items-center justify-center rounded-full bg-studio-accent text-studio-ink"
+          className="flex size-15 shrink-0 items-center justify-center bg-primary text-primary-foreground"
         >
           {playing ? (
             <PauseIcon className="size-6" fill="currentColor" aria-hidden />
@@ -119,7 +119,7 @@ export function MediaPlayer({ item }: { item: PortfolioItem }) {
         ) : null}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           {item.title ? (
-            <h3 className="font-display text-lg leading-snug font-semibold">
+            <h3 className="font-heading text-lg leading-snug font-semibold">
               {item.title}
             </h3>
           ) : null}
@@ -132,7 +132,7 @@ export function MediaPlayer({ item }: { item: PortfolioItem }) {
             type="button"
             onClick={fullscreen}
             aria-label="Full screen"
-            className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+            className="flex size-11 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
           >
             <MaximizeIcon className="size-5" aria-hidden />
           </button>
@@ -162,16 +162,16 @@ export function MediaPlayer({ item }: { item: PortfolioItem }) {
         onPointerMove={(e) => {
           if (e.currentTarget.hasPointerCapture(e.pointerId)) seekPointer(e);
         }}
-        className="flex h-6 cursor-pointer touch-none items-center rounded-full aria-disabled:cursor-default"
+        className="flex h-6 cursor-pointer touch-none items-center aria-disabled:cursor-default"
       >
-        <span className="h-1.5 w-full overflow-hidden rounded-full bg-studio-raise">
+        <span className="h-1.5 w-full overflow-hidden bg-muted">
           <span
-            className="block h-full rounded-full bg-studio-accent"
+            className="block h-full bg-primary"
             style={{ width: `${progressOf(current, duration) * 100}%` }}
           />
         </span>
       </div>
-      <div className="-mt-3 flex justify-between text-[13px] text-muted-foreground tabular-nums">
+      <div className="-mt-3 flex justify-between text-xs text-muted-foreground tabular-nums">
         <span>{mediaClock(current)}</span>
         <span>{ready ? mediaClock(duration) : "–:––"}</span>
       </div>

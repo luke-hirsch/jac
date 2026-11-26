@@ -1,7 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { StudioButton } from "@/components/portfolio/studio";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
+import { Button } from "@/components/ui/button";
+import { GUTTER } from "@/lib/layout";
 import { clearStamp } from "@/lib/portfolio/stamp";
+import { cn } from "@/lib/utils";
 
 /** Shown on every personalised view so the visitor is never trapped. "What's this?" explains
  *  the page (/about/); "Start over" clears this owner's stamp and returns to their
@@ -20,29 +22,34 @@ export function EscapeHatch({
   const goHome = useOwnerHome(handle);
   return (
     <div className="border-b">
-      <div className="mx-auto flex max-w-[1160px] flex-wrap items-center justify-between gap-x-4 gap-y-1 px-[clamp(1rem,4vw,3rem)] py-3.5 text-sm">
+      <div
+        className={cn(
+          "mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3.5 text-sm",
+          GUTTER,
+        )}
+      >
         <span className="text-muted-foreground">
           {label}{" "}
           <Link
             to="/about/"
             search={{ from: handle }}
-            className="underline underline-offset-[3px] hover:text-foreground"
+            className="underline underline-offset-4 hover:text-foreground"
           >
             What's this?
           </Link>
         </span>
         <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
           {onShuffle ? (
-            <StudioButton
+            <Button
               variant="link"
               size="sm"
               className="h-auto p-0"
               onClick={onShuffle}
             >
               Feeling lucky again
-            </StudioButton>
+            </Button>
           ) : null}
-          <StudioButton
+          <Button
             variant="link"
             size="sm"
             className="h-auto p-0"
@@ -52,7 +59,7 @@ export function EscapeHatch({
             }}
           >
             Start over
-          </StudioButton>
+          </Button>
         </span>
       </div>
     </div>

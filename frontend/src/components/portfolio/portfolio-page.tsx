@@ -5,7 +5,7 @@ import {
   NowCard,
 } from "@/components/portfolio/item-card";
 import { SkillNetwork } from "@/components/portfolio/skill-network";
-import { SectionHeading } from "@/components/portfolio/studio";
+import { SectionHeading } from "@/components/portfolio/section-heading";
 import { YearBars } from "@/components/portfolio/year-bars";
 import { anchorId, isEmptyPayload, pageAnchors } from "@/lib/portfolio/content";
 import {
@@ -17,12 +17,15 @@ import {
 } from "@/lib/portfolio/studio";
 import { yearBars } from "@/lib/portfolio/timeline";
 import type { PortfolioItem, PortfolioPayload } from "@/lib/queries/portfolio";
+import { GUTTER } from "@/lib/layout";
+import { cn } from "@/lib/utils";
 
 const notSkill = (i: PortfolioItem) => i.type !== "skill";
 
-/** The card grids: as many 340 px columns as fit, one on a phone. A text block spans the row. */
+/** The card grids: one column on a phone, two on a tablet, three from a laptop. A text block
+ *  spans the row. */
 const GRID =
-  "grid grid-cols-[repeat(auto-fill,minmax(min(100%,21.25rem),1fr))] gap-4";
+  "grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-3 xl:gap-8";
 
 /** The big closing line: the last call to action's label, and where it goes written out. When it
  *  repeats the hero's card, its title and pitch were said up there already. */
@@ -33,18 +36,16 @@ function Closing({ item, repeat }: NonNullable<StudioSections["closing"]>) {
     <section
       id={repeat ? undefined : anchorId(item.id)}
       aria-label={item.data?.label}
-      className="flex scroll-mt-6 flex-col gap-5 pt-[clamp(1rem,4vw,2rem)] pb-[clamp(1.5rem,4vw,3rem)]"
+      className="flex scroll-mt-6 flex-col gap-5 pt-4 pb-6 md:pt-8 md:pb-12"
     >
       {!repeat && item.title ? (
-        <p className="font-display text-[15px] font-medium text-studio-accent">
-          {item.title}
-        </p>
+        <p className="font-heading font-medium text-primary">{item.title}</p>
       ) : null}
-      <h2 className="font-display text-[clamp(3.5rem,12vw,10.5rem)] leading-[0.9] font-bold tracking-[-0.05em] [overflow-wrap:anywhere]">
+      <h2 className="font-heading text-6xl leading-none font-bold tracking-tight wrap-anywhere sm:text-8xl lg:text-9xl">
         {item.data?.label}
       </h2>
       {!repeat && item.body ? (
-        <p className="max-w-[56ch] text-lg whitespace-pre-line text-studio-soft">
+        <p className="max-w-xl text-lg whitespace-pre-line text-muted-foreground">
           {item.body}
         </p>
       ) : null}
@@ -53,7 +54,7 @@ function Closing({ item, repeat }: NonNullable<StudioSections["closing"]>) {
         {...(href.startsWith("mailto:")
           ? {}
           : { target: "_blank", rel: "noreferrer" })}
-        className="w-fit text-[clamp(1.125rem,2vw,1.375rem)] [overflow-wrap:anywhere] text-studio-accent underline underline-offset-[6px]"
+        className="w-fit text-lg wrap-anywhere text-primary underline underline-offset-4 md:text-xl"
       >
         {addressLabel(href)}
       </a>
@@ -61,7 +62,7 @@ function Closing({ item, repeat }: NonNullable<StudioSections["closing"]>) {
   );
 }
 
-/** The public page in the Studio look (lib/portfolio/studio.ts splits it): the hero with the
+/** The public page (lib/portfolio/studio.ts splits it, theme.css colours it): the hero with the
  *  owner's first call to action as its "now" card, the first key figures as tiles, the numbered
  *  highlights, the skill network, the jobs and education as year bars, the rest, and the last
  *  call to action as the closing line. Every section is there only when the data is. */
@@ -99,52 +100,60 @@ export function PortfolioPage({
     .filter((u): u is string => u !== null);
 
   return (
-    <main className="mx-auto flex max-w-[1160px] flex-col gap-[clamp(3.5rem,8vw,6rem)] px-[clamp(1rem,4vw,3rem)] pb-[clamp(1.5rem,4vw,3rem)]">
-      <div className="flex flex-col gap-[clamp(2.5rem,6vw,4rem)]">
-        <header className="flex flex-wrap items-end gap-10 pt-[clamp(3.5rem,9vw,6.5rem)]">
-          <div className="flex min-w-0 flex-[999_1_35rem] flex-col gap-5">
+    <main
+      className={cn(
+        "mx-auto flex max-w-6xl flex-col gap-14 pb-6 sm:pb-12 md:gap-24",
+        GUTTER,
+      )}
+    >
+      <div className="flex flex-col gap-10 md:gap-16">
+        <header className="grid items-end gap-10 pt-14 md:pt-24 lg:grid-cols-3">
+          <div
+            className={cn(
+              "flex min-w-0 flex-col gap-5",
+              page.now ? "lg:col-span-2" : "lg:col-span-3",
+            )}
+          >
             {owner.avatar_url ? (
               <img
                 src={owner.avatar_url}
                 alt=""
-                className="size-16 rounded-full object-cover"
+                className="size-16 object-cover"
               />
             ) : null}
             {kicker ? (
-              <p className="font-display text-[15px] font-medium text-studio-accent">
-                {kicker}
-              </p>
+              <p className="font-heading font-medium text-primary">{kicker}</p>
             ) : null}
-            <h1 className="font-display text-[clamp(3.25rem,11vw,9rem)] leading-[0.88] font-bold tracking-[-0.045em] text-balance [overflow-wrap:anywhere]">
+            <h1 className="font-heading text-5xl leading-none font-bold tracking-tight text-balance wrap-anywhere sm:text-7xl lg:text-8xl">
               {owner.display_name}
             </h1>
             {intro ? (
-              <p className="max-w-[56ch] text-[clamp(1.0625rem,1.8vw,1.25rem)] leading-relaxed whitespace-pre-line text-studio-soft">
+              <p className="max-w-xl text-lg leading-relaxed whitespace-pre-line text-muted-foreground md:text-xl">
                 {intro}
               </p>
             ) : null}
             {payload.intro && aiIntroFor ? (
-              <p className="text-[13px] text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 Written by AI from the entries below ·{" "}
                 <Link
                   to="/about/"
                   search={{ from: aiIntroFor }}
                   hash="ai"
-                  className="underline underline-offset-[3px] hover:text-foreground"
+                  className="underline underline-offset-4 hover:text-foreground"
                 >
                   how this works
                 </Link>
               </p>
             ) : null}
             {socials.length ? (
-              <p className="flex flex-wrap gap-x-4 gap-y-1 text-[15px]">
+              <p className="flex flex-wrap gap-x-4 gap-y-1">
                 {socials.map((u) => (
                   <a
                     key={u}
                     href={u}
                     target="_blank"
                     rel="noreferrer"
-                    className="underline underline-offset-[3px]"
+                    className="underline underline-offset-4"
                   >
                     {hostLabel(u)}
                   </a>
@@ -158,7 +167,10 @@ export function PortfolioPage({
       </div>
 
       {page.highlights.length > 0 && (
-        <section aria-labelledby="highlights" className="flex flex-col gap-6">
+        <section
+          aria-labelledby="highlights"
+          className="flex flex-col gap-6 md:gap-8"
+        >
           <SectionHeading id="highlights">Highlights</SectionHeading>
           <div className={GRID}>
             {page.highlights.map((item, i) => (
@@ -179,7 +191,10 @@ export function PortfolioPage({
       {axis ? <YearBars axis={axis} cards={anchors} /> : null}
 
       {page.more.length > 0 && (
-        <section aria-labelledby="more" className="flex flex-col gap-6">
+        <section
+          aria-labelledby="more"
+          className="flex flex-col gap-6 md:gap-8"
+        >
           <SectionHeading id="more">More to explore</SectionHeading>
           <div className={GRID}>
             {page.more.map((item) => (

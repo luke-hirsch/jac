@@ -103,6 +103,14 @@ http {
             root /app/webroot;
             add_header X-Content-Type-Options nosniff always;
         }
+        # The SPA's stylesheet and its fonts, which the landing and the legal pages link
+        # (spa/theme.py). Hashed names, like on the other hosts (spa.inc).
+        location /assets/ {
+            root /app/webroot;
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header X-Content-Type-Options nosniff always;
+        }
         # Any other path is a portfolio's: luke-hirsch.de/lukas/acme/ is portfolio.…/lukas/acme/.
         location / {
             return 302 https://portfolio.@BASE_DOMAIN@$request_uri;

@@ -11,18 +11,26 @@
     <title>lukehirsch</title>
     <script>
       // Pre-paint: a React effect runs after the first frame, which is a white flash on
-      // every load in dark mode. Hand-inlined mirror of lib/appearance.ts themeClasses() —
-      // change one, change the other.
+      // every load in dark mode, and a flash of the fallback colour before the brand arrives.
+      // Hand-inlined mirror of lib/appearance.ts themeClasses() and lib/brand.ts
+      // rememberedBrand(): change one, change the other (tests/lib/_pre-paint.ts runs this).
+      // A storage that throws (a private window) still gets the system's light or dark.
       (function () {
+        var root = document.documentElement;
+        var a = {};
         try {
-          var a = JSON.parse(localStorage.getItem("appearance") || "{}");
-          var dark =
-            a.theme === "dark" ||
-            (a.theme !== "light" &&
-              window.matchMedia("(prefers-color-scheme: dark)").matches);
-          if (dark) document.documentElement.classList.add("dark");
-          if (a.contrast === "high")
-            document.documentElement.classList.add("contrast-high");
+          a = JSON.parse(localStorage.getItem("appearance") || "{}") || {};
+        } catch (e) {}
+        var dark =
+          a.theme === "dark" ||
+          (a.theme !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        root.classList.add(dark ? "dark" : "light");
+        if (a.contrast === "high") root.classList.add("contrast-high");
+        try {
+          var brand = localStorage.getItem("brand") || "";
+          if (/^#[0-9a-f]{6}$/.test(brand))
+            root.style.setProperty("--brand", brand);
         } catch (e) {}
       })();
     </script>

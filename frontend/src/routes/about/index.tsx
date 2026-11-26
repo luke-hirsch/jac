@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { z } from "zod";
-import { StudioButton } from "@/components/portfolio/studio";
+import { Page } from "@/components/page";
+import { Button } from "@/components/ui/button";
 import { jacOrigin, leaveTo, portfolioOrigin, siteHost } from "@/lib/host";
+import { PageTitle } from "@/components/heading";
 
 /** portfolio.<base>/about/: what a personalised portfolio is, for the visitor who wonders. The same
  *  page for every owner; `?from=<handle>` only adds the way back. "about" is a reserved handle
@@ -41,7 +43,7 @@ function Section({
 }) {
   return (
     <section id={id} className="space-y-3 scroll-mt-6">
-      <h2 className="font-display text-2xl font-semibold">{title}</h2>
+      <h2 className="font-heading text-2xl font-semibold">{title}</h2>
       {children}
     </section>
   );
@@ -50,7 +52,7 @@ function Section({
 function About() {
   const { from } = Route.useSearch();
   return (
-    <main className="max-w-2xl mx-auto p-6 space-y-10">
+    <Page as="main" width="narrow" className="md:gap-12">
       {from ? (
         <Link
           to="/$handle/"
@@ -62,9 +64,9 @@ function About() {
       ) : null}
 
       <header className="space-y-3">
-        <h1 className="font-display text-4xl font-bold tracking-[-0.03em]">
+        <PageTitle>
           About this page
-        </h1>
+        </PageTitle>
         <p className="text-lg text-muted-foreground">
           This portfolio isn't the same for everyone. It's put together for each
           visitor from the career entries its owner keeps in jac, the same data
@@ -150,10 +152,10 @@ function About() {
           writes a CV and a cover letter tailored to a job posting, and builds a
           portfolio like this one. You can try it with your own data.
         </p>
-        <StudioButton asChild>
+        <Button asChild>
           <a href={`${jacOrigin()}/auth/signup`}>Try jac</a>
-        </StudioButton>
+        </Button>
       </Section>
-    </main>
+    </Page>
   );
 }

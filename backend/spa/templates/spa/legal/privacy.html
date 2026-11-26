@@ -13,7 +13,7 @@
   E-Mail: <a href="mailto:{{ operator.email }}">{{ operator.email }}</a>
 </p>
 {% else %}
-<p class="warn">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
+<p class="font-semibold text-destructive">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
 {% endif %}
 <p>Der Dienst ist kostenlos und nicht kommerziell.</p>
 
@@ -48,7 +48,7 @@
 </p>
 
 <h2>4. Cookies und Speicher im Browser</h2>
-<div class="table-wrap">
+<div class="overflow-x-auto">
   <table>
     <thead>
       <tr><th>Name</th><th>Art und Ort</th><th>Zweck</th><th>Dauer</th></tr>
@@ -79,6 +79,15 @@
         <td><code>appearance</code></td>
         <td>localStorage</td>
         <td>merkt sich Farbschema und Kontrast</td>
+        <td>bis du die Browserdaten löschst</td>
+      </tr>
+      <tr>
+        <td><code>brand</code></td>
+        <td>localStorage</td>
+        <td>
+          merkt sich die Akzentfarbe der zuletzt gezeigten Seite, damit die nächste gleich in ihr
+          erscheint
+        </td>
         <td>bis du die Browserdaten löschst</td>
       </tr>
       <tr>

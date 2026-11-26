@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, CircleIcon, Loader2Icon, SparklesIcon } from "lucide-react";
-import { StudioButton } from "@/components/portfolio/studio";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type {
@@ -57,7 +56,7 @@ export function PersonaliseGate({
   const elapsed = useElapsed(view.waking);
   return (
     <main className="grid min-h-[70vh] place-items-center p-6">
-      <Card className="w-full max-w-md rounded-[18px] border shadow-none ring-0">
+      <Card className="w-full max-w-md">
         <CardContent className="space-y-6 pt-6">
           <div className="flex items-start gap-3">
             <Loader2Icon
@@ -65,7 +64,7 @@ export function PersonaliseGate({
               aria-hidden
             />
             <div className="space-y-1">
-              <h1 className="font-display text-xl font-semibold leading-tight">
+              <h1 className="font-heading text-xl font-semibold leading-tight">
                 Getting your personalised portfolio ready
               </h1>
               <p className="text-sm text-muted-foreground">
@@ -96,19 +95,15 @@ export function PersonaliseGate({
           </ol>
 
           {view.waking ? (
-            <p className="rounded-[10px] bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
               The AI server was asleep. Waking it takes about three minutes.
             </p>
           ) : null}
 
           <div className="space-y-2">
-            <StudioButton
-              variant="outline"
-              className="w-full"
-              onClick={onBrowse}
-            >
+            <Button variant="outline" className="w-full" onClick={onBrowse}>
               Browse the standard portfolio meanwhile
-            </StudioButton>
+            </Button>
             <p className="text-center text-xs text-muted-foreground">
               A note at the top tells you when yours is ready.
             </p>
@@ -163,14 +158,9 @@ export function PersonaliseNotice({
         <span className="font-medium">
           Your personalised portfolio is ready.
         </span>
-        <StudioButton
-          size="sm"
-          variant="secondary"
-          className="h-7"
-          onClick={onShow}
-        >
+        <Button size="xs" variant="secondary" onClick={onShow}>
           Show it
-        </StudioButton>
+        </Button>
       </div>
     );
   } else if (view.phase === "unchecked") {
@@ -180,7 +170,7 @@ export function PersonaliseNotice({
           The AI part starts with the tick on the questions page, so this is the
           standard portfolio.
         </span>
-        <Button size="sm" variant="secondary" className="h-7" onClick={onAsk}>
+        <Button size="xs" variant="secondary" onClick={onAsk}>
           Back to the questions
         </Button>
       </div>

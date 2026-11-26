@@ -20,6 +20,7 @@ from spa.views import (
     PortfolioResolveView,
     PortfolioStandardView,
     SignatureFileView,
+    SiteBrandView,
     UserProfileView,
 )
 
@@ -74,6 +75,7 @@ urlpatterns = [
         name="portfolio-standard",
     ),
     # Public: anonymous, the owner named by the handle in the path (never the Host header).
+    path("public/brand/", SiteBrandView.as_view(), name="site-brand"),
     path(
         "public/captcha/",
         PortfolioCaptchaView.as_view(),

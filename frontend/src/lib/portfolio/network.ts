@@ -181,7 +181,7 @@ export function litIds(
  *  centred on it for an anchor. */
 export type Box = { left: number; right: number; top: number; bottom: number };
 
-/** Roughly Noto Sans' average advance; the layout only needs it close. */
+/** Roughly the theme font's average advance (Archivo); the layout only needs it close. */
 const textWidth = (s: string, size: number) => s.length * size * 0.56;
 
 export function skillRadius(n: NetNode): number {

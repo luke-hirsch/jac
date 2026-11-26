@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SectionHeading, StudioButton } from "@/components/portfolio/studio";
+import { SectionHeading } from "@/components/portfolio/section-heading";
+import { Button } from "@/components/ui/button";
 import { anchorId } from "@/lib/portfolio/content";
 import {
   buildNetwork,
@@ -215,11 +216,10 @@ export function SkillNetwork({
       {chips.length > 1 ? (
         <div className="flex flex-wrap gap-1.5" aria-label="Light up a domain">
           {[null, ...chips].map((d) => (
-            <StudioButton
+            <Button
               key={d ?? "all"}
-              size="sm"
+              size="xs"
               variant={domain === d ? "default" : "outline"}
-              className="h-7 rounded-full px-3 text-xs"
               aria-pressed={domain === d}
               onClick={() => {
                 setDomain(d);
@@ -227,7 +227,7 @@ export function SkillNetwork({
               }}
             >
               {d ?? "All"}
-            </StudioButton>
+            </Button>
           ))}
         </div>
       ) : null}
@@ -236,7 +236,7 @@ export function SkillNetwork({
           it, so the layout is made for that. The detail line reaches the edges again. */}
       <div
         ref={ref}
-        className="rounded-[22px] border bg-studio-well px-[clamp(0.5rem,2vw,1.5rem)] pt-[clamp(0.5rem,2vw,1.5rem)]"
+        className="rounded-3xl border bg-muted px-2 pt-2 sm:px-4 sm:pt-4 lg:px-6 lg:pt-6"
       >
         {layout ? (
           <svg
@@ -300,7 +300,7 @@ export function SkillNetwork({
           <div className="h-64" />
         )}
         <div
-          className="-mx-[clamp(0.5rem,2vw,1.5rem)] mt-[clamp(0.5rem,2vw,1.5rem)] min-h-12 border-t px-4 py-3 text-sm"
+          className="-mx-2 mt-2 sm:-mx-4 sm:mt-4 lg:-mx-6 lg:mt-6 min-h-12 border-t px-4 py-3 text-sm"
           aria-live="polite"
         >
           <Detail net={net} node={focused} cards={cards} />
@@ -311,7 +311,7 @@ export function SkillNetwork({
         <span className="inline-flex items-center gap-2">
           earlier
           <span
-            className="h-2 w-16 rounded-full"
+            className="h-2 w-16"
             style={{
               background:
                 "linear-gradient(to right, var(--net-old), var(--net-new))",

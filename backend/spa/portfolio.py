@@ -8,6 +8,7 @@ unit-testable without HTTP.
 
 import logging
 import random
+import re
 import secrets
 
 from django.conf import settings
@@ -146,6 +147,25 @@ def site_owner() -> User | None:
     if not username or username.lower() == settings.SYSTEM_USER_USERNAME.lower():
         return None
     return User.objects.filter(username__iexact=username, is_active=True).first()
+
+
+HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _colour(user) -> str:
+    """A user's accent as `#rrggbb` in lower case, or "". The model validates the field on a
+    form save, but an `.update()` skips that, and the Django pages put this into a style
+    attribute: only a plain hex gets through."""
+    raw = (user.profile.accent_color or "").strip() if user is not None else ""
+    return raw.lower() if HEX_COLOUR.fullmatch(raw) else ""
+
+
+def brand_for(user=None) -> str:
+    """The colour the UI wears for `user`: their accent (`UserProfile.accent_color`, the CV's
+    colour too), else the site owner's, else "" for frontend/src/theme.css's fallback. jac wears
+    the signed-in user's, a portfolio its owner's, every other page (`user=None`) the site
+    owner's. The CV keeps its own rule: blank there is the layout's colour."""
+    return _colour(user) or _colour(site_owner())
 
 
 def is_site_owner(user) -> bool:
@@ -481,15 +501,16 @@ def _owner_block(owner) -> dict:
     """Public identity card. Socials only when the profile opts in (`show_socials`,
     spa/models.py:57); never email / phone / postal address, and never the username: allauth
     makes it from the email's local part. Without a name the handle stands in, which the
-    address shows anyway. `accent` is the CV colour, which the page wears (blank: the page's
-    own); a colour is no contact detail, so it doesn't wait for the opt-in."""
+    address shows anyway. `accent` is the colour the page wears (`brand_for`: the owner's,
+    else the site owner's, else ""); a colour is no contact detail, so it doesn't wait for the
+    opt-in."""
     profile = owner.profile
     full = f"{owner.first_name} {owner.last_name}".strip()
     block = {
         "display_name": profile.display_name or full or profile.handle,
         "bio": profile.bio,
         "avatar_url": profile.avatar.url if profile.avatar else None,
-        "accent": profile.accent_color or "",
+        "accent": brand_for(owner),
     }
     if profile.show_socials:
         block.update(

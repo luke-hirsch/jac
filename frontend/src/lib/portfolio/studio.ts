@@ -1,51 +1,8 @@
 import type { PortfolioItem } from "@/lib/queries/portfolio";
-import { luminance, normalizeHex } from "@/lib/render/accent";
 
-/** The public portfolio's "Studio" look: what of it is logic, so the tests/ regime covers it. The
- *  colours are index.css `.studio`, the drawing components/portfolio/. */
-
-/* ---------- the accent ---------- */
-
-/** The ground and the card the accent sits on as text. Keep them in step with index.css. */
-export const STUDIO_GROUND = "#141210";
-export const STUDIO_CARD = "#1f1c19";
-/** A blank accent: the mock-up's apricot. */
-export const STUDIO_ACCENT = "#f2a65a";
-/** WCAG AA for normal text: the accent is the kicker, the figures, the link-list labels. */
-export const MIN_ACCENT_CONTRAST = 4.5;
-
-const rgbOf = (hex: string) =>
-  [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const hexOf = (rgb: number[]) =>
-  `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
-
-/** The WCAG contrast ratio of two colours, either way round. */
-export function contrastBetween(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
-/**
- * The owner's accent, readable on the dark ground. It's the same colour the CV uses
- * (`UserProfile.accent_color`), and a CV accent is picked dark, for white paper: here it's
- * lightened toward white until it clears AA on the cards, the lightest ground it sits on as
- * text. The ground is darker still, and the ink on an accent button is the ground colour, so
- * both of those pass too. Blank or junk: the Studio default. 40 steps of 8% reach near-white,
- * so the loop always ends; an accent that passes comes back as given.
- */
-export function studioAccent(raw: string | null | undefined): string {
-  const hex = normalizeHex(raw);
-  if (!hex) return STUDIO_ACCENT;
-  let rgb = rgbOf(hex);
-  for (
-    let i = 0;
-    i < 40 && contrastBetween(hexOf(rgb), STUDIO_CARD) < MIN_ACCENT_CONTRAST;
-    i++
-  ) {
-    rgb = rgb.map((c) => c + (255 - c) * 0.08);
-  }
-  return hexOf(rgb);
-}
+/** The public portfolio's page layout (from the "Studio" mock-up, guide 29): what of it is logic,
+ *  so the tests/ regime covers it. The look is theme.css, the drawing components/portfolio/, and
+ *  the owner's colour comes in through useBrand (components/brand.ts). */
 
 /* ---------- the page's sections ---------- */
 

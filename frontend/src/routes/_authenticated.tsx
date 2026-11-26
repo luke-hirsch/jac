@@ -13,8 +13,12 @@ import {
   useAuth,
   useInvalidateSession,
 } from "@/lib/auth";
+import { useBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { jacOrigin, leaveTo, siteHost } from "@/lib/host";
+import { GUTTER } from "@/lib/layout";
+import { useProfile } from "@/lib/queries/profile";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ location }) => {
@@ -45,6 +49,9 @@ export const Route = createFileRoute("/_authenticated")({
 
 function AuthedLayout() {
   const { user } = useAuth();
+  // jac wears the user's colour, else the site owner's (the profile's `brand`). Same query key
+  // as the appearance provider's, so no second request; a saved colour shows at once.
+  useBrand(useProfile().data?.brand);
   const navigate = useNavigate();
   const invalidate = useInvalidateSession();
   const logout = useMutation({
@@ -57,7 +64,12 @@ function AuthedLayout() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-2">
+      <header
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b py-3",
+          GUTTER,
+        )}
+      >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <Link to="/" className="font-semibold">
             lukehirsch

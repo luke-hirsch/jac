@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { useBrand } from "@/components/brand";
 import { CaptchaCheck } from "@/components/captcha-check";
-import { Studio, StudioButton } from "@/components/portfolio/studio";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { prewarmForVisitor } from "@/lib/prewarm";
@@ -42,7 +43,7 @@ function StyleAxis({
       <p className="text-sm font-medium">{label}</p>
       <div className="flex flex-wrap gap-2">
         {opts.map((o) => (
-          <StudioButton
+          <Button
             key={o.value}
             size="sm"
             variant={value === o.value ? "default" : "outline"}
@@ -50,7 +51,7 @@ function StyleAxis({
             onClick={() => onChange(o.value)}
           >
             {o.label}
-          </StudioButton>
+          </Button>
         ))}
       </div>
     </div>
@@ -65,6 +66,7 @@ export function Questionnaire({
   onDone: (search: ExploreSearch) => void;
 }) {
   const meta = useNativeMeta(handle);
+  useBrand(meta.data?.accent); // the owner's colour, before there's a payload to carry it
   const [form, setForm] = useState<QuestForm>(EMPTY_FORM);
   const [captcha, setCaptcha] = useState<string | null>(null);
   const answer = checkedAnswer(form, captcha);
@@ -78,17 +80,11 @@ export function Questionnaire({
   }
 
   return (
-    <Studio
-      as="main"
-      accent={meta.data?.accent}
-      className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10"
-    >
+    <main className="min-h-screen flex flex-col items-center justify-center gap-6 px-5 py-10 md:py-16">
       {/* The first click or key in here, not the page load: only a person gets this far. */}
-      <Card className="w-full max-w-lg rounded-[18px] border shadow-none ring-0">
+      <Card className="w-full max-w-lg">
         <CardHeader>
-          <CardTitle className="font-display text-2xl font-bold tracking-[-0.02em] normal-case">
-            What do you want to see?
-          </CardTitle>
+          <CardTitle>What do you want to see?</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -97,7 +93,7 @@ export function Questionnaire({
               {(meta.data?.domains ?? []).map((d) => {
                 const picked = form.domains.includes(d);
                 return (
-                  <StudioButton
+                  <Button
                     key={d}
                     type="button"
                     size="xs"
@@ -106,7 +102,7 @@ export function Questionnaire({
                     onClick={() => toggleDomain(d)}
                   >
                     {d}
-                  </StudioButton>
+                  </Button>
                 );
               })}
               {meta.data && meta.data.domains.length === 0 ? (
@@ -150,24 +146,15 @@ export function Questionnaire({
             }}
           />
           <div className="flex flex-wrap gap-2">
-            <StudioButton
-              disabled={!answer}
-              onClick={() => answer && onDone(answer)}
-            >
+            <Button disabled={!answer} onClick={() => answer && onDone(answer)}>
               Show me
-            </StudioButton>
-            <StudioButton
-              variant="outline"
-              onClick={() => onDone(luckySearch())}
-            >
+            </Button>
+            <Button variant="outline" onClick={() => onDone(luckySearch())}>
               I feel lucky
-            </StudioButton>
-            <StudioButton
-              variant="ghost"
-              onClick={() => onDone(standardSearch())}
-            >
+            </Button>
+            <Button variant="ghost" onClick={() => onDone(standardSearch())}>
               Skip the questions
-            </StudioButton>
+            </Button>
           </div>
           {answer ? null : (
             <p className="text-xs text-muted-foreground">
@@ -184,6 +171,6 @@ export function Questionnaire({
           Create one here
         </Link>
       </p>
-    </Studio>
+    </main>
   );
 }

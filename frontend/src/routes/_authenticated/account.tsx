@@ -1,4 +1,5 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { Page } from "@/components/page";
 import { Card } from "@/components/ui/card";
 
 // `nested`: a page under the item above it.
@@ -17,7 +18,7 @@ export const Route = createFileRoute("/_authenticated/account")({
 
 function AccountLayout() {
   return (
-    <div className="max-w-5xl mx-auto p-6 grid gap-6 md:grid-cols-[180px_1fr]">
+    <Page width="default" className="md:grid md:grid-cols-4">
       <nav className="space-y-1">
         {ITEMS.map((i) => (
           <Link
@@ -32,9 +33,9 @@ function AccountLayout() {
           </Link>
         ))}
       </nav>
-      <Card className="p-6">
+      <Card className="p-6 md:col-span-3 md:p-8">
         <Outlet />
       </Card>
-    </div>
+    </Page>
   );
 }

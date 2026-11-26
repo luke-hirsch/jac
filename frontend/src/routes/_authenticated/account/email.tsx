@@ -9,6 +9,7 @@ import { zodValidator, z } from "@/lib/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SectionTitle } from "@/components/heading";
 
 type EmailRow = { email: string; verified: boolean; primary: boolean };
 const EMAIL_KEY = ["account", "emails"] as const;
@@ -85,7 +86,7 @@ function EmailPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold">Email addresses</h2>
+        <SectionTitle>Email addresses</SectionTitle>
         <p className="text-sm text-muted-foreground">
           Add additional addresses for password reset; promote one to primary.
         </p>
@@ -93,7 +94,7 @@ function EmailPage() {
 
       <ul className="space-y-2">
         {list.data?.map((row) => (
-          <li key={row.email} className="rounded border p-3 space-y-3">
+          <li key={row.email} className="rounded-sm border p-3 space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-mono text-sm">{row.email}</div>

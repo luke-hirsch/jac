@@ -8,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { PageTitle } from "@/components/heading";
 
 export function SectionPage<EditorRow>({
   title,
@@ -40,7 +41,7 @@ export function SectionPage<EditorRow>({
     <div className="space-y-4">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">{title}</h1>
+          <PageTitle>{title}</PageTitle>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
         <Button onClick={onNew}>

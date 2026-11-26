@@ -7,6 +7,9 @@ WORKDIR /spa
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# The Django pages (the landing, the legal pages) are styled with Tailwind classes: the build
+# scans their templates (`@source` in frontend/src/index.css), so they must be here for it.
+COPY backend/spa/templates/ /backend/spa/templates/
 RUN npm run build
 
 FROM python:3.12-slim

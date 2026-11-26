@@ -1,4 +1,5 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { Page } from "@/components/page";
 
 const TABS = [
   { to: "/cv", label: "Overview" },
@@ -17,7 +18,7 @@ export const Route = createFileRoute("/_authenticated/cv")({
 
 function CvLayout() {
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <Page>
       <nav className="flex flex-wrap gap-1 border-b">
         {TABS.map((t) => (
           <Link
@@ -34,6 +35,6 @@ function CvLayout() {
         ))}
       </nav>
       <Outlet />
-    </div>
+    </Page>
   );
 }

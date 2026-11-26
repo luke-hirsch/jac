@@ -81,7 +81,7 @@ export function PasskeyPanel() {
         {list.data?.map((pk) => (
           <li
             key={pk.id}
-            className="flex items-center justify-between rounded border p-3"
+            className="flex items-center justify-between rounded-sm border p-3"
           >
             <div>
               <div className="text-sm font-medium">{pk.name}</div>

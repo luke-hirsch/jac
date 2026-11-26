@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { SectionHeading } from "@/components/portfolio/studio";
+import { SectionHeading } from "@/components/portfolio/section-heading";
 import { anchorId } from "@/lib/portfolio/content";
 import { scrollMotion, yearSpan } from "@/lib/portfolio/studio";
 import type { YearAxis, YearBar } from "@/lib/portfolio/timeline";
@@ -12,7 +12,7 @@ function barStyle(bar: YearBar): CSSProperties {
   const pct = Math.round(40 + 60 * bar.recency);
   return {
     ...at,
-    background: `color-mix(in oklch, var(--studio-accent) ${pct}%, var(--net-old))`,
+    background: `color-mix(in oklch, var(--net-new) ${pct}%, var(--net-old))`,
   };
 }
 
@@ -21,10 +21,10 @@ function Swatch({ kind }: { kind: YearBar["kind"] }) {
     <span
       aria-hidden
       className={cn(
-        "h-2 w-[18px] rounded",
+        "h-2 w-4.5 rounded-sm",
         kind === "work"
-          ? "bg-studio-accent"
-          : "border-[1.5px] border-dashed border-muted-foreground",
+          ? "bg-primary"
+          : "border-2 border-dashed border-muted-foreground",
       )}
     />
   );
@@ -43,7 +43,7 @@ export function YearBars({
 }) {
   const kinds = [...new Set(axis.rows.map((r) => r.kind))];
   const legend = (
-    <div className="flex gap-4 text-[13px] text-muted-foreground">
+    <div className="flex gap-4 text-xs text-muted-foreground">
       {kinds.map((k) => (
         <span key={k} className="inline-flex items-center gap-1.5">
           <Swatch kind={k} />
@@ -57,7 +57,7 @@ export function YearBars({
       <SectionHeading id="experience" aside={legend}>
         Experience
       </SectionHeading>
-      <div className="rounded-[18px] border bg-studio-well p-4 sm:p-6">
+      <div className="rounded-2xl border bg-muted p-5 md:p-8">
         <div
           aria-hidden
           className="grid text-xs text-muted-foreground tabular-nums sm:grid-cols-[13rem_minmax(0,1fr)] sm:gap-x-4"
@@ -101,7 +101,7 @@ export function YearBars({
                 ) : (
                   <span className="font-semibold">{bar.item.title}</span>
                 )}
-                <p className="truncate text-[13px] text-muted-foreground">
+                <p className="truncate text-xs text-muted-foreground">
                   {[bar.item.subtitle, yearSpan(bar.item)]
                     .filter(Boolean)
                     .join(" · ")}
@@ -110,9 +110,9 @@ export function YearBars({
               <div aria-hidden className="relative h-3.5">
                 <span
                   className={cn(
-                    "absolute inset-y-0 rounded-full",
+                    "absolute inset-y-0",
                     bar.kind === "study" &&
-                      "border-[1.5px] border-dashed border-muted-foreground",
+                      "border-2 border-dashed border-muted-foreground",
                   )}
                   style={barStyle(bar)}
                 />

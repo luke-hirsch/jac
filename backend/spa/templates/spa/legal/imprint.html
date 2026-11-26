@@ -2,7 +2,7 @@
 {% block content %}
 {% if operator %}
 <h2>Angaben gemäß § 5 DDG</h2>
-<address>
+<address class="not-italic">
   {{ operator.name }}<br />
   {{ operator.street }}<br />
   {% if operator.address_line2 %}{{ operator.address_line2 }}<br />{% endif %}
@@ -37,6 +37,6 @@
   <a href="/legal/terms/">Nutzungsbedingungen</a>.
 </p>
 {% else %}
-<p class="warn">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
+<p class="font-semibold text-destructive">Operator not configured: PORTFOLIO_OWNER_USERNAME names no user.</p>
 {% endif %}
 {% endblock %}

@@ -1,223 +1,29 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/noto-sans";
-@import "@fontsource-variable/playfair-display";
+@import "@fontsource-variable/archivo";
+/* The look: colours, fonts, corners, the brand colour. Everything below is wiring. */
+@import "./theme.css";
 
-/* Inside the public portfolio (.studio, always dark) components take their dark styles too. */
-@custom-variant dark (&:is(.dark *, .studio *));
+/* The wiring: theme.css's tokens as Tailwind utilities, and shadcn's base. It decides no look,
+   so a change of look goes into theme.css. */
+
+/* The Django-rendered pages (the apex landing, the legal pages) link this stylesheet too and
+   lay themselves out with Tailwind classes: the build scans their templates. In the image the
+   Dockerfile copies them to the same relative place. */
+@source "../../backend/spa/templates";
+
+@custom-variant dark (&:is(.dark *));
 @custom-variant contrast-high (&:is(.contrast-high *));
-
-:root {
-  /* The portfolio's skill network: earlier → recent (lib/portfolio/network.ts). */
-  --net-old: oklch(0.84 0.025 70);
-  --net-new: oklch(0.6 0.14 45);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.147 0.004 49.3);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.147 0.004 49.3);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.147 0.004 49.3);
-  --primary: oklch(0.214 0.009 43.1);
-  --primary-foreground: oklch(0.986 0.002 67.8);
-  --secondary: oklch(0.96 0.002 17.2);
-  --secondary-foreground: oklch(0.214 0.009 43.1);
-  --muted: oklch(0.96 0.002 17.2);
-  --muted-foreground: oklch(0.547 0.021 43.1);
-  --accent: oklch(0.96 0.002 17.2);
-  --accent-foreground: oklch(0.214 0.009 43.1);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0.005 34.3);
-  --input: oklch(0.922 0.005 34.3);
-  --ring: oklch(0.714 0.014 41.2);
-  --chart-1: oklch(0.868 0.007 39.5);
-  --chart-2: oklch(0.547 0.021 43.1);
-  --chart-3: oklch(0.438 0.017 39.3);
-  --chart-4: oklch(0.367 0.016 35.7);
-  --chart-5: oklch(0.268 0.011 36.5);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.986 0.002 67.8);
-  --sidebar-foreground: oklch(0.147 0.004 49.3);
-  --sidebar-primary: oklch(0.214 0.009 43.1);
-  --sidebar-primary-foreground: oklch(0.986 0.002 67.8);
-  --sidebar-accent: oklch(0.96 0.002 17.2);
-  --sidebar-accent-foreground: oklch(0.214 0.009 43.1);
-  --sidebar-border: oklch(0.922 0.005 34.3);
-  --sidebar-ring: oklch(0.714 0.014 41.2);
-}
-
-.dark {
-  --net-old: oklch(0.43 0.02 60);
-  --net-new: oklch(0.76 0.13 60);
-  --background: oklch(0.147 0.004 49.3);
-  --foreground: oklch(0.986 0.002 67.8);
-  --card: oklch(0.214 0.009 43.1);
-  --card-foreground: oklch(0.986 0.002 67.8);
-  --popover: oklch(0.214 0.009 43.1);
-  --popover-foreground: oklch(0.986 0.002 67.8);
-  --primary: oklch(0.922 0.005 34.3);
-  --primary-foreground: oklch(0.214 0.009 43.1);
-  --secondary: oklch(0.268 0.011 36.5);
-  --secondary-foreground: oklch(0.986 0.002 67.8);
-  --muted: oklch(0.268 0.011 36.5);
-  --muted-foreground: oklch(0.714 0.014 41.2);
-  --accent: oklch(0.268 0.011 36.5);
-  --accent-foreground: oklch(0.986 0.002 67.8);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.547 0.021 43.1);
-  --chart-1: oklch(0.868 0.007 39.5);
-  --chart-2: oklch(0.547 0.021 43.1);
-  --chart-3: oklch(0.438 0.017 39.3);
-  --chart-4: oklch(0.367 0.016 35.7);
-  --chart-5: oklch(0.268 0.011 36.5);
-  --sidebar: oklch(0.214 0.009 43.1);
-  --sidebar-foreground: oklch(0.986 0.002 67.8);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.986 0.002 67.8);
-  --sidebar-accent: oklch(0.268 0.011 36.5);
-  --sidebar-accent-foreground: oklch(0.986 0.002 67.8);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.547 0.021 43.1);
-}
 
 /* Native controls (scrollbars, the colour input, select popups) follow the theme too. */
 .dark {
   color-scheme: dark;
 }
 
-/* High contrast: pure black on pure white, hard borders, no decorative greys. MUST stay
-   after the .dark block — .dark and .contrast-high have equal specificity, so source order
-   decides a shared variable; the combined .dark.contrast-high selector outranks both. */
-.contrast-high {
-  --net-old: oklch(0.65 0 0);
-  --net-new: oklch(0 0 0);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0 0 0);
-  --primary: oklch(0 0 0);
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.94 0 0);
-  --secondary-foreground: oklch(0 0 0);
-  --muted: oklch(0.94 0 0);
-  --muted-foreground: oklch(0.25 0 0);
-  --accent: oklch(0.9 0 0);
-  --accent-foreground: oklch(0 0 0);
-  --destructive: oklch(0.44 0.24 27.3);
-  --border: oklch(0 0 0);
-  --input: oklch(0 0 0);
-  --ring: oklch(0 0 0);
-  --sidebar: oklch(1 0 0);
-  --sidebar-foreground: oklch(0 0 0);
-  --sidebar-primary: oklch(0 0 0);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.9 0 0);
-  --sidebar-accent-foreground: oklch(0 0 0);
-  --sidebar-border: oklch(0 0 0);
-  --sidebar-ring: oklch(0 0 0);
-}
-
-.dark.contrast-high {
-  --net-old: oklch(0.5 0 0);
-  --net-new: oklch(1 0 0);
-  --background: oklch(0 0 0);
-  --foreground: oklch(1 0 0);
-  --card: oklch(0 0 0);
-  --card-foreground: oklch(1 0 0);
-  --popover: oklch(0 0 0);
-  --popover-foreground: oklch(1 0 0);
-  --primary: oklch(1 0 0);
-  --primary-foreground: oklch(0 0 0);
-  --secondary: oklch(0.18 0 0);
-  --secondary-foreground: oklch(1 0 0);
-  --muted: oklch(0.18 0 0);
-  --muted-foreground: oklch(0.85 0 0);
-  --accent: oklch(0.22 0 0);
-  --accent-foreground: oklch(1 0 0);
-  --destructive: oklch(0.75 0.2 22.2);
-  --border: oklch(1 0 0);
-  --input: oklch(1 0 0);
-  --ring: oklch(1 0 0);
-  --sidebar: oklch(0 0 0);
-  --sidebar-foreground: oklch(1 0 0);
-  --sidebar-primary: oklch(1 0 0);
-  --sidebar-primary-foreground: oklch(0 0 0);
-  --sidebar-accent: oklch(0.22 0 0);
-  --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(1 0 0);
-  --sidebar-ring: oklch(1 0 0);
-}
-
-/* The public portfolio's look ("B · Studio", guide 29). Dark always, whatever the OS or jac's
-   appearance setting says, so it's a class of its own rather than a theme: it redefines the tokens
-   below it, and jac's components pick them up. The portfolio host's root carries it
-   (routes/__root.tsx); a page that knows its owner wears it again through <Studio>, whose inline
-   `--studio-accent` re-resolves every token here that reads it. Ground, card and default accent:
-   keep them in step with lib/portfolio/studio.ts. */
-.studio {
-  --studio-accent: #f2a65a;
-  --studio-ink: #141210; /* text on the accent */
-  --studio-soft: #d8d0c6; /* body copy */
-  --studio-well: #1a1715; /* the ground of the network and the year bars */
-  --studio-raise: #2a2622; /* chips, the media bar's track */
-  --net-old: #5e564d;
-  --net-new: var(--studio-accent);
-  --background: #141210;
-  --foreground: #f3eee8;
-  --card: #1f1c19;
-  --card-foreground: #f3eee8;
-  --popover: #1f1c19;
-  --popover-foreground: #f3eee8;
-  --primary: var(--studio-accent);
-  --primary-foreground: #141210;
-  --secondary: #26221f;
-  --secondary-foreground: #f3eee8;
-  --muted: #26221f;
-  --muted-foreground: #a89f95;
-  --accent: #2a2622;
-  --accent-foreground: #f3eee8;
-  --destructive: #f08a7a;
-  --border: #2e2a26;
-  --input: #4a433f;
-  --ring: var(--studio-accent);
-}
-
-/* The visitor asked their system for more contrast: brighter secondary text and lines. */
-@media (prefers-contrast: more) {
-  .studio {
-    --muted-foreground: #d8d0c6;
-    --studio-soft: #f3eee8;
-    --border: #6b625a;
-    --input: #8a8178;
-  }
-}
-
-/* And for less motion: no spinning, no fading, no gliding to an anchor. */
-@media (prefers-reduced-motion: reduce) {
-  .studio *,
-  .studio *::before,
-  .studio *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
 @theme inline {
-  --font-sans: "Noto Sans Variable", sans-serif;
-  --font-heading: "Playfair Display Variable", serif;
-  --font-display:
-    "Space Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
-  --color-studio-accent: var(--studio-accent);
-  --color-studio-ink: var(--studio-ink);
-  --color-studio-soft: var(--studio-soft);
-  --color-studio-well: var(--studio-well);
-  --color-studio-raise: var(--studio-raise);
+  --font-sans: var(--font-family-sans);
+  --font-heading: var(--font-family-heading);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -235,6 +41,8 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -262,27 +70,30 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    @apply bg-background font-sans;
+  }
   body {
     @apply bg-background text-foreground;
   }
-  html {
-    @apply font-sans;
-  }
-  .studio {
-    @apply bg-background text-foreground;
-    font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-    color-scheme: dark;
-  }
-  /* Overscroll and the page's scrollbar show the page's ground, not the OS theme's. */
-  html:has(.studio) {
-    background-color: #141210;
-    color-scheme: dark;
-  }
-  /* A ring in the accent on everything focusable. In the base layer, so a component's own
-     `outline-none` (with its own ring) still wins. */
-  .studio :focus-visible {
-    outline: 2px solid var(--studio-accent);
+  /* A ring on everything focusable. In the base layer, so a component's own `outline-none`
+     (with its own ring) still wins. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
+  }
+}
+
+/* The visitor asked their system for less motion: no spinning, no fading, no gliding to an
+   anchor (lib/portfolio/studio.ts scrollMotion does the same for scripted jumps). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

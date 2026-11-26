@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { MediaPlayer } from "@/components/portfolio/media-player";
 import { StudioMarkdown } from "@/components/portfolio/studio-markdown";
+import { Button } from "@/components/ui/button";
 import { anchorId, linkTarget, outboundUrl } from "@/lib/portfolio/content";
 import {
   hostLabel,
@@ -90,16 +91,22 @@ function LinkedItems({
   );
 }
 
-/** The card every kind but the quote and the link list sits in. In the page's grid of 340 px
- *  columns it takes one; `wide` takes the whole row (text reads better long). */
+/** The card every kind but the quote and the link list sits in. In the page's grid it takes one
+ *  column; `wide` takes the whole row (text reads better long). */
+/** The inside of every card on a portfolio: the one place its padding is set. */
+const PAD = "p-6 md:p-8 xl:p-10";
+
 function Shell({
   item,
   wide,
+  flush,
   className,
   children,
 }: {
   item: PortfolioItem;
   wide?: boolean;
+  /** No padding: the card pads its own parts (an image to the edge, text under it). */
+  flush?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -107,7 +114,8 @@ function Shell({
     <article
       id={anchorId(item.id)}
       className={cn(
-        "flex min-w-0 scroll-mt-6 flex-col gap-3 rounded-[18px] border bg-card p-6 sm:p-7",
+        "flex min-w-0 scroll-mt-6 flex-col gap-3 rounded-2xl border bg-card md:gap-4",
+        !flush && PAD,
         wide && "col-span-full",
         className,
       )}
@@ -123,8 +131,8 @@ function Meta({ item, number }: { item: PortfolioItem; number?: number }) {
   const line = metaLine(item);
   if (!number && !line) return null;
   return (
-    <div className="flex justify-between gap-3 text-[13px] text-muted-foreground">
-      {number ? <span className="font-display">{ordinal(number)}</span> : null}
+    <div className="flex justify-between gap-3 text-sm text-muted-foreground">
+      {number ? <span className="font-heading">{ordinal(number)}</span> : null}
       <span className={number ? "text-right" : ""}>{line}</span>
     </div>
   );
@@ -132,13 +140,14 @@ function Meta({ item, number }: { item: PortfolioItem; number?: number }) {
 
 function Title({ children }: { children: ReactNode }) {
   return (
-    <h3 className="font-display text-[1.625rem] leading-tight font-semibold tracking-[-0.01em]">
+    <h3 className="font-heading text-2xl leading-tight font-semibold tracking-tight">
       {children}
     </h3>
   );
 }
 
-/** A call to action's button, in the accent. */
+/** A call to action's button: jac's own, as a link. A label runs to 40 characters, so it may
+ *  wrap on a phone rather than overflow. */
 function CtaButton({
   item,
   className,
@@ -149,16 +158,15 @@ function CtaButton({
   const href = safeHref(item.data?.url);
   if (!href || !item.data?.label) return null;
   return (
-    <a
-      href={href}
-      {...leaves(href)}
-      className={cn(
-        "inline-flex min-h-[46px] w-fit items-center rounded-[10px] bg-studio-accent px-5 py-3 font-semibold text-studio-ink no-underline hover:brightness-110",
-        className,
-      )}
+    <Button
+      asChild
+      size="lg"
+      className={cn("h-auto min-h-11 w-fit py-3 whitespace-normal", className)}
     >
-      {item.data.label}
-    </a>
+      <a href={href} {...leaves(href)}>
+        {item.data.label}
+      </a>
+    </Button>
   );
 }
 
@@ -168,30 +176,39 @@ export function NowCard({ item }: { item: PortfolioItem }) {
     <aside
       id={anchorId(item.id)}
       aria-label={item.title || item.data?.label}
-      className="flex min-w-0 flex-[1_1_20rem] scroll-mt-6 flex-col gap-[18px] rounded-[18px] border bg-card p-6 sm:p-7"
+      className={cn(
+        "flex min-w-0 scroll-mt-6 flex-col gap-4 rounded-2xl border bg-card md:gap-5",
+        PAD,
+      )}
     >
       {item.title ? (
         <div className="flex items-center gap-2.5">
           <span
             aria-hidden
-            className="size-2.5 shrink-0 rounded-full bg-studio-accent"
+            className="size-2.5 shrink-0 bg-primary"
           />
-          <span className="font-display text-lg font-semibold">
+          <span className="font-heading text-lg font-semibold">
             {item.title}
           </span>
         </div>
       ) : null}
       {item.body ? (
-        <p className="text-[15px] whitespace-pre-line text-studio-soft">
-          {item.body}
-        </p>
+        <p className="whitespace-pre-line text-muted-foreground">{item.body}</p>
       ) : null}
       <CtaButton item={item} />
     </aside>
   );
 }
 
-/** Key figures as tiles: the value big, in the accent, its label under it. */
+/** Key figures as tiles: the value big, in the primary, its label under it. Columns by how many
+ *  there are and how wide the box is (a container query: a card's box is narrower than the
+ *  page's), so three never leave a gap in a row of four. */
+const FIGURE_COLUMNS: Record<number, string> = {
+  2: "grid-cols-2",
+  3: "grid-cols-2 @xl:grid-cols-3",
+  4: "grid-cols-2 @3xl:grid-cols-4",
+};
+
 function Figures({
   figures,
   inCard,
@@ -200,27 +217,34 @@ function Figures({
   inCard?: boolean;
 }) {
   return (
-    <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-4">
-      {figures.map((f, i) => (
-        <div
-          key={i}
-          className={cn(
-            "flex flex-col gap-1.5 rounded-2xl",
-            inCard ? "bg-studio-raise p-5" : "border bg-card p-6",
-          )}
-        >
-          <dt className="order-2 text-sm text-muted-foreground">{f.label}</dt>
-          <dd
+    <div className="@container">
+      <dl
+        className={cn(
+          "grid gap-4 md:gap-6",
+          FIGURE_COLUMNS[figures.length] ?? FIGURE_COLUMNS[4],
+        )}
+      >
+        {figures.map((f, i) => (
+          <div
+            key={i}
             className={cn(
-              "order-1 font-display leading-none font-bold tracking-[-0.03em] [overflow-wrap:anywhere] text-studio-accent",
-              inCard ? "text-[2.5rem]" : "text-[clamp(2.5rem,5vw,3.75rem)]",
+              "flex flex-col gap-1.5 rounded-2xl",
+              inCard ? "bg-muted p-5 md:p-6" : "border bg-card p-6 md:p-8",
             )}
           >
-            {f.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+            <dt className="order-2 text-sm text-muted-foreground">{f.label}</dt>
+            <dd
+              className={cn(
+                "order-1 font-heading leading-none font-bold tracking-tight wrap-anywhere text-primary",
+                inCard ? "text-4xl" : "text-4xl md:text-5xl lg:text-6xl",
+              )}
+            >
+              {f.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -235,7 +259,7 @@ export function FigureTiles({ item }: { item: PortfolioItem }) {
       {item.title || item.body ? (
         <div className="flex flex-col gap-1">
           {item.title ? (
-            <h2 className="font-display text-xl font-semibold">{item.title}</h2>
+            <h2 className="font-heading text-xl font-semibold">{item.title}</h2>
           ) : null}
           {item.body ? (
             <p className="text-muted-foreground">{item.body}</p>
@@ -262,12 +286,15 @@ function QuoteCard({ item, number, anchors }: CardProps) {
   return (
     <figure
       id={anchorId(item.id)}
-      className="m-0 flex min-w-0 scroll-mt-6 flex-col justify-between gap-5 rounded-[18px] bg-studio-accent p-6 text-studio-ink sm:p-7"
+      className={cn(
+        "m-0 flex min-w-0 scroll-mt-6 flex-col justify-between gap-5 rounded-2xl bg-primary text-primary-foreground md:gap-6",
+        PAD,
+      )}
     >
       {label ? (
-        <span className="font-display text-[13px] font-semibold">{label}</span>
+        <span className="font-heading text-sm font-semibold">{label}</span>
       ) : null}
-      <blockquote className="font-display text-[1.5625rem] leading-snug font-medium tracking-[-0.01em] whitespace-pre-line">
+      <blockquote className="font-heading text-2xl leading-snug font-medium whitespace-pre-line">
         {quoted(item.body ?? "")}
       </blockquote>
       {item.links?.length ? (
@@ -295,11 +322,13 @@ function LinkListCard({ item, number }: CardProps) {
     >
       <Meta item={item} number={number} />
       {item.title ? (
-        <h3 className="mt-1 mb-2 font-display text-[1.75rem] font-bold tracking-[-0.02em]">
+        <h3 className="mt-1 mb-2 font-heading text-3xl font-bold tracking-tight">
           {item.title}
         </h3>
       ) : null}
-      {item.body ? <p className="mb-3 text-studio-soft">{item.body}</p> : null}
+      {item.body ? (
+        <p className="mb-3 text-muted-foreground">{item.body}</p>
+      ) : null}
       <ul className="border-b">
         {rows.map((row, i) => (
           <li key={i} className="border-t">
@@ -309,7 +338,7 @@ function LinkListCard({ item, number }: CardProps) {
               className="flex min-h-11 items-center gap-4 py-4 no-underline"
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-xs tracking-[0.08em] text-studio-accent uppercase">
+                <span className="truncate text-xs tracking-wider text-primary uppercase">
                   {hostLabel(row.href)}
                 </span>
                 <span className="font-semibold">{row.title}</span>
@@ -319,7 +348,7 @@ function LinkListCard({ item, number }: CardProps) {
                   </span>
                 ) : null}
               </span>
-              <span aria-hidden className="text-[22px]">
+              <span aria-hidden className="text-2xl">
                 →
               </span>
             </a>
@@ -354,21 +383,23 @@ function TextCard({ item, number, anchors }: CardProps) {
 function ImageCard({ item, number, anchors }: CardProps) {
   const text = Boolean(number || item.title || item.body || item.links?.length);
   return (
-    <Shell item={item} className="gap-0 overflow-hidden p-0 sm:p-0">
+    <Shell item={item} flush className="gap-0 overflow-hidden md:gap-0">
       {item.image_url ? (
         <img
           src={item.image_url}
           alt={item.alt_text || item.title}
           loading="lazy"
-          className="max-h-[28rem] w-full object-cover"
+          className="max-h-112 w-full object-cover"
         />
       ) : null}
       {text ? (
-        <div className="flex flex-col gap-2.5 p-6 sm:p-7">
+        <div className={cn("flex flex-col gap-2.5", PAD)}>
           <Meta item={item} number={number} />
           {item.title ? <Title>{item.title}</Title> : null}
           {item.body ? (
-            <p className="whitespace-pre-line text-studio-soft">{item.body}</p>
+            <p className="whitespace-pre-line text-muted-foreground">
+              {item.body}
+            </p>
           ) : null}
           {item.links?.length ? (
             <LinkedItems items={item.links} anchors={anchors} />
@@ -390,12 +421,10 @@ function EntryCard({ item, number, skillNames }: CardProps) {
       <Meta item={item} number={number} />
       <Title>{item.title}</Title>
       {item.subtitle ? (
-        <span className="text-[15px] text-muted-foreground">
-          {item.subtitle}
-        </span>
+        <span className="text-muted-foreground">{item.subtitle}</span>
       ) : null}
       {item.description ? (
-        <p className="whitespace-pre-line text-studio-soft">
+        <p className="whitespace-pre-line text-muted-foreground">
           {item.description}
         </p>
       ) : null}
@@ -403,7 +432,7 @@ function EntryCard({ item, number, skillNames }: CardProps) {
         <a
           href={href}
           {...leaves(href)}
-          className="w-fit text-[15px] underline underline-offset-[3px]"
+          className="w-fit text-sm underline underline-offset-4"
         >
           {hostLabel(href)} ↗
         </a>
@@ -411,15 +440,12 @@ function EntryCard({ item, number, skillNames }: CardProps) {
       {skills.length ? (
         <ul aria-label="Skills" className="flex flex-wrap gap-1.5 pt-1">
           {skills.slice(0, MAX_CHIPS).map((name, i) => (
-            <li
-              key={i}
-              className="rounded-md bg-studio-raise px-2.5 py-0.5 text-[13px]"
-            >
+            <li key={i} className="rounded-md bg-muted px-2.5 py-0.5 text-xs">
               {name}
             </li>
           ))}
           {skills.length > MAX_CHIPS ? (
-            <li className="px-1 py-0.5 text-[13px] text-muted-foreground">
+            <li className="px-1 py-0.5 text-xs text-muted-foreground">
               +{skills.length - MAX_CHIPS} more
             </li>
           ) : null}
@@ -437,7 +463,7 @@ function PlainCard({ item, number, anchors }: CardProps) {
       <Meta item={item} number={number} />
       {item.title ? <Title>{item.title}</Title> : null}
       {item.body ? (
-        <p className="whitespace-pre-line text-studio-soft">{item.body}</p>
+        <p className="whitespace-pre-line text-muted-foreground">{item.body}</p>
       ) : null}
       {item.links?.length ? (
         <LinkedItems items={item.links} anchors={anchors} />
@@ -446,7 +472,7 @@ function PlainCard({ item, number, anchors }: CardProps) {
   );
 }
 
-/** One item on the Studio page, drawn by what it is. `number` is its place in the highlights;
+/** One item on the portfolio page, drawn by what it is. `number` is its place in the highlights;
  *  the rest go unnumbered. */
 export function ItemCard({
   item,
@@ -491,7 +517,9 @@ export function ItemCard({
           <Meta item={item} number={number} />
           {item.title ? <Title>{item.title}</Title> : null}
           {item.body ? (
-            <p className="whitespace-pre-line text-studio-soft">{item.body}</p>
+            <p className="whitespace-pre-line text-muted-foreground">
+              {item.body}
+            </p>
           ) : null}
           <CtaButton item={item} className="mt-1" />
         </Shell>

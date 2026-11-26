@@ -537,7 +537,7 @@ function ProjectEditor({
                 }
                 className="font-mono text-sm"
               />
-              <div className="border rounded-md p-3 min-h-[240px] bg-muted/20">
+              <div className="border rounded-md p-3 min-h-60 bg-muted/20">
                 <MarkdownPreview source={f.state.value} />
               </div>
             </div>

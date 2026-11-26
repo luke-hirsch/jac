@@ -99,7 +99,7 @@ export function BlockEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden sm:max-w-lg">
+      <DialogContent className="grid grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{block ? "Edit block" : "New block"}</DialogTitle>
         </DialogHeader>
