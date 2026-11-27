@@ -5,6 +5,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.contrib.postgres.aggregates import JSONBAgg
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import Count, OuterRef, Subquery, UniqueConstraint, Value
 from django.db.models.functions import Coalesce, JSONObject
@@ -638,6 +639,11 @@ class JobApplication(models.Model):
     # The portfolio link + QR on this application's exports: None follows the owner's
     # `profile.portfolio_link_by_default`, True/False is this application's own choice.
     include_portfolio_link = models.BooleanField(null=True, blank=True, default=None)
+    # How well the user fits the posting, 1 (hardly) to 5 (every must-have and more), or None
+    # while nobody rated it. Claude rates it through the connector when asked; the user can too.
+    fit = models.PositiveSmallIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
     sent_by_system = models.BooleanField(default=False)
     approved_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)

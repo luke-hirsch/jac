@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FitRating } from "@/components/applications/fit-rating";
 import { reseedField } from "@/lib/draft-merge";
 import {
   OUTCOME_LABELS,
@@ -60,6 +61,28 @@ export function LifecycleCard({ app }: { app: ApplicationRow }) {
     );
   }
 
+  // The stars show a click at once; a rating saved elsewhere (Claude, another tab) replaces
+  // what's shown when the row comes back with it.
+  const [fit, setFit] = useState(app.fit);
+  const [prevFit, setPrevFit] = useState(app.fit);
+  if (prevFit !== app.fit) {
+    setPrevFit(app.fit);
+    setFit(app.fit);
+  }
+
+  function saveFit(next: number | null) {
+    setFit(next);
+    update.mutate(
+      { id: app.id, body: { fit: next } },
+      {
+        onError: () => {
+          setFit(app.fit);
+          toast.error("Could not save the fit");
+        },
+      },
+    );
+  }
+
   const busy = transition.isPending;
 
   return (
@@ -88,6 +111,15 @@ export function LifecycleCard({ app }: { app: ApplicationRow }) {
               Save
             </Button>
           </div>
+        </div>
+
+        <div className="space-y-1">
+          <Label>How well you fit</Label>
+          <FitRating value={fit} onChange={saveFit} />
+          <p className="text-xs text-muted-foreground">
+            Ask Claude through the jac connector how well you fit, and it rates
+            this for you. Click the current star to clear it.
+          </p>
         </div>
 
         {/* Only the moves that are legal from the current status are offered — the server
