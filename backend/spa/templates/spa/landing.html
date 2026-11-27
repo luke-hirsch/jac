@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if brand %} style="--brand: {{ brand }}"{% endif %}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    {% include "spa/_theme_head.html" %}
     <title>{% if owner %}{{ owner.display_name }} — Portfolio{% else %}Portfolio{% endif %}</title>
     <meta name="description" content="{% if owner and owner.bio %}{{ owner.bio }}{% else %}A personal portfolio & CV automation showcase.{% endif %}" />
     <meta property="og:type" content="website" />
@@ -14,165 +15,47 @@
     {% if owner and owner.avatar_url %}
     <meta property="og:image" content="{{ owner.avatar_url }}" />
     {% endif %}
-    <style>
-      :root {
-        --bg: #fafafa;
-        --fg: #18181b;
-        --muted: #71717a;
-        --card: #fff;
-        --border: #e4e4e7;
-        --accent: #4f46e5;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #0a0a0a;
-          --fg: #fafafa;
-          --muted: #a1a1aa;
-          --card: #18181b;
-          --border: #27272a;
-          --accent: #818cf8;
-        }
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        background: var(--bg);
-        color: var(--fg);
-        font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        display: grid;
-        grid-template-rows: 1fr auto;
-        place-items: center;
-        padding: 2rem;
-      }
-      main {
-        width: 100%;
-        max-width: 34rem;
-        text-align: center;
-      }
-      img.avatar {
-        width: 96px;
-        height: 96px;
-        border-radius: 50%;
-        object-fit: cover;
-        margin: 0 auto 1rem;
-        display: block;
-        border: 1px solid var(--border);
-      }
-      h1 {
-        font-size: 1.9rem;
-        margin: 0 0 0.25rem;
-        letter-spacing: -0.02em;
-      }
-      p.bio {
-        color: var(--muted);
-        margin: 0 auto 1.75rem;
-        max-width: 28rem;
-      }
-      .links {
-        display: grid;
-        gap: 0.75rem;
-      }
-      a.card {
-        display: block;
-        padding: 0.9rem 1.1rem;
-        border: 1px solid var(--border);
-        border-radius: 0.75rem;
-        background: var(--card);
-        color: inherit;
-        text-decoration: none;
-        font-weight: 600;
-        transition: border-color 0.15s;
-      }
-      a.card:hover {
-        border-color: var(--accent);
-      }
-      a.card.primary {
-        background: var(--accent);
-        color: #fff;
-        border-color: var(--accent);
-      }
-      .socials {
-        margin-top: 1.25rem;
-        display: flex;
-        gap: 1rem;
-        justify-content: center;
-      }
-      .socials a {
-        color: var(--muted);
-        text-decoration: none;
-        font-size: 0.9rem;
-      }
-      .socials a:hover {
-        color: var(--accent);
-      }
-      .chips {
-        margin-top: 1.5rem;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.4rem;
-        justify-content: center;
-      }
-      .chip {
-        font-size: 0.78rem;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        padding: 0.15rem 0.6rem;
-      }
-      footer.legal {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem 1rem;
-        justify-content: center;
-        padding-top: 1.5rem;
-        font-size: 0.8rem;
-      }
-      footer.legal a {
-        color: var(--muted);
-      }
-    </style>
   </head>
-  <body>
-    <main>
+  {# The look is the SPA's stylesheet (frontend/src/theme.css), linked above; the classes are #}
+  {# Tailwind's, on the theme's tokens. The build scans this folder (@source in index.css). #}
+  <body class="flex min-h-screen flex-col items-center px-8 pt-8 leading-relaxed">
+    <main class="flex w-full max-w-lg flex-1 flex-col justify-center text-center">
       {% if owner %}
         {% if owner.avatar_url %}
-        <img class="avatar" src="{{ owner.avatar_url }}" alt="{{ owner.display_name }}" />
+        <img class="mx-auto mb-4 size-24 border object-cover" src="{{ owner.avatar_url }}" alt="{{ owner.display_name }}" />
         {% endif %}
-        <h1>{{ owner.display_name }}</h1>
+        <h1 class="mb-1 font-heading text-3xl leading-tight font-bold tracking-tight">{{ owner.display_name }}</h1>
         {% if owner.bio %}
-        <p class="bio">{{ owner.bio }}</p>
+        <p class="mx-auto mb-7 max-w-md text-muted-foreground">{{ owner.bio }}</p>
         {% endif %}
       {% else %}
-        <h1>Portfolio</h1>
+        <h1 class="mb-7 font-heading text-3xl leading-tight font-bold tracking-tight">Portfolio</h1>
       {% endif %}
 
-      <div class="links">
+      <div class="grid gap-3">
         {% if explore_url %}
-        <a class="card primary" href="{{ explore_url }}">Explore my work →</a>
+        <a class="block rounded-lg border border-primary bg-primary px-4 py-3.5 font-semibold text-primary-foreground transition-colors hover:bg-primary/90" href="{{ explore_url }}">Explore my work →</a>
         {% endif %}
-        <a class="card" href="{{ signup_url }}">Build your own CV with JAC</a>
+        <a class="block rounded-lg border bg-card px-4 py-3.5 font-semibold text-card-foreground transition-colors hover:border-primary" href="{{ signup_url }}">Build your own CV with JAC</a>
       </div>
 
       {% if owner.website or owner.linkedin_url or owner.github_url %}
-      <div class="socials">
+      <div class="mt-5 flex justify-center gap-4 text-sm">
         {% if owner.website %}
-        <a href="{{ owner.website }}">Website</a>
+        <a class="text-muted-foreground hover:text-primary" href="{{ owner.website }}">Website</a>
         {% endif %}
         {% if owner.linkedin_url %}
-        <a href="{{ owner.linkedin_url }}">LinkedIn</a>
+        <a class="text-muted-foreground hover:text-primary" href="{{ owner.linkedin_url }}">LinkedIn</a>
         {% endif %}
         {% if owner.github_url %}
-        <a href="{{ owner.github_url }}">GitHub</a>
+        <a class="text-muted-foreground hover:text-primary" href="{{ owner.github_url }}">GitHub</a>
         {% endif %}
       </div>
       {% endif %}
 
       {% if domains %}
-      <div class="chips">
-        {% for d in domains %}<span class="chip">{{ d }}</span>{% endfor %}
+      <div class="mt-6 flex flex-wrap justify-center gap-1.5">
+        {% for d in domains %}<span class="border px-2.5 py-0.5 text-xs text-muted-foreground">{{ d }}</span>{% endfor %}
       </div>
       {% endif %}
     </main>

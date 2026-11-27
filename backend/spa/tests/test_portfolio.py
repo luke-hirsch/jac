@@ -3,8 +3,8 @@
 Covers the flow-rework payload/intro logic (`owner_domains` / `section_order` /
 `default_link` / `PortfolioIntroWriter` / `build_intro`), the multi-user portfolios
 (`owner_for_handle` / `random_handle` / per-user slugs / `application_slug` /
-`public_portfolio_url`) and the stored standard page (`standard_page` and what the native page
-reads from it). Every portfolio lives at `portfolio.<domain>/<handle>/`, so the public
+`public_portfolio_url`), the stored standard page (`standard_page` and what the native page
+reads from it) and the colour every page wears (`brand_for`, guide 31). Every portfolio lives at `portfolio.<domain>/<handle>/`, so the public
 endpoints carry the handle in their path (`/api/spa/public/<handle>/…`), and the Host header
 plays no part.
 
@@ -1532,37 +1532,84 @@ class PublicNameTests(TestCase):
         self.assertEqual(build_payload(self.owner)["owner"]["display_name"], "Max M")
 
 
-class OwnerAccentTests(TestCase):
-    """Guide 29: the public portfolio wears the owner's accent, the colour they picked for their
-    CV (`UserProfile.accent_color`). The page makes it readable on its dark ground; the payload
-    only carries it, blank when there's none. A colour is no contact detail, so it doesn't wait
-    for `show_socials`. The questionnaire has no payload yet, so its meta carries it too."""
+@override_settings(PORTFOLIO_OWNER_USERNAME="lukas")
+class BrandTests(TestCase):
+    """Guide 31: the UI wears one colour, from the account the page belongs to. The chain is
+    `spa.portfolio.brand_for`: the user's accent (`UserProfile.accent_color`, the CV's colour
+    too), else the site owner's, else "" (frontend/src/theme.css then wears its fallback). jac
+    wears the signed-in user's (the profile's read-only `brand`), a portfolio its owner's (the
+    payload's and the meta's `accent`), every other page the site owner's
+    (`/api/spa/public/brand/`). A colour is no contact detail, so it doesn't wait for
+    `show_socials`. `brand_for` is reached through the module: it's new in guide 31."""
+
+    PROFILE_URL = "/api/spa/profile/"
+    SITE_URL = "/api/spa/public/brand/"
 
     def setUp(self):
         cache.clear()  # the public endpoints are throttled
+        self.lukas = _owner("lukas")  # the site owner
         self.owner = _owner("jane")
 
-    def _pick(self, colour):
-        UserProfile.objects.filter(user=self.owner).update(accent_color=colour)
-        self.owner.refresh_from_db()
+    def _pick(self, user, colour):
+        UserProfile.objects.filter(user=user).update(accent_color=colour)
+        user.refresh_from_db()
 
-    def test_blank_when_the_owner_picked_none(self):
-        self.assertEqual(build_payload(self.owner)["owner"]["accent"], "")
+    # --- the chain ---
 
-    def test_the_owners_pick_on_every_kind_of_page(self):
-        self._pick("#1a7f56")
+    def test_the_users_own_colour_comes_first(self):
+        self._pick(self.lukas, "#8f4700")
+        self._pick(self.owner, "#1a7f56")
+        self.assertEqual(portfolio.brand_for(self.owner), "#1a7f56")
+
+    def test_without_one_the_site_owners(self):
+        self._pick(self.lukas, "#8f4700")
+        self.assertEqual(portfolio.brand_for(self.owner), "#8f4700")
+        self.assertEqual(portfolio.brand_for(None), "#8f4700")  # a page nobody owns
+
+    def test_without_either_its_blank(self):
+        self.assertEqual(portfolio.brand_for(self.owner), "")
+        self.assertEqual(portfolio.brand_for(None), "")
+
+    @override_settings(PORTFOLIO_OWNER_USERNAME="")
+    def test_without_a_site_owner_its_the_users_or_blank(self):
+        self._pick(self.lukas, "#8f4700")
+        self.assertEqual(portfolio.brand_for(self.owner), "")
+        self.assertEqual(portfolio.brand_for(None), "")
+        self._pick(self.owner, "#1a7f56")
+        self.assertEqual(portfolio.brand_for(self.owner), "#1a7f56")
+
+    def test_only_a_plain_hex_in_lower_case(self):
+        """The Django pages put it into a style attribute, and `.update()` skips the model's
+        validator: anything but `#rrggbb` counts as no colour."""
+        self._pick(self.lukas, "#8f4700")
+        self._pick(self.owner, "#1A7F56")
+        self.assertEqual(portfolio.brand_for(self.owner), "#1a7f56")
+        for junk in ("red", "#1a7f5", "#1a7f5z", "1a7f56", "#1a7;}"):
+            with self.subTest(junk=junk):
+                self._pick(self.owner, junk)
+                self.assertEqual(portfolio.brand_for(self.owner), "#8f4700")
+
+    # --- a portfolio wears its owner's ---
+
+    def test_every_kind_of_page_wears_the_owners_else_the_site_owners(self):
         link = PortfolioLink.objects.create(
             user=self.owner, kind=PortfolioLink.Kind.manual, slug="for-acme"
         )
-        for payload in (
-            build_payload(self.owner),
-            build_payload(self.owner, link=link),
-            build_payload(self.owner, lucky=True, seed=1),
-        ):
-            self.assertEqual(payload["owner"]["accent"], "#1a7f56")
+        def accents():
+            return {
+                build_payload(self.owner)["owner"]["accent"],
+                build_payload(self.owner, link=link)["owner"]["accent"],
+                build_payload(self.owner, lucky=True, seed=1)["owner"]["accent"],
+            }
+
+        self.assertEqual(accents(), {""})
+        self._pick(self.lukas, "#8f4700")
+        self.assertEqual(accents(), {"#8f4700"})
+        self._pick(self.owner, "#1a7f56")
+        self.assertEqual(accents(), {"#1a7f56"})
 
     def test_it_doesnt_wait_for_the_socials_opt_in(self):
-        self._pick("#1a7f56")
+        self._pick(self.owner, "#1a7f56")
         UserProfile.objects.filter(user=self.owner).update(
             website="https://example.com", show_socials=False
         )
@@ -1572,7 +1619,7 @@ class OwnerAccentTests(TestCase):
         self.assertNotIn("website", owner)
 
     def test_the_public_endpoints_carry_it(self):
-        self._pick("#8f4700")
+        self._pick(self.lukas, "#8f4700")
         PortfolioLink.objects.create(
             user=self.owner, kind=PortfolioLink.Kind.manual, slug="for-acme"
         )
@@ -1583,10 +1630,56 @@ class OwnerAccentTests(TestCase):
             self.assertEqual(r.json()["owner"]["accent"], "#8f4700", url)
 
     def test_the_questionnaires_meta_carries_it(self):
+        """The questionnaire has no payload yet: its meta says the same colour."""
         meta = "/api/spa/public/jane/native/meta/"
         self.assertEqual(self.client.get(meta).json()["accent"], "")
-        self._pick("#8f4700")
+        self._pick(self.lukas, "#8f4700")
         self.assertEqual(self.client.get(meta).json()["accent"], "#8f4700")
+        self._pick(self.owner, "#1a7f56")
+        self.assertEqual(self.client.get(meta).json()["accent"], "#1a7f56")
+
+    # --- jac wears the signed-in user's ---
+
+    def test_the_profile_says_which_colour_jac_wears(self):
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(self.PROFILE_URL).json()["brand"], "")
+        self._pick(self.lukas, "#8f4700")
+        body = self.client.get(self.PROFILE_URL).json()
+        self.assertEqual(body["brand"], "#8f4700")
+        self.assertEqual(body["accent_color"], "")  # the CV's own rule: blank is the layout's
+        self._pick(self.owner, "#1a7f56")
+        self.assertEqual(self.client.get(self.PROFILE_URL).json()["brand"], "#1a7f56")
+
+    def test_the_profiles_brand_is_read_only(self):
+        self.client.force_login(self.owner)
+        r = self.client.patch(
+            self.PROFILE_URL,
+            data=json.dumps({"brand": "#000000"}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.profile.accent_color, "")
+        self.assertEqual(r.json()["brand"], "")
+
+    # --- every other page wears the site owner's ---
+
+    def test_the_site_brand_is_the_site_owners(self):
+        r = self.client.get(self.SITE_URL)  # anonymous
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"brand": ""})
+        self.assertEqual(r["X-Robots-Tag"], "noindex")
+        self._pick(self.owner, "#1a7f56")  # a portfolio owner's is no site colour
+        self.assertEqual(self.client.get(self.SITE_URL).json(), {"brand": ""})
+        self._pick(self.lukas, "#8f4700")
+        self.assertEqual(self.client.get(self.SITE_URL).json(), {"brand": "#8f4700"})
+
+    def test_the_site_brand_isnt_throttled(self):
+        """Every SPA load asks once. On the `portfolio` scope it would eat the budget a visitor's
+        portfolio pages need, and it says nothing the landing doesn't print for anyone."""
+        allowed = int(settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["portfolio"].split("/")[0])
+        codes = {self.client.get(self.SITE_URL).status_code for _ in range(allowed + 1)}
+        self.assertEqual(codes, {200})
 
 
 @override_settings(PORTFOLIO_OWNER_USERNAME="lukas")

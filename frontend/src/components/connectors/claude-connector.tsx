@@ -437,7 +437,7 @@ function ChangeItem({
   const oneSide = change.before === null || change.after === null;
   return (
     <li>
-      <details className="rounded border px-3 py-2">
+      <details className="rounded-sm border px-3 py-2">
         <summary className="cursor-pointer text-sm">
           <span className="font-medium">{change.label || change.id}</span>
           {change.before === null && (
@@ -497,7 +497,7 @@ function FieldText({
   text: string | null;
 }) {
   return (
-    <div className="min-w-0 rounded bg-muted px-2 py-1 text-sm">
+    <div className="min-w-0 rounded-sm bg-muted px-2 py-1 text-sm">
       {caption && <p className="text-xs text-muted-foreground">{caption}</p>}
       {text === null ? (
         <p className="italic text-muted-foreground">empty</p>

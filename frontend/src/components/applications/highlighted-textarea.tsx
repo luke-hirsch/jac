@@ -79,7 +79,7 @@ export function HighlightedTextarea({
         ) : (
           <>
             {value.slice(0, cut)}
-            <mark className="bg-amber-200/70 text-transparent dark:bg-amber-500/30">
+            <mark className="bg-warning/25 text-transparent">
               {value.slice(cut)}
             </mark>
           </>

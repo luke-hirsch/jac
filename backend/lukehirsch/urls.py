@@ -9,10 +9,13 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from jac.queues import queue_report
 from spa.legal import legal_page
 from spa.portfolio import landing_context
+from spa.theme import theme_context
 
 
 def landing(request):
-    return render(request, "spa/landing.html", landing_context(request))
+    return render(
+        request, "spa/landing.html", {**landing_context(request), **theme_context()}
+    )
 
 
 def health(request):

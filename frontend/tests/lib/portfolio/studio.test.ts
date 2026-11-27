@@ -2,9 +2,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PortfolioItem } from "@/lib/queries/portfolio";
 
 /**
- * Guide 29, the Studio look: what of the public page is logic. The owner's accent made readable
- * on the dark ground, the page split into the mock-up's sections (the "now" card, the tiles, the
- * numbered highlights, the closing line), and the small lines the cards say.
+ * Guide 29, the page layout from the Studio mock-up: what of the public page is logic. The page
+ * split into the mock-up's sections (the "now" card, the tiles, the numbered highlights, the
+ * closing line), and the small lines the cards say. The owner's colour left this module in guide
+ * 31: theme.css makes it readable (tests/lib/brand.test.ts covers which one a page wears).
  *
  * Lazy import, as in appearance.test.ts: the file stays collectible while `@/lib/portfolio/studio`
  * doesn't exist yet. Hoist it to a top-level import once it does; `Mod` is the guide's contract.
@@ -18,12 +19,6 @@ type Sections = {
   closing: { item: PortfolioItem; repeat: boolean } | null;
 };
 type Mod = {
-  STUDIO_GROUND: string;
-  STUDIO_CARD: string;
-  STUDIO_ACCENT: string;
-  MIN_ACCENT_CONTRAST: number;
-  contrastBetween(a: string, b: string): number;
-  studioAccent(raw: string | null | undefined): string;
   studioSections(featured: PortfolioItem[], more: PortfolioItem[]): Sections;
   ordinal(n: number): string;
   yearSpan(item: PortfolioItem): string;
@@ -62,64 +57,6 @@ const figures = (id: string, rows = 2) =>
     },
   });
 const ids = (items: PortfolioItem[]) => items.map((i) => i.id);
-
-describe("contrastBetween", () => {
-  it("anchors on the extremes, either way round", () => {
-    expect(m.contrastBetween("#ffffff", "#000000")).toBeCloseTo(21, 1);
-    expect(m.contrastBetween("#000000", "#ffffff")).toBeCloseTo(21, 1);
-    expect(m.contrastBetween("#777777", "#777777")).toBeCloseTo(1, 5);
-  });
-});
-
-describe("studioAccent", () => {
-  it("falls back to the Studio's apricot when the owner picked none", () => {
-    expect(m.STUDIO_ACCENT).toBe("#f2a65a");
-    expect(m.studioAccent("")).toBe(m.STUDIO_ACCENT);
-    expect(m.studioAccent(undefined)).toBe(m.STUDIO_ACCENT);
-    expect(m.studioAccent(null)).toBe(m.STUDIO_ACCENT);
-    expect(m.studioAccent("not a colour")).toBe(m.STUDIO_ACCENT);
-  });
-
-  it("keeps an accent that already reads on the dark ground exactly as picked", () => {
-    expect(m.studioAccent("#F2A65A")).toBe("#f2a65a");
-    expect(m.studioAccent("#7fb6f0")).toBe("#7fb6f0");
-  });
-
-  it("lightens a CV accent picked for white paper until it clears AA on the cards", () => {
-    const blue = "#1a5fb4"; // the CV layout's default: ~3:1 on the dark cards
-    expect(m.contrastBetween(blue, m.STUDIO_CARD)).toBeLessThan(
-      m.MIN_ACCENT_CONTRAST,
-    );
-    const out = m.studioAccent(blue);
-    expect(m.contrastBetween(out, m.STUDIO_CARD)).toBeGreaterThanOrEqual(
-      m.MIN_ACCENT_CONTRAST,
-    );
-    // The ground is darker than the cards, and it's also the ink on an accent button.
-    expect(m.contrastBetween(out, m.STUDIO_GROUND)).toBeGreaterThanOrEqual(
-      m.MIN_ACCENT_CONTRAST,
-    );
-  });
-
-  it("keeps the hue: a lightened blue is still blue", () => {
-    const [r, g, b] = [1, 3, 5].map((i) =>
-      parseInt(m.studioAccent("#1a5fb4").slice(i, i + 2), 16),
-    );
-    expect(b).toBeGreaterThan(r);
-    expect(b).toBeGreaterThan(g);
-  });
-
-  it("terminates on black, and the result reads", () => {
-    const out = m.studioAccent("#000000");
-    expect(out).toMatch(/^#[0-9a-f]{6}$/);
-    expect(m.contrastBetween(out, m.STUDIO_CARD)).toBeGreaterThanOrEqual(
-      m.MIN_ACCENT_CONTRAST,
-    );
-  });
-
-  it("takes the short form a colour field can produce", () => {
-    expect(m.studioAccent("#fa5")).toBe(m.studioAccent("#ffaa55"));
-  });
-});
 
 describe("studioSections", () => {
   it("takes the skills out of the grids: they live in the network", () => {

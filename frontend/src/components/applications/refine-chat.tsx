@@ -182,7 +182,7 @@ export function RefineChat({
   }, [seed, onSeedConsumed]);
 
   return (
-    <details ref={detailsRef} className="rounded border p-3">
+    <details ref={detailsRef} className="rounded-sm border p-3">
       <summary className="cursor-pointer text-sm font-medium">
         Application assistant
         <span className="ml-2 text-xs font-normal text-muted-foreground">
@@ -240,7 +240,7 @@ export function RefineChat({
         </div>
 
         {busyTower && (
-          <p className="text-xs text-amber-700">
+          <p className="text-xs text-warning">
             The local model is busy generating — replies may wait.
           </p>
         )}
@@ -249,7 +249,7 @@ export function RefineChat({
           {entries.map((m, i) => (
             <div
               key={i}
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+              className={`max-w-5/6 rounded-lg px-3 py-2 text-sm ${
                 m.role === "user"
                   ? "ml-auto bg-primary text-primary-foreground"
                   : "bg-muted"
@@ -260,7 +260,7 @@ export function RefineChat({
                 {m.streaming && "…"}
               </p>
               {m.revision && (
-                <div className="mt-2 space-y-1 rounded border bg-background p-2">
+                <div className="mt-2 space-y-1 rounded-sm border bg-background p-2">
                   <p className="whitespace-pre-wrap text-xs text-muted-foreground">
                     {m.revision}
                   </p>

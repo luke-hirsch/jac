@@ -96,7 +96,7 @@ export function TotpPanel() {
       <p className="text-sm">
         Scan this QR with your authenticator app, then enter a 6-digit code:
       </p>
-      <div className="rounded border inline-block p-3 bg-white">
+      <div className="rounded-sm border inline-block p-3 bg-white">
         <QRCodeSVG value={meta.totp_url} size={160} />
       </div>
       <p className="text-xs text-muted-foreground break-all">
@@ -167,7 +167,7 @@ function RecoveryCodesPanel() {
       <p className="text-xs text-muted-foreground">
         Store these somewhere safe. Each is single-use.
       </p>
-      <ul className="grid grid-cols-2 gap-1 font-mono text-sm bg-muted/40 p-3 rounded">
+      <ul className="grid grid-cols-2 gap-1 font-mono text-sm bg-muted/40 p-3 rounded-sm">
         {codes.data.unused_codes.map((c) => (
           <li key={c}>{c}</li>
         ))}

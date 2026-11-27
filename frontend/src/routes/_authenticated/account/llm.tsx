@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ClaudeConnector } from "@/components/connectors/claude-connector";
+import { SectionTitle } from "@/components/heading";
 
 export const Route = createFileRoute("/_authenticated/account/llm")({
   component: LLMConfigPage,
@@ -78,7 +79,7 @@ function LLMConfigPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-medium">LLM providers</h2>
+        <SectionTitle>LLM providers</SectionTitle>
         <p className="text-sm text-muted-foreground">
           A generation runs on exactly one executor. HirschAI is built in and
           free; add a commercial key below to unlock high mode and the
@@ -143,7 +144,7 @@ function LLMConfigPage() {
       <Separator />
       <section className="space-y-4">
         <div>
-          <h2 className="text-lg font-medium">Connectors</h2>
+          <SectionTitle>Connectors</SectionTitle>
           <p className="text-sm text-muted-foreground">
             The other way round: with a key, jac's AI runs on your provider
             account; with a connector, the AI app you already use reaches jac,

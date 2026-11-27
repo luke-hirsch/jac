@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 /** Inside a card, every heading sits under the card's own title (an h3), whatever level the owner
  *  typed: a `#` in a text block must not make a second h1 on the page. */
 const Heading = ({ children }: { children?: ReactNode }) => (
-  <h4 className="font-display text-lg font-semibold text-foreground">
+  <h4 className="font-heading text-lg font-semibold text-foreground">
     {children}
   </h4>
 );
@@ -21,10 +21,7 @@ const COMPONENTS: Components = {
   // where the visitor came from.
   a: ({ href, children }) =>
     href?.startsWith("#") ? (
-      <a
-        href={href}
-        className="text-foreground underline underline-offset-[3px]"
-      >
+      <a href={href} className="text-foreground underline underline-offset-4">
         {children}
       </a>
     ) : (
@@ -32,7 +29,7 @@ const COMPONENTS: Components = {
         href={href}
         target="_blank"
         rel="noreferrer"
-        className="text-foreground underline underline-offset-[3px]"
+        className="text-foreground underline underline-offset-4"
       >
         {children}
       </a>
@@ -51,17 +48,15 @@ const COMPONENTS: Components = {
     </ol>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="border-l-2 border-studio-accent pl-4">
+    <blockquote className="border-l-2 border-primary pl-4">
       {children}
     </blockquote>
   ),
   code: ({ children }) => (
-    <code className="rounded bg-studio-raise px-1.5 py-0.5 text-[0.9em]">
-      {children}
-    </code>
+    <code className="rounded-sm bg-muted px-1.5 py-0.5 text-sm">{children}</code>
   ),
   pre: ({ children }) => (
-    <pre className="overflow-x-auto rounded-lg bg-studio-raise p-3 text-sm [&_code]:bg-transparent [&_code]:p-0">
+    <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-sm *:bg-transparent *:p-0">
       {children}
     </pre>
   ),
@@ -80,7 +75,7 @@ const COMPONENTS: Components = {
  *  third party. Pictures are image blocks, uploaded to jac. */
 export function StudioMarkdown({ source }: { source: string }) {
   return (
-    <div className="flex flex-col gap-2.5 leading-relaxed text-studio-soft">
+    <div className="flex flex-col gap-2.5 leading-relaxed text-muted-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml

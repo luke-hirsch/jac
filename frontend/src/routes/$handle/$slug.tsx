@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useBrand } from "@/components/brand";
 import { EscapeHatch } from "@/components/portfolio/escape-hatch";
 import { PortfolioPage } from "@/components/portfolio/portfolio-page";
-import { Studio } from "@/components/portfolio/studio";
 import { useOwnerHome } from "@/components/portfolio/use-owner-home";
 import { QueryError } from "@/components/query-error";
 import { ApiError } from "@/lib/api";
@@ -18,6 +18,7 @@ function PortfolioLink() {
   const handle = Route.useParams({ select: (p) => p.handle.toLowerCase() });
   const { slug } = Route.useParams();
   const q = usePortfolioLink(handle, slug);
+  useBrand(q.data?.owner.accent);
   const goHome = useOwnerHome(handle);
 
   // The session cookie stays on the jac host, so everyone here is anonymous, the owner included.
@@ -56,9 +57,9 @@ function PortfolioLink() {
     );
   }
   return (
-    <Studio accent={q.data.owner.accent}>
+    <>
       <EscapeHatch handle={handle} />
       <PortfolioPage payload={q.data} />
-    </Studio>
+    </>
   );
 }

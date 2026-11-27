@@ -29,6 +29,7 @@ export type ProfileRow = {
   theme: "system" | "light" | "dark";
   contrast: "normal" | "high";
   accent_color: string; // "" = keep the layout template's accent
+  brand: string; // read-only: the colour jac wears, accent_color else the site owner's, "" = theme.css's
 };
 
 /** False when the CV and the letter fall back to the username (jac cover_letter._candidate_name). */

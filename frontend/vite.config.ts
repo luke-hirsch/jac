@@ -21,6 +21,9 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // dist/.vite/manifest.json: the Django-rendered pages look up the hashed stylesheet in it
+  // (backend/spa/theme.py, settings.SPA_MANIFEST).
+  build: { manifest: true },
   server: {
     host: true, // listen on 0.0.0.0, so localhost, jac.localhost and portfolio.localhost all resolve
     allowedHosts: [".localhost"], // the bare domain and every subdomain of it

@@ -11,7 +11,7 @@ export const Route = createFileRoute("/auth")({
     await fetchSession();
   },
   component: () => (
-    <div className="min-h-screen grid place-items-center p-4 bg-muted/30">
+    <div className="min-h-screen grid place-items-center bg-muted/30 px-5 py-10">
       <div className="w-full max-w-sm space-y-6">
         <a
           href={apexOrigin()}

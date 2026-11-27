@@ -8,6 +8,7 @@ import { signOut, useInvalidateSession } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SectionTitle } from "@/components/heading";
 
 type Sess = {
   id: number;
@@ -66,10 +67,10 @@ function DangerZone() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Sessions</h2>
+        <SectionTitle>Sessions</SectionTitle>
         <ul className="space-y-2">
           {sessions.data?.map((s) => (
-            <li key={s.id} className="rounded border p-3 text-sm">
+            <li key={s.id} className="rounded-sm border p-3 text-sm">
               <div className="font-mono">
                 {s.ip} · {new Date(s.created_at).toLocaleString()}
               </div>
@@ -77,7 +78,7 @@ function DangerZone() {
                 {s.user_agent}
               </div>
               {s.is_current && (
-                <span className="text-xs text-emerald-600">
+                <span className="text-xs text-success">
                   current session
                 </span>
               )}
@@ -93,9 +94,9 @@ function DangerZone() {
       </section>
 
       <section className="space-y-3 border-t pt-6">
-        <h2 className="text-lg font-semibold text-destructive">
+        <SectionTitle className="text-destructive">
           Delete account
-        </h2>
+        </SectionTitle>
         <p className="text-sm text-muted-foreground">
           Permanently removes your profile, career entries, applications, and
           LLM configs.

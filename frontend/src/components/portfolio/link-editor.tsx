@@ -101,7 +101,7 @@ export function LinkEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden sm:max-w-2xl">
+      <DialogContent className="grid grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{link ? "Edit link" : "New portfolio link"}</DialogTitle>
         </DialogHeader>

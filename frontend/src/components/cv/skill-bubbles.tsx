@@ -99,7 +99,7 @@ export function SkillBubbles({
         {CATEGORY_ORDER.map((cat) => (
           <span key={cat} className="flex items-center gap-1.5">
             <span
-              className="inline-block size-2.5 rounded-full"
+              className="inline-block size-2.5"
               style={{ background: CATEGORY_META[cat].fill }}
             />
             {CATEGORY_META[cat].label}

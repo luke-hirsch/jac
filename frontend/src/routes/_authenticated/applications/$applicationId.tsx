@@ -13,6 +13,7 @@ import { isRunInFlight } from "@/lib/queries/generations";
 import { LifecycleCard } from "@/components/applications/lifecycle-card";
 import { QueryError } from "@/components/query-error";
 import { ApiError } from "@/lib/api";
+import { PageTitle } from "@/components/heading";
 
 export const Route = createFileRoute(
   "/_authenticated/applications/$applicationId",
@@ -68,9 +69,9 @@ function ApplicationDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">
+        <PageTitle>
           {app.data.posting_detail.title || "Untitled posting"}
-        </h1>
+        </PageTitle>
         <Link to="/applications" className="text-sm hover:underline">
           ← Applications
         </Link>

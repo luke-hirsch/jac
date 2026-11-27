@@ -7,6 +7,6 @@ export function LineSaveHint({ s }: { s?: FieldSaveState }) {
   if (s.state === "saving")
     return <p className="text-xs text-muted-foreground">saving…</p>;
   if (s.state === "saved")
-    return <p className="text-xs text-emerald-600">saved ✓</p>;
+    return <p className="text-xs text-success">saved ✓</p>;
   return <p className="text-xs text-destructive">{s.message}</p>;
 }

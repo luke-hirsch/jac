@@ -13,6 +13,7 @@ import { LineSaveHint } from "@/components/cv/line-save-hint";
 import { ACCENT_PRESETS, readableAccent } from "@/lib/render/accent";
 import { zodValidator, z } from "@/lib/form";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -313,9 +314,9 @@ function ProfileForm({
         </div>
         {text("street", "Street")}
         {text("address_line2", "Address line 2")}
-        <div className="grid grid-cols-[1fr_2fr] gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {text("zip", "ZIP / Postcode")}
-          {text("city", "City")}
+          <div className="col-span-2">{text("city", "City")}</div>
         </div>
         {text("country", "Country")}
       </div>
@@ -374,7 +375,7 @@ function ProfileForm({
           const printed = value ? readableAccent(value) : "";
           return (
             <div className="space-y-1">
-              <Label>CV accent colour</Label>
+              <Label>Accent colour</Label>
               <div className="flex flex-wrap items-center gap-2">
                 {ACCENT_PRESETS.map((hex) => (
                   <button
@@ -388,7 +389,7 @@ function ProfileForm({
                       saveAccent(hex);
                     }}
                     className={
-                      "size-6 rounded-full ring-offset-2 ring-offset-background " +
+                      "size-6 ring-offset-2 ring-offset-background " +
                       (value === hex ? "ring-2 ring-foreground" : "")
                     }
                     style={{ backgroundColor: hex }}
@@ -420,7 +421,7 @@ function ProfileForm({
                   <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     prints as
                     <span
-                      className="inline-block size-4 rounded-full"
+                      className="inline-block size-4"
                       style={{ backgroundColor: printed }}
                       title={printed}
                     />
@@ -428,9 +429,11 @@ function ProfileForm({
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Used on the CV headline and section titles. Pale colours are
-                darkened automatically so they stay readable, including in
-                greyscale print.
+                Colours your CV (the headline and section titles), your
+                portfolio and jac. On the CV, pale colours are darkened so they
+                stay readable, also in greyscale print; on screen it's made
+                lighter or darker to read in light and dark mode. Reset: the CV
+                takes its layout's colour, your portfolio and jac the site's.
               </p>
               <LineSaveHint s={fieldStates.accent_color} />
             </div>
@@ -441,12 +444,11 @@ function ProfileForm({
         {(field) => (
           <div className="space-y-1">
             <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={field.state.value}
-                onChange={(e) => {
-                  field.handleChange(e.target.checked);
-                  save("email_reminders", e.target.checked);
+                onCheckedChange={(v) => {
+                  field.handleChange(v === true);
+                  save("email_reminders", v === true);
                 }}
               />
               Email me when a generation finishes, and about follow-ups
@@ -459,12 +461,11 @@ function ProfileForm({
         {(field) => (
           <div className="space-y-1">
             <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={field.state.value}
-                onChange={(e) => {
-                  field.handleChange(e.target.checked);
-                  save("show_socials", e.target.checked);
+                onCheckedChange={(v) => {
+                  field.handleChange(v === true);
+                  save("show_socials", v === true);
                 }}
               />
               Show my contact details & socials on the exported CV

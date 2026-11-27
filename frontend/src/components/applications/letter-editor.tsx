@@ -370,7 +370,7 @@ export function LetterEditor({
       </div>
 
       <details
-        className="rounded border p-3"
+        className="rounded-sm border p-3"
         open={recipientOpen}
         onToggle={(e) => setRecipientOpen(e.currentTarget.open)}
       >
@@ -389,7 +389,7 @@ export function LetterEditor({
         </div>
       </details>
 
-      <details className="rounded border p-3">
+      <details className="rounded-sm border p-3">
         <summary className="cursor-pointer text-sm font-medium">Sender</summary>
         <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
           {SENDER_FIELDS.map(([field, label]) => (
@@ -464,7 +464,7 @@ export function LetterEditor({
           </div>
         )}
         {leaks.length > 0 && (
-          <p className="text-xs text-amber-700 dark:text-amber-400">
+          <p className="text-xs text-warning">
             Wrong form of “you” for a “
             {FORM_WORD[meta.address_form as AddressForm] ?? meta.address_form}”
             letter: {leaks.join(", ")}. Flagged, not rewritten — fix them by
@@ -472,7 +472,7 @@ export function LetterEditor({
           </p>
         )}
         {styleFlags.length > 0 && (
-          <div className="text-xs text-amber-700 dark:text-amber-400">
+          <div className="text-xs text-warning">
             <p>
               Your style rules (Account → Personality), flagged, not rewritten:
             </p>
@@ -486,7 +486,7 @@ export function LetterEditor({
       </div>
 
       {hasStub(body) && (
-        <p className="rounded border border-destructive/50 bg-destructive/10 p-3 text-xs font-medium">
+        <p className="rounded-sm border border-destructive/50 bg-destructive/10 p-3 text-xs font-medium">
           The model couldn't write this letter, so it can't be exported yet.
           Start a new run, or replace the warning line with your own text.
         </p>

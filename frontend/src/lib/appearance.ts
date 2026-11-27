@@ -15,7 +15,11 @@ export const DEFAULT_APPEARANCE: Appearance = {
 
 /** All classes this module may ever set — the provider removes these before adding, so a
  *  setting change never leaves a stale class behind. */
-export const ALL_APPEARANCE_CLASSES = ["dark", "contrast-high"] as const;
+export const ALL_APPEARANCE_CLASSES = [
+  "light",
+  "dark",
+  "contrast-high",
+] as const;
 
 /** `system` follows the OS; anything else is an explicit override. */
 export function resolveTheme(
@@ -28,12 +32,12 @@ export function resolveTheme(
 }
 
 /**
- * The classes that belong on <html>. `.contrast-high` is additive — the CSS has a
+ * The classes that belong on <html>. Always `light` or `dark`, so a page says which one it is
+ * (theme.css's `.dark` block, the `dark:` variant). `.contrast-high` is additive: theme.css has a
  * `.dark.contrast-high` block for the combination, so both classes stay on together.
  */
 export function themeClasses(a: Appearance, systemDark: boolean): string[] {
-  const out: string[] = [];
-  if (resolveTheme(a.theme, systemDark) === "dark") out.push("dark");
+  const out: string[] = [resolveTheme(a.theme, systemDark)];
   if (a.contrast === "high") out.push("contrast-high");
   return out;
 }

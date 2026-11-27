@@ -1,0 +1,22 @@
+{# The look, for a page Django renders without the SPA: the SPA's own stylesheet (spa/theme.py names #}
+{# the built file, or Vite's in dev), so frontend/src/theme.css dresses these pages too, and light or #}
+{# dark before the first paint. #}
+{% for href in stylesheets %}
+<link rel="stylesheet" href="{{ href }}" />
+{% endfor %}
+<script>
+  // Light or dark before the first paint: the visitor's setting from jac or a portfolio on this
+  // host (localStorage `appearance`), else the system's. The appearance part of the SPA's
+  // pre-paint script (frontend/index.html, lib/appearance.ts themeClasses): keep them in step.
+  (function () {
+    var root = document.documentElement;
+    var systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var a = {};
+    try {
+      a = JSON.parse(localStorage.getItem("appearance") || "{}") || {};
+    } catch (e) {}
+    var dark = a.theme === "dark" || (a.theme !== "light" && systemDark);
+    root.classList.add(dark ? "dark" : "light");
+    if (a.contrast === "high") root.classList.add("contrast-high");
+  })();
+</script>

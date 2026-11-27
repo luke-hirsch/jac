@@ -1,0 +1,249 @@
+/*
+ * THE LOOK: every page there is, from this one file.
+ *
+ * jac (jac.), every portfolio (portfolio.), the about and sign-in pages, and the pages Django
+ * renders without the SPA (the apex landing, the legal pages) all read it. The shadcn components
+ * in components/ui/ draw with these tokens only, so a value here changes them everywhere at once.
+ * index.css wires the tokens into Tailwind (bg-primary, text-muted-foreground, …) and decides
+ * nothing: change the look here.
+ *
+ * The format is shadcn's own: a `:root` block (light) and a `.dark` block. A theme from
+ * ui.shadcn.com/themes or tweakcn.com pastes straight over them (keep `--brand`, the fonts and
+ * the blocks below `.dark`, which are ours). The `.dark` class (and `.light`) on <html> comes from
+ * the appearance setting: jac's profile, a portfolio visitor's footer switch, else the system
+ * (lib/appearance.ts and the pre-paint scripts in index.html and spa/_theme_head.html).
+ *
+ * What each token colours:
+ *  --background / --foreground          the page and its text
+ *  --card, --popover (+ -foreground)    cards; menus, dialogs, popovers and toasts
+ *  --primary (+ -foreground)            main buttons, links set as text-primary, and on a
+ *                                       portfolio: quotes, figures, the kicker, calls to action.
+ *                                       Made from the brand colour (below), not set by hand
+ *  --secondary (+ -foreground)          secondary buttons
+ *  --muted (+ -foreground)              quiet grounds (chips, tiles, the network's ground) and
+ *                                       quiet text (descriptions, captions, body copy)
+ *  --accent (+ -foreground)             hover and selected rows in menus and lists
+ *  --destructive                        delete buttons, errors
+ *  --success / --warning                status text and tints: saved, fresh, a good fit; a warning,
+ *                                       over a limit (jac's application editor). Not shadcn's own,
+ *                                       so a pasted theme leaves them as they are
+ *  --border, --input                    lines, and the edge of inputs
+ *  --ring                               focus rings. Follows the primary
+ *  --chart-1 … --chart-5                charts
+ *  --sidebar-*                          shadcn's sidebar (no screen uses one yet)
+ *  --net-old / --net-new                the portfolio's skill network and year bars, earlier →
+ *                                       recent. The recent end follows the primary
+ */
+
+:root {
+  /* The brand colour when no account names one (the site owner has none either). The SPA and
+     the Django pages put the account's colour on <html> as an inline `--brand`, which wins. A
+     plain hex: "The brand colour" below makes it readable in both modes. */
+  --brand: #1a7f56;
+
+  /* Fonts: one family for everything, a grotesque; hierarchy from size and weight (100 to 900).
+     Installed in index.css (@fontsource: the files ship in the build, no font CDN, also on the
+     Django pages). Another family = `npm install @fontsource-variable/<name>`, its @import in
+     index.css, its name here. `--font-family-heading` is the headings' face (CardTitle, the
+     portfolio's headings, the landing's name): the same family today; give it its own name to
+     split them. */
+  --font-family-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-family-heading: var(--font-family-sans);
+
+  /* Corners: 0, square everywhere. Every rounded-sm … rounded-4xl in the code is a multiple of
+     it (index.css), so one value here brings rounding back. shadcn's components are square on
+     their own (radix-sera writes `rounded-none` into each file under components/ui/). Nothing
+     uses rounded-full: no pills, round dots or round avatars. */
+  --radius: 0;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.147 0.004 49.3);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.147 0.004 49.3);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.147 0.004 49.3);
+  /* Only for a browser without relative colours (see "The brand colour"): jac's stone. */
+  --primary: oklch(0.214 0.009 43.1);
+  --primary-foreground: oklch(0.986 0.002 67.8);
+  --secondary: oklch(0.96 0.002 17.2);
+  --secondary-foreground: oklch(0.214 0.009 43.1);
+  --muted: oklch(0.96 0.002 17.2);
+  --muted-foreground: oklch(0.547 0.021 43.1);
+  --accent: oklch(0.96 0.002 17.2);
+  --accent-foreground: oklch(0.214 0.009 43.1);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.508 0.118 165.6);
+  --warning: oklch(0.555 0.163 49);
+  --border: oklch(0.922 0.005 34.3);
+  --input: oklch(0.922 0.005 34.3);
+  --ring: var(--primary);
+  --chart-1: oklch(0.868 0.007 39.5);
+  --chart-2: oklch(0.547 0.021 43.1);
+  --chart-3: oklch(0.438 0.017 39.3);
+  --chart-4: oklch(0.367 0.016 35.7);
+  --chart-5: oklch(0.268 0.011 36.5);
+  --sidebar: oklch(0.986 0.002 67.8);
+  --sidebar-foreground: oklch(0.147 0.004 49.3);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.96 0.002 17.2);
+  --sidebar-accent-foreground: oklch(0.214 0.009 43.1);
+  --sidebar-border: oklch(0.922 0.005 34.3);
+  --sidebar-ring: var(--ring);
+  --net-old: oklch(0.84 0.025 70);
+  --net-new: var(--primary);
+}
+
+/* Dark: the warm near-black ground; the card and the quiet greys carry about half the red-brown
+   they had (chroma halved, hue moved from ~40 toward 65), so they read greyer beside a green. */
+.dark {
+  --background: oklch(0.147 0.004 49.3);
+  --foreground: oklch(0.986 0.002 67.8);
+  --card: oklch(0.214 0.005 65);
+  --card-foreground: oklch(0.986 0.002 67.8);
+  --popover: oklch(0.214 0.005 65);
+  --popover-foreground: oklch(0.986 0.002 67.8);
+  --primary: oklch(0.922 0.005 34.3);
+  --primary-foreground: oklch(0.214 0.005 65);
+  --secondary: oklch(0.268 0.006 65);
+  --secondary-foreground: oklch(0.986 0.002 67.8);
+  --muted: oklch(0.268 0.006 65);
+  --muted-foreground: oklch(0.714 0.008 65);
+  --accent: oklch(0.268 0.006 65);
+  --accent-foreground: oklch(0.986 0.002 67.8);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.765 0.177 163.2);
+  --warning: oklch(0.828 0.189 84.4);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --chart-1: oklch(0.868 0.007 39.5);
+  --chart-2: oklch(0.547 0.021 43.1);
+  --chart-3: oklch(0.438 0.017 39.3);
+  --chart-4: oklch(0.367 0.016 35.7);
+  --chart-5: oklch(0.268 0.011 36.5);
+  --sidebar: oklch(0.214 0.005 65);
+  --sidebar-foreground: oklch(0.986 0.002 67.8);
+  --sidebar-accent: oklch(0.268 0.006 65);
+  --sidebar-accent-foreground: oklch(0.986 0.002 67.8);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --net-old: oklch(0.43 0.015 65);
+}
+
+/*
+ * The brand colour: `--brand` becomes the primary, readable in both modes for any colour an
+ * account can pick. Same hue and chroma, the lightness clamped:
+ *   light mode: at most 0.50, under the cream --primary-foreground
+ *   dark mode:  at least 0.70, under the dark --primary-foreground
+ * #1a7f56 (the fallback) comes out #06764e in light mode and #58b487 in dark mode.
+ * Proved over every sRGB colour (guide 31's appendix has the script): text on the primary is at
+ * least 4.67:1 in light mode and 4.85:1 in dark mode, WCAG AA for every colour. A bigger light
+ * maximum or a smaller dark minimum loses AA for some colours (0.52 / 0.68 already do).
+ *
+ * In @supports: a browser without relative colours (Firefox before 128, older Safari) keeps the
+ * stone primary above, so a button never loses its ground.
+ */
+@supports (color: oklch(from red min(l, 0.5) c h)) {
+  :root {
+    --primary: oklch(from var(--brand) min(l, 0.5) c h);
+  }
+  .dark {
+    --primary: oklch(from var(--brand) max(l, 0.7) c h);
+  }
+}
+
+/* High contrast (the setting, `.contrast-high`): pure black on pure white, and back in dark mode;
+   hard borders, no decorative greys, no brand colour. MUST stay below the brand block: they set
+   --primary with the same specificity, so the later one wins (and `.dark.contrast-high` outranks
+   both). */
+.contrast-high {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0 0 0);
+  --primary: oklch(0 0 0);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.94 0 0);
+  --secondary-foreground: oklch(0 0 0);
+  --muted: oklch(0.94 0 0);
+  --muted-foreground: oklch(0.25 0 0);
+  --accent: oklch(0.9 0 0);
+  --accent-foreground: oklch(0 0 0);
+  --destructive: oklch(0.44 0.24 27.3);
+  --success: oklch(0.4 0.1 160);
+  --warning: oklch(0.44 0.13 50);
+  --border: oklch(0 0 0);
+  --input: oklch(0 0 0);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0 0 0);
+  --sidebar-accent: oklch(0.9 0 0);
+  --sidebar-accent-foreground: oklch(0 0 0);
+  --sidebar-border: oklch(0 0 0);
+  --net-old: oklch(0.65 0 0);
+}
+
+.dark.contrast-high {
+  --background: oklch(0 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0 0 0);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(1 0 0);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.18 0 0);
+  --muted-foreground: oklch(0.85 0 0);
+  --accent: oklch(0.22 0 0);
+  --accent-foreground: oklch(1 0 0);
+  --destructive: oklch(0.75 0.2 22.2);
+  --success: oklch(0.86 0.15 160);
+  --warning: oklch(0.88 0.15 85);
+  --border: oklch(1 0 0);
+  --input: oklch(1 0 0);
+  --sidebar: oklch(0 0 0);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.22 0 0);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(1 0 0);
+  --net-old: oklch(0.5 0 0);
+}
+
+/* The system asks for more contrast and the setting isn't high contrast already: brighter
+   secondary text and lines. */
+@media (prefers-contrast: more) {
+  :root:not(.contrast-high) {
+    --muted-foreground: oklch(0.42 0.02 43.1);
+    --border: oklch(0.6 0.012 40);
+    --input: oklch(0.5 0.012 40);
+  }
+  .dark:not(.contrast-high) {
+    --muted-foreground: oklch(0.86 0.008 65);
+    --border: oklch(0.5 0.01 65);
+    --input: oklch(0.62 0.01 65);
+  }
+}
+
+/* Long-form text (`prose`, from @tailwindcss/typography: markdown, the legal pages) in the
+   theme's colours, so it follows light, dark and high contrast without prose-invert. */
+@utility prose {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--muted-foreground);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-kbd: var(--foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-pre-bg: var(--muted);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
+}

@@ -40,20 +40,17 @@ function FacetChip({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      size="xs"
+      variant={active ? "default" : "outline"}
+      aria-pressed={active}
       onClick={onClick}
       disabled={count === 0 && !active}
-      className={
-        "rounded-full border px-2.5 py-0.5 text-xs transition disabled:opacity-40 " +
-        (active
-          ? "border-primary bg-primary text-primary-foreground"
-          : "hover:bg-muted")
-      }
     >
       {children}
-      <span className="ml-1 opacity-70">{count}</span>
-    </button>
+      <span className="opacity-70">{count}</span>
+    </Button>
   );
 }
 

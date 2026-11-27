@@ -3,6 +3,7 @@ import {
   Outlet,
   retainSearchParams,
 } from "@tanstack/react-router";
+import { Page } from "@/components/page";
 import { applicationsSearch } from "@/lib/queries/applications";
 
 export const Route = createFileRoute("/_authenticated/applications")({
@@ -16,8 +17,8 @@ export const Route = createFileRoute("/_authenticated/applications")({
 
 function ApplicationsLayout() {
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <Page>
       <Outlet />
-    </div>
+    </Page>
   );
 }

@@ -317,6 +317,11 @@ STATIC_URL = "static/"
 # collectstatic target, baked into the image; nginx serves it at /static/ (only the admin has
 # static files).
 STATIC_ROOT = Path(os.getenv("STATIC_ROOT", BASE_DIR / "staticfiles"))
+# The SPA build's manifest (frontend/vite.config.ts `build.manifest`). The Django-rendered pages,
+# the landing and the legal pages, link the stylesheet it names (spa/theme.py), so theme.css
+# dresses them too. The image copies the build to /app/webroot (Dockerfile); a checkout has no
+# webroot, so in dev they link Vite's own /src/index.css.
+SPA_MANIFEST = BASE_DIR / "webroot" / ".vite" / "manifest.json"
 MEDIA_URL = "media/"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", BASE_DIR / "media"))
 # Owner-only uploads (certificates, signatures). Deliberately OUTSIDE MEDIA_ROOT: nginx serves

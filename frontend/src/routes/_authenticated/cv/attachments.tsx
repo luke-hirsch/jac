@@ -15,6 +15,7 @@ import {
   type Attachment,
   type EntryLink,
 } from "@/lib/queries/attachments";
+import { SectionTitle } from "@/components/heading";
 
 export const Route = createFileRoute("/_authenticated/cv/attachments")({
   component: FilesPage,
@@ -55,7 +56,7 @@ function FilesPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-medium">Files</h2>
+        <SectionTitle>Files</SectionTitle>
         <p className="text-sm text-muted-foreground">
           Your reusable PDF attachments (diplomas, Zeugnisse, references, a
           portfolio). Upload once, then pick which to attach on each application.

@@ -10,6 +10,7 @@ from django.http import Http404
 from django.shortcuts import render
 
 from spa.portfolio import site_owner
+from spa.theme import theme_context
 
 LEGAL_PAGES = {
     "imprint": "Impressum",
@@ -48,5 +49,6 @@ def legal_page(request, page: str):
             "operator": operator(),
             "base_domain": settings.BASE_DOMAIN,
             "llm_log_retention_days": settings.LLM_LOG_RETENTION_DAYS,
+            **theme_context(),
         },
     )

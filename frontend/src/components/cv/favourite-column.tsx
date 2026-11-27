@@ -26,7 +26,7 @@ export function favouriteColumn<T extends { favourite: boolean }>(opts: {
         <Star
           className={cn(
             "size-4",
-            opts.active ? "fill-yellow-400 text-yellow-400" : "opacity-50",
+            opts.active ? "fill-primary text-primary" : "opacity-50",
           )}
         />
       </button>
@@ -36,7 +36,7 @@ export function favouriteColumn<T extends { favourite: boolean }>(opts: {
         className={cn(
           "size-4",
           row.original.favourite
-            ? "fill-yellow-400 text-yellow-400"
+            ? "fill-primary text-primary"
             : "opacity-20",
         )}
       />

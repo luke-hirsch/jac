@@ -38,6 +38,7 @@ import {
   styleState,
   useUpdateLetterSettings,
 } from "@/lib/queries/personality";
+import { SectionTitle } from "@/components/heading";
 
 export const Route = createFileRoute("/_authenticated/account/personality")({
   component: PersonalityPage,
@@ -163,7 +164,7 @@ function PersonalityPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-medium">Personality</h2>
+        <SectionTitle>Personality</SectionTitle>
         <p className="text-sm text-muted-foreground">
           Oblique and work-values questions — answer the ones that spark
           something (about five to eight is plenty, one tweet each). A model
@@ -380,7 +381,7 @@ function PersonalityPage() {
             </Button>
           </div>
           {row.style_dossier && (
-            <p className="whitespace-pre-wrap rounded border bg-muted/40 p-3 text-sm">
+            <p className="whitespace-pre-wrap rounded-sm border bg-muted/40 p-3 text-sm">
               {row.style_dossier}
             </p>
           )}
@@ -404,7 +405,7 @@ function PersonalityPage() {
           </div>
         </div>
         {row.dossier ? (
-          <p className="whitespace-pre-wrap rounded border bg-muted/40 p-3 text-sm">
+          <p className="whitespace-pre-wrap rounded-sm border bg-muted/40 p-3 text-sm">
             {row.dossier}
           </p>
         ) : (

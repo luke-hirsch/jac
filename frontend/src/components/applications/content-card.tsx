@@ -162,7 +162,7 @@ export function ApplicationContentCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {conflict && (
-          <div className="flex items-center gap-2 rounded border bg-muted/40 p-2 text-xs">
+          <div className="flex items-center gap-2 rounded-sm border bg-muted/40 p-2 text-xs">
             <p className="flex-1">
               The saved copy changed while you had unsaved edits (a run landed,
               or one was applied). Your edits are still here; Save writes them
@@ -232,7 +232,7 @@ export function ApplicationContentCard({
         <Separator />
         <div
           className={`rounded-lg transition-shadow duration-1000 ${
-            fresh.letter ? "ring-2 ring-emerald-300" : ""
+            fresh.letter ? "ring-2 ring-success/40" : ""
           }`}
         >
           <LetterEditor
@@ -302,7 +302,7 @@ function CvEditorSection({
           entries.length > 0 && (
             <span
               className={`text-xs font-normal ${
-                over ? "text-amber-600" : "text-muted-foreground"
+                over ? "text-warning" : "text-muted-foreground"
               }`}
             >
               {active}/{cap} in the layout
@@ -322,9 +322,9 @@ function CvEditorSection({
               return (
                 <li
                   key={e.id}
-                  className={`flex flex-wrap items-center gap-1 rounded px-1 text-sm transition-colors duration-1000 ${
+                  className={`flex flex-wrap items-center gap-1 rounded-sm px-1 text-sm transition-colors duration-1000 ${
                     e.deselected ? "opacity-50" : ""
-                  } ${isFresh ? "bg-emerald-100 dark:bg-emerald-900/40" : isOver ? "bg-amber-50 dark:bg-amber-900/20" : ""}`}
+                  } ${isFresh ? "bg-success/15" : isOver ? "bg-warning/10" : ""}`}
                 >
                   {isOver && (
                     <span
@@ -334,15 +334,15 @@ function CvEditorSection({
                           : "The page fit has to cut this entry — deselect or shorten something else to keep it."
                       }
                     >
-                      <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warning" />
                     </span>
                   )}
                   {e.pinned && (
                     <span title="Pinned — survives applying a new generation run.">
-                      <Pin className="h-3.5 w-3.5 shrink-0 text-sky-600" />
+                      <Pin className="h-3.5 w-3.5 shrink-0 text-primary" />
                       {e.warning && (
                         <span title={e.warning}>
-                          <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                          <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warning" />
                         </span>
                       )}
                     </span>
@@ -363,7 +363,7 @@ function CvEditorSection({
                     </Badge>
                   )}
                   {isOver && (
-                    <Badge variant="outline" className="text-amber-600">
+                    <Badge variant="outline" className="text-warning">
                       won't fit
                     </Badge>
                   )}
@@ -373,7 +373,7 @@ function CvEditorSection({
                     </Badge>
                   )}
                   {willAdd.has(e.id) && (
-                    <Badge variant="outline" className="text-emerald-600">
+                    <Badge variant="outline" className="text-success">
                       fills the page
                     </Badge>
                   )}
