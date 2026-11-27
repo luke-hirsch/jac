@@ -91,10 +91,16 @@ function LinkedItems({
   );
 }
 
-/** The card every kind but the quote and the link list sits in. In the page's grid it takes one
- *  column; `wide` takes the whole row (text reads better long). */
-/** The inside of every card on a portfolio: the one place its padding is set. */
+/** The inside of every cell on a portfolio: the one place its padding is set. */
 const PAD = "p-6 md:p-8 xl:p-10";
+
+/** A cell of the page's grid (portfolio-page.tsx's CELLS). The grid draws the top and left
+ *  lines, each cell its right and bottom one, so neighbours share a single hairline and a short
+ *  last row ends cleanly. */
+const CELL = "border-r border-b";
+
+/** The cell every kind but the quote and the link list sits in. It takes one column; `wide`
+ *  takes the whole row (text reads better long). */
 
 function Shell({
   item,
@@ -114,7 +120,8 @@ function Shell({
     <article
       id={anchorId(item.id)}
       className={cn(
-        "flex min-w-0 scroll-mt-6 flex-col gap-3 rounded-2xl border bg-card md:gap-4",
+        "flex min-w-0 scroll-mt-6 flex-col gap-3 md:gap-4",
+        CELL,
         !flush && PAD,
         wide && "col-span-full",
         className,
@@ -170,23 +177,17 @@ function CtaButton({
   );
 }
 
-/** The hero's "now" card: the page's first call to action, as the mock-up has it. */
+/** The hero's "now" box: the page's first call to action, in the hero's last column. */
 export function NowCard({ item }: { item: PortfolioItem }) {
   return (
     <aside
       id={anchorId(item.id)}
       aria-label={item.title || item.data?.label}
-      className={cn(
-        "flex min-w-0 scroll-mt-6 flex-col gap-4 rounded-2xl border bg-card md:gap-5",
-        PAD,
-      )}
+      className="flex min-w-0 scroll-mt-6 flex-col gap-4 self-end border p-6"
     >
       {item.title ? (
         <div className="flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className="size-2.5 shrink-0 bg-primary"
-          />
+          <span aria-hidden className="size-2.5 shrink-0 bg-primary" />
           <span className="font-heading text-lg font-semibold">
             {item.title}
           </span>
@@ -200,9 +201,10 @@ export function NowCard({ item }: { item: PortfolioItem }) {
   );
 }
 
-/** Key figures as tiles: the value big, in the primary, its label under it. Columns by how many
- *  there are and how wide the box is (a container query: a card's box is narrower than the
- *  page's), so three never leave a gap in a row of four. */
+/** Key figures: the value big, in the primary, its label under it. On the page they are cells of
+ *  their own grid; inside a cell, columns under a rule. Columns by how many there are and how wide
+ *  the box is (a container query: a cell is narrower than the page), so three never leave a gap
+ *  in a row of four. */
 const FIGURE_COLUMNS: Record<number, string> = {
   2: "grid-cols-2",
   3: "grid-cols-2 @xl:grid-cols-3",
@@ -220,7 +222,8 @@ function Figures({
     <div className="@container">
       <dl
         className={cn(
-          "grid gap-4 md:gap-6",
+          "grid",
+          inCard ? "gap-x-6 gap-y-5" : "border-t border-l",
           FIGURE_COLUMNS[figures.length] ?? FIGURE_COLUMNS[4],
         )}
       >
@@ -228,8 +231,8 @@ function Figures({
           <div
             key={i}
             className={cn(
-              "flex flex-col gap-1.5 rounded-2xl",
-              inCard ? "bg-muted p-5 md:p-6" : "border bg-card p-6 md:p-8",
+              "flex flex-col gap-1.5",
+              inCard ? "border-t pt-3" : cn(CELL, PAD),
             )}
           >
             <dt className="order-2 text-sm text-muted-foreground">{f.label}</dt>
@@ -254,7 +257,7 @@ export function FigureTiles({ item }: { item: PortfolioItem }) {
     <section
       id={anchorId(item.id)}
       aria-label={item.title || "Key figures"}
-      className="flex scroll-mt-6 flex-col gap-4"
+      className="flex scroll-mt-6 flex-col gap-4 md:gap-6"
     >
       {item.title || item.body ? (
         <div className="flex flex-col gap-1">
@@ -287,7 +290,8 @@ function QuoteCard({ item, number, anchors }: CardProps) {
     <figure
       id={anchorId(item.id)}
       className={cn(
-        "m-0 flex min-w-0 scroll-mt-6 flex-col justify-between gap-5 rounded-2xl bg-primary text-primary-foreground md:gap-6",
+        "m-0 flex min-w-0 scroll-mt-6 flex-col justify-between gap-5 bg-primary text-primary-foreground md:gap-6",
+        CELL,
         PAD,
       )}
     >
@@ -318,11 +322,11 @@ function LinkListCard({ item, number }: CardProps) {
     <nav
       id={anchorId(item.id)}
       aria-label={item.title || "Links"}
-      className="flex min-w-0 scroll-mt-6 flex-col"
+      className={cn("flex min-w-0 scroll-mt-6 flex-col", CELL, PAD)}
     >
       <Meta item={item} number={number} />
       {item.title ? (
-        <h3 className="mt-1 mb-2 font-heading text-3xl font-bold tracking-tight">
+        <h3 className="mt-1 mb-2 font-heading text-2xl leading-tight font-semibold tracking-tight">
           {item.title}
         </h3>
       ) : null}

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { SectionHeading } from "@/components/portfolio/section-heading";
+import { PortfolioSection } from "@/components/portfolio/portfolio-section";
 import { anchorId } from "@/lib/portfolio/content";
 import { scrollMotion, yearSpan } from "@/lib/portfolio/studio";
 import type { YearAxis, YearBar } from "@/lib/portfolio/timeline";
@@ -36,14 +36,17 @@ function Swatch({ kind }: { kind: YearBar["kind"] }) {
 export function YearBars({
   axis,
   cards,
+  number,
 }: {
   axis: YearAxis;
   /** Ids that have a card on the page: a title jumps there. */
   cards: Set<string>;
+  /** The section's place on the page. */
+  number?: number;
 }) {
   const kinds = [...new Set(axis.rows.map((r) => r.kind))];
   const legend = (
-    <div className="flex gap-4 text-xs text-muted-foreground">
+    <div className="flex gap-4 text-xs">
       {kinds.map((k) => (
         <span key={k} className="inline-flex items-center gap-1.5">
           <Swatch kind={k} />
@@ -53,11 +56,13 @@ export function YearBars({
     </div>
   );
   return (
-    <section aria-labelledby="experience" className="flex flex-col gap-5">
-      <SectionHeading id="experience" aside={legend}>
-        Experience
-      </SectionHeading>
-      <div className="rounded-2xl border bg-muted p-5 md:p-8">
+    <PortfolioSection
+      id="experience"
+      number={number}
+      title="Experience"
+      aside={legend}
+    >
+      <div className="border p-5 md:p-8">
         <div
           aria-hidden
           className="grid text-xs text-muted-foreground tabular-nums sm:grid-cols-[13rem_minmax(0,1fr)] sm:gap-x-4"
@@ -121,6 +126,6 @@ export function YearBars({
           ))}
         </ol>
       </div>
-    </section>
+    </PortfolioSection>
   );
 }

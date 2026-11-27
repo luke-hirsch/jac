@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SectionHeading } from "@/components/portfolio/section-heading";
+import { PortfolioSection } from "@/components/portfolio/portfolio-section";
 import { Button } from "@/components/ui/button";
 import { anchorId } from "@/lib/portfolio/content";
 import {
@@ -179,11 +179,14 @@ export function SkillNetwork({
   featured,
   more,
   cards,
+  number,
 }: {
   featured: PortfolioItem[];
   more: PortfolioItem[];
   /** Ids that have a card on the page: an anchor's detail offers the jump. */
   cards: Set<string>;
+  /** The section's place on the page. */
+  number?: number;
 }) {
   const net = useMemo(() => buildNetwork(featured, more), [featured, more]);
   const [ref, width] = useWidth();
@@ -205,156 +208,162 @@ export function SkillNetwork({
   const skills = net.nodes.length - anchors;
 
   return (
-    <section className="space-y-5">
-      <div className="space-y-2">
-        <SectionHeading>Skills</SectionHeading>
-        <p className="text-sm text-muted-foreground">
-          How they connect to the jobs and projects on this page.
-        </p>
-      </div>
+    <PortfolioSection
+      id="skills"
+      number={number}
+      title="Skills"
+      aside={
+        <>
+          <p>How they connect to the jobs and projects on this page.</p>
+          <div className="flex flex-col gap-1.5 text-xs">
+            <span className="inline-flex items-center gap-2">
+              earlier
+              <span
+                className="h-2 w-16"
+                style={{
+                  background:
+                    "linear-gradient(to right, var(--net-old), var(--net-new))",
+                }}
+              />
+              recent
+            </span>
+            <span>Bigger: highlighted, or used in more places</span>
+            <span>Lines: used in that job or project</span>
+            {net.nodes.some((n) => n.kind === "skill" && n.degree === 0) ? (
+              <span>Grey: not tied to a job or project on this page</span>
+            ) : null}
+          </div>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-5">
+        {chips.length > 1 ? (
+          <div
+            className="flex flex-wrap gap-1.5"
+            aria-label="Light up a domain"
+          >
+            {[null, ...chips].map((d) => (
+              <Button
+                key={d ?? "all"}
+                size="xs"
+                variant={domain === d ? "default" : "outline"}
+                aria-pressed={domain === d}
+                onClick={() => {
+                  setDomain(d);
+                  setPicked(null);
+                }}
+              >
+                {d ?? "All"}
+              </Button>
+            ))}
+          </div>
+        ) : null}
 
-      {chips.length > 1 ? (
-        <div className="flex flex-wrap gap-1.5" aria-label="Light up a domain">
-          {[null, ...chips].map((d) => (
-            <Button
-              key={d ?? "all"}
-              size="xs"
-              variant={domain === d ? "default" : "outline"}
-              aria-pressed={domain === d}
-              onClick={() => {
-                setDomain(d);
-                setPicked(null);
+        {/* The inset is padding on the measured element: ResizeObserver reports the width inside
+          it, so the layout is made for that. The detail line reaches the edges again. */}
+        <div
+          ref={ref}
+          className="border bg-muted px-2 pt-2 sm:px-4 sm:pt-4 lg:px-6 lg:pt-6"
+        >
+          {layout ? (
+            <svg
+              width={layout.width}
+              height={layout.height}
+              viewBox={`0 0 ${layout.width} ${layout.height}`}
+              className="block max-w-full select-none text-foreground"
+              role="img"
+              aria-label={`Network of ${skills} skills and the ${anchors} jobs and projects that used them. The list below has the same.`}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setPicked(null);
               }}
             >
-              {d ?? "All"}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-
-      {/* The inset is padding on the measured element: ResizeObserver reports the width inside
-          it, so the layout is made for that. The detail line reaches the edges again. */}
-      <div
-        ref={ref}
-        className="rounded-3xl border bg-muted px-2 pt-2 sm:px-4 sm:pt-4 lg:px-6 lg:pt-6"
-      >
-        {layout ? (
-          <svg
-            width={layout.width}
-            height={layout.height}
-            viewBox={`0 0 ${layout.width} ${layout.height}`}
-            className="block max-w-full select-none text-foreground"
-            role="img"
-            aria-label={`Network of ${skills} skills and the ${anchors} jobs and projects that used them. The list below has the same.`}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setPicked(null);
-            }}
+              <g>
+                {net.edges.map((e) => {
+                  const a = byId.get(e.anchor);
+                  const s = byId.get(e.skill);
+                  if (!a || !s) return null;
+                  const on =
+                    focus !== null && (e.anchor === focus || e.skill === focus);
+                  const dim =
+                    lit !== null && !(lit.has(e.anchor) && lit.has(e.skill));
+                  return (
+                    <line
+                      key={`${e.anchor}-${e.skill}`}
+                      x1={a.x}
+                      y1={a.y}
+                      x2={s.x}
+                      y2={s.y}
+                      stroke={tint(a.recency)}
+                      strokeWidth={on ? 2 : 1.25}
+                      strokeOpacity={dim ? 0.07 : on ? 0.95 : 0.45}
+                      className="transition-[stroke-opacity] duration-150"
+                    />
+                  );
+                })}
+              </g>
+              <g>
+                {layout.nodes.map((n) => (
+                  <g
+                    key={n.id}
+                    transform={`translate(${n.x},${n.y})`}
+                    opacity={lit !== null && !lit.has(n.id) ? 0.18 : 1}
+                    className="cursor-pointer transition-opacity duration-150"
+                    onPointerEnter={(e) => {
+                      if (e.pointerType === "mouse") setHover(n.id);
+                    }}
+                    onPointerLeave={() => setHover(null)}
+                    onClick={() => setPicked((p) => (p === n.id ? null : n.id))}
+                  >
+                    {n.kind === "skill" ? (
+                      <SkillDot n={n} />
+                    ) : (
+                      <AnchorPill n={n} />
+                    )}
+                  </g>
+                ))}
+              </g>
+            </svg>
+          ) : (
+            <div className="h-64" />
+          )}
+          <div
+            className="-mx-2 mt-2 sm:-mx-4 sm:mt-4 lg:-mx-6 lg:mt-6 min-h-12 border-t px-4 py-3 text-sm"
+            aria-live="polite"
           >
-            <g>
-              {net.edges.map((e) => {
-                const a = byId.get(e.anchor);
-                const s = byId.get(e.skill);
-                if (!a || !s) return null;
-                const on =
-                  focus !== null && (e.anchor === focus || e.skill === focus);
-                const dim =
-                  lit !== null && !(lit.has(e.anchor) && lit.has(e.skill));
+            <Detail net={net} node={focused} cards={cards} />
+          </div>
+        </div>
+
+        <details className="text-sm">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            All skills as a list
+          </summary>
+          <ul className="mt-2 space-y-1">
+            {net.nodes
+              .filter((n) => n.kind === "skill")
+              .sort((a, b) => a.item.title.localeCompare(b.item.title))
+              .map((n) => {
+                const used = neighbours(net, n.id).map((x) => x.label);
                 return (
-                  <line
-                    key={`${e.anchor}-${e.skill}`}
-                    x1={a.x}
-                    y1={a.y}
-                    x2={s.x}
-                    y2={s.y}
-                    stroke={tint(a.recency)}
-                    strokeWidth={on ? 2 : 1.25}
-                    strokeOpacity={dim ? 0.07 : on ? 0.95 : 0.45}
-                    className="transition-[stroke-opacity] duration-150"
-                  />
+                  <li key={n.id}>
+                    <span className="font-medium">{n.item.title}</span>
+                    {n.item.subtitle ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {n.item.subtitle}
+                      </span>
+                    ) : null}
+                    {used.length ? (
+                      <span className="text-muted-foreground">
+                        , used in {used.join(", ")}
+                      </span>
+                    ) : null}
+                  </li>
                 );
               })}
-            </g>
-            <g>
-              {layout.nodes.map((n) => (
-                <g
-                  key={n.id}
-                  transform={`translate(${n.x},${n.y})`}
-                  opacity={lit !== null && !lit.has(n.id) ? 0.18 : 1}
-                  className="cursor-pointer transition-opacity duration-150"
-                  onPointerEnter={(e) => {
-                    if (e.pointerType === "mouse") setHover(n.id);
-                  }}
-                  onPointerLeave={() => setHover(null)}
-                  onClick={() => setPicked((p) => (p === n.id ? null : n.id))}
-                >
-                  {n.kind === "skill" ? (
-                    <SkillDot n={n} />
-                  ) : (
-                    <AnchorPill n={n} />
-                  )}
-                </g>
-              ))}
-            </g>
-          </svg>
-        ) : (
-          <div className="h-64" />
-        )}
-        <div
-          className="-mx-2 mt-2 sm:-mx-4 sm:mt-4 lg:-mx-6 lg:mt-6 min-h-12 border-t px-4 py-3 text-sm"
-          aria-live="polite"
-        >
-          <Detail net={net} node={focused} cards={cards} />
-        </div>
+          </ul>
+        </details>
       </div>
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          earlier
-          <span
-            className="h-2 w-16"
-            style={{
-              background:
-                "linear-gradient(to right, var(--net-old), var(--net-new))",
-            }}
-          />
-          recent
-        </span>
-        <span>Bigger: highlighted, or used in more places</span>
-        <span>Lines: used in that job or project</span>
-        {net.nodes.some((n) => n.kind === "skill" && n.degree === 0) ? (
-          <span>Grey: not tied to a job or project on this page</span>
-        ) : null}
-      </div>
-
-      <details className="text-sm">
-        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-          All skills as a list
-        </summary>
-        <ul className="mt-2 space-y-1">
-          {net.nodes
-            .filter((n) => n.kind === "skill")
-            .sort((a, b) => a.item.title.localeCompare(b.item.title))
-            .map((n) => {
-              const used = neighbours(net, n.id).map((x) => x.label);
-              return (
-                <li key={n.id}>
-                  <span className="font-medium">{n.item.title}</span>
-                  {n.item.subtitle ? (
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · {n.item.subtitle}
-                    </span>
-                  ) : null}
-                  {used.length ? (
-                    <span className="text-muted-foreground">
-                      , used in {used.join(", ")}
-                    </span>
-                  ) : null}
-                </li>
-              );
-            })}
-        </ul>
-      </details>
-    </section>
+    </PortfolioSection>
   );
 }
