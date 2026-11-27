@@ -1103,6 +1103,65 @@ class ApplicationFitApiTests(APITestCase):
         self.assertIsNone(r.data["fit"])
 
 
+class ApplicationApplyDetailsApiTests(APITestCase):
+    """Where the application goes (`apply_url`, `apply_note`) and the email to send it with
+    (`email_body`): optional, editable on the application page, filled by Claude or the user."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/"
+
+    def _patch(self, **body):
+        return self.client.patch(self.url, body, format="json")
+
+    def test_empty_until_someone_fills_them(self):
+        row = self.client.get(self.url).data
+        self.assertEqual(row["apply_url"], "")
+        self.assertEqual(row["apply_note"], "")
+        self.assertEqual(row["email_body"], "")
+
+    def test_they_save_and_read_back(self):
+        body = {
+            "apply_url": "https://jobs.example.com/apply/4711?src=jac",
+            "apply_note": "Reference DE-4711. Only through the portal, one PDF.",
+            "email_body": "Sehr geehrte Frau Muster,\n\nanbei meine Bewerbung.\n\nGrüße",
+        }
+        r = self._patch(**body)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.application.refresh_from_db()
+        for field, value in body.items():
+            with self.subTest(field=field):
+                self.assertEqual(r.data[field], value)
+                self.assertEqual(getattr(self.application, field), value)
+
+    def test_a_long_portal_link_fits(self):
+        url = "https://jobs.example.com/apply?" + "x" * 400
+        r = self._patch(apply_url=url)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["apply_url"], url)
+
+    def test_what_isnt_a_link_or_is_too_long_is_refused(self):
+        for url in ("not a link", "https://jobs.example.com/?" + "x" * 600):
+            with self.subTest(url=url[:30]):
+                self.assertEqual(self._patch(apply_url=url).status_code, 400)
+
+    def test_an_endless_note_or_email_is_refused(self):
+        self.assertEqual(self._patch(apply_note="x" * 20_001).status_code, 400)
+        self.assertEqual(self._patch(email_body="x" * 20_001).status_code, 400)
+
+    def test_blank_clears_them(self):
+        self._patch(apply_url="https://jobs.example.com/", email_body="Hallo")
+        r = self._patch(apply_url="", email_body="")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["apply_url"], "")
+        self.assertEqual(r.data["email_body"], "")
+
+
 class PortfolioLinkChoiceApiTests(APITestCase):
     """Whether an application's exports carry the portfolio link + QR: its own choice
     (`include_portfolio_link`), else the owner's `portfolio_link_by_default`, which is off.
@@ -2073,6 +2132,9 @@ class ApplicationTransferApiTests(APITestCase):
             deadline="2026-12-01",
             include_portfolio_link=True,
             fit=4,
+            apply_url="https://jobs.example.com/apply/4711",
+            apply_note="Reference DE-4711.",
+            email_body="Dear team,\n\nplease find my application attached.",
             status=JobApplication.StatusChoices.sent,
             delivery_method=JobApplication.DeliveryMethod.email,
             sent_at=timezone.now() - timedelta(days=3),
@@ -2134,6 +2196,9 @@ class ApplicationTransferApiTests(APITestCase):
         imported = JobApplication.objects.get(user=self.other, status="sent")
         self.assertTrue(imported.include_portfolio_link)
         self.assertEqual(imported.fit, 4)
+        self.assertEqual(imported.apply_url, "https://jobs.example.com/apply/4711")
+        self.assertEqual(imported.apply_note, "Reference DE-4711.")
+        self.assertTrue(imported.email_body.startswith("Dear team,"))
         job = Job.objects.get(user=self.other, title=self.job.title)
         self.assertEqual(imported.pinned_entries, [f"job:{job.pk}"])
         self.assertEqual(imported.cv_content["jobs"][0]["id"], f"job:{job.pk}")
@@ -3008,6 +3073,94 @@ class ConnectorApplicationTests(_McpCase):
         rules = self._call("get_career")[0]["rules"]
         self.assertIn("## Rating the fit", rules)
         self.assertIn('"fit"', rules)
+
+    # --- where to apply and the email (apply_url, apply_note, email_body) ---
+
+    _EMAIL = (
+        "Sehr geehrte Frau Muster,\n\n"
+        "anbei sende ich Ihnen meine Bewerbung als Backend-Entwickler:in.\n\n"
+        "Mit freundlichen Grüßen\nAlice"
+    )
+
+    def test_claude_saves_where_to_apply_and_the_email(self):
+        data, is_error = self._save(
+            apply_url="https://jobs.example.com/apply/4711",
+            apply_note="Kennziffer DE-4711, nur über das Portal.",
+            email_body=self._EMAIL,
+        )
+        self.assertFalse(is_error, data)
+        app = JobApplication.objects.get(pk=data["id"])
+        self.assertEqual(app.apply_url, "https://jobs.example.com/apply/4711")
+        self.assertEqual(app.apply_note, "Kennziffer DE-4711, nur über das Portal.")
+        self.assertEqual(app.email_body, self._EMAIL)
+
+    def test_they_read_back_in_the_shape_they_were_saved(self):
+        created, _ = self._save(
+            apply_url="https://jobs.example.com/apply/4711",
+            apply_note="Kennziffer DE-4711.",
+            email_body=self._EMAIL,
+        )
+        data, _ = self._call("get_application", {"id": created["id"]})
+        self.assertEqual(data["apply_url"], "https://jobs.example.com/apply/4711")
+        self.assertEqual(data["apply_note"], "Kennziffer DE-4711.")
+        self.assertEqual(data["email_body"], self._EMAIL)
+
+    def test_the_email_alone_changes_nothing_else(self):
+        app_id = self._save(apply_url="https://jobs.example.com/apply")[0]["id"]
+        before = JobApplication.objects.get(pk=app_id)
+        data, is_error = self._call(
+            "save_application", {"id": app_id, "email_body": self._EMAIL}
+        )
+        self.assertFalse(is_error, data)
+        app = JobApplication.objects.get(pk=app_id)
+        self.assertEqual(app.email_body, self._EMAIL)
+        self.assertEqual(app.apply_url, "https://jobs.example.com/apply")
+        self.assertEqual(app.cover_letter, before.cover_letter)
+        self.assertEqual(app.letter_meta, before.letter_meta)
+        self.assertEqual(app.cv_content, before.cv_content)
+
+    def test_the_email_carries_its_own_salutation_without_a_warning(self):
+        """Unlike the letter body, the email is the whole text the user pastes."""
+        data, _ = self._save(
+            entries=[f"job:{self.job.pk}", f"education:{self.master.pk}"],
+            email_body=self._EMAIL,
+        )
+        self.assertEqual(data["warnings"], [])
+
+    def test_a_bad_link_comes_back_as_a_tool_error(self):
+        for url in ("not a link", "https://jobs.example.com/?" + "x" * 600):
+            with self.subTest(url=url[:30]):
+                data, is_error = self._save(apply_url=url)
+                self.assertTrue(is_error)
+                self.assertIn("apply_url", data["errors"])
+
+    def test_a_long_ad_link_saves_instead_of_failing(self):
+        """Job boards hand out links over 200 characters; the column used to stop at 200, and
+        Postgres refused the row with a 500."""
+        url = "https://www.stepstone.de/stellenangebote--Backend?" + "x" * 300
+        payload = self._payload()
+        payload["posting"]["source_url"] = url
+        data, is_error = self._call("save_application", payload)
+        self.assertFalse(is_error, data)
+        self.assertEqual(
+            JobApplication.objects.get(pk=data["id"]).posting.source_url, url
+        )
+
+    def test_the_schema_offers_the_new_fields(self):
+        r = self._rpc("tools/list")
+        tools = {t["name"]: t for t in r.json()["result"]["tools"]}
+        props = tools["save_application"]["inputSchema"]["properties"]
+        for name in ("apply_url", "apply_note", "email_body"):
+            with self.subTest(field=name):
+                self.assertIn(name, props)
+                self.assertTrue(props[name].get("description"))
+
+    def test_the_rules_say_where_to_apply_and_how_to_write_the_email(self):
+        rules = self._call("get_career")[0]["rules"]
+        self.assertIn("## Where to apply and the email", rules)
+        for name in ('"apply_url"', '"apply_note"', '"email_body"'):
+            with self.subTest(field=name):
+                self.assertIn(name, rules)
 
 
 # A valid 1x1 PNG: a signature the preview must leave in jac.

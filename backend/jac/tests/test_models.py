@@ -114,6 +114,19 @@ class JobApplicationModelTests(TestCase):
         with self.assertRaises(TransitionError):
             application.apply_transition("sent", delivery_method="pigeon")
 
+    def test_where_to_apply_and_the_email_start_empty(self):
+        application = make_application(self.user)
+        self.assertEqual(application.apply_url, "")
+        self.assertEqual(application.apply_note, "")
+        self.assertEqual(application.email_body, "")
+
+    def test_the_new_columns_keep_their_default_in_the_database(self):
+        """A rollback runs the previous image on this schema: its inserts leave the three columns
+        out, so the database has to fill them."""
+        for name in ("apply_url", "apply_note", "email_body"):
+            with self.subTest(field=name):
+                self.assertEqual(JobApplication._meta.get_field(name).db_default, "")
+
 
 # --- [fullstack]-education-degree ---------------------------------------------------
 # ACTIVE guide (activated 2026-08-07, rescoped to `degree_level` alone). Red until the
