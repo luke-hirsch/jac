@@ -2896,6 +2896,7 @@ class SkillDownloadTests(APITestCase):
         self.assertTrue(skill.startswith("---\nname: jac\n"))
         self.assertIn("`get_career`", skill)
         self.assertIn("`get_career_review`", skill)
+        self.assertIn("from their CV", skill)
         # No rules of its own: they come with the connector, always the deployed ones.
         for rule in ("Picking the CV entries", "Rules for changes", "170 to 230 words"):
             self.assertNotIn(rule, skill)
@@ -3785,7 +3786,15 @@ class ConnectorCareerChangeTests(_McpCase):
         seen = self._seen(self.job)
         bad = {
             "no seen": {"id": jid, "set": {"description": "x"}},
-            "a job": {"new": "job", "ref": "j", "set": {"title": "Made up"}},
+            "an unknown type": {"new": "posting", "ref": "p", "set": {"title": "x"}},
+            "a type that isn't a name": {"new": ["job"], "ref": "p", "set": {}},
+            "new with an id": {
+                "new": "job",
+                "ref": "j",
+                "id": jid,
+                "seen": seen,
+                "set": {"title": "x", "company": "y", "started": "2020-01-01"},
+            },
             "theirs": {
                 "id": f"skill:{self.theirs.pk}",
                 "seen": seen,
@@ -3978,6 +3987,270 @@ class ConnectorCareerChangeTests(_McpCase):
         self.assertEqual(
             CareerChange.objects.filter(user=self.user).count(), CareerChange.KEEP
         )
+
+
+class ConnectorCareerFromCvTests(_McpCase):
+    """Someone new hands Claude their CV: one batch creates the entries, linked to each other
+    by `new:<ref>`, and one undo takes them all out again."""
+
+    ENTRY_MODELS = (Job, Project, Education, Certification, Language, Skill)
+
+    def setUp(self):
+        super().setUp()
+        self.fresh = make_user("cara")
+        _, key = mint_token(self.fresh, "test")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {key}")
+
+    def _apply(self, *changes, **kw):
+        return self._call("apply_career_changes", {"changes": list(changes), **kw})
+
+    def _acme(self, **set_):
+        return {
+            "new": "job",
+            "ref": "acme",
+            "why": "From the CV.",
+            "set": {
+                "title": "Backend Developer",
+                "company": "Acme GmbH",
+                "job_type": "ft",
+                "started": "2019-03-01",
+                "ended": "2021-05-01",
+                "description": "- Built the billing API",
+                **set_,
+            },
+            "add": {"skills": ["new:python"]},
+        }
+
+    def _python(self):
+        return {
+            "new": "skill",
+            "ref": "python",
+            "why": "From the CV.",
+            "set": {
+                "name": "Python",
+                "category": "technical",
+                "proficiency": "advanced",
+            },
+        }
+
+    def _cv(self):
+        """A short CV as Claude maps it, one entry of every type. A project comes before its
+        job and a language before its certification: the batch's order isn't the order jac
+        creates them in."""
+        return [
+            {
+                "new": "project",
+                "ref": "billing",
+                "why": "From the CV.",
+                "set": {"name": "Billing", "job": "new:acme"},
+                "add": {"skills": ["new:python"]},
+            },
+            {
+                "new": "language",
+                "ref": "en",
+                "why": "From the CV.",
+                "set": {
+                    "name": "English",
+                    "fluency": "professional",
+                    "certification": "new:toefl",
+                },
+            },
+            self._acme(),
+            {
+                "new": "education",
+                "ref": "fu",
+                "why": "From the CV.",
+                "set": {
+                    "institution": "FU Berlin",
+                    "field_of_study": "Informatik",
+                    "degree": "M.Sc.",
+                    "degree_level": "master",
+                    "started": "2013-10-01",
+                    "ended": "2018-09-01",
+                },
+                "add": {"skills": ["new:python"]},
+            },
+            {
+                "new": "certification",
+                "ref": "toefl",
+                "why": "From the CV.",
+                "set": {
+                    "name": "TOEFL iBT",
+                    "issuer": "ETS",
+                    "issued_on": "2017-06-01",
+                },
+            },
+            self._python(),
+        ]
+
+    def test_an_empty_career_reads_and_reviews(self):
+        for tool in ("get_career", "get_career_review"):
+            with self.subTest(tool):
+                data, is_error = self._call(tool)
+                self.assertFalse(is_error, data)
+
+    def test_a_cv_becomes_linked_entries_in_one_batch(self):
+        data, is_error = self._apply(*self._cv())
+        self.assertFalse(is_error, data)
+        job = Job.objects.get(user=self.fresh)
+        project = Project.objects.get(user=self.fresh)
+        education = Education.objects.get(user=self.fresh)
+        toefl = Certification.objects.get(user=self.fresh)
+        english = Language.objects.get(user=self.fresh)
+        python = Skill.objects.get(user=self.fresh)
+        self.assertEqual(
+            data["created"],
+            {
+                "new:acme": f"job:{job.pk}",
+                "new:billing": f"project:{project.pk}",
+                "new:fu": f"education:{education.pk}",
+                "new:toefl": f"certification:{toefl.pk}",
+                "new:en": f"language:{english.pk}",
+                "new:python": f"skill:{python.pk}",
+            },
+        )
+        self.assertEqual(project.job, job)
+        self.assertEqual(english.certification, toefl)
+        self.assertEqual(english.fluency, Language.Fluency.professional)
+        self.assertEqual(education.degree_level, Education.DegreeLevel.master)
+        self.assertEqual((job.started, job.ended), (date(2019, 3, 1), date(2021, 5, 1)))
+        for entry in (job, project, education):
+            with self.subTest(entry=entry):
+                self.assertEqual(list(entry.skills.all()), [python])
+        self.assertEqual([c["before"] for c in data["changes"]], [None] * 6)
+        self.assertEqual(
+            {c["id"] for c in data["changes"]}, set(data["created"].values())
+        )
+        self.assertEqual(
+            CareerChange.objects.get(pk=data["id"]).source, CareerChange.Source.claude
+        )
+        career = self._career()["entries"]
+        self.assertEqual([j["title"] for j in career["jobs"]], ["Backend Developer"])
+        self.assertEqual([s["name"] for s in career["skills"]], ["Python"])
+
+    def test_undo_deletes_every_entry_the_batch_created(self):
+        applied, _ = self._apply(*self._cv())
+        undone, is_error = self._call("undo_career_changes", {"id": applied["id"]})
+        self.assertFalse(is_error, undone)
+        for model in self.ENTRY_MODELS:
+            with self.subTest(model.__name__):
+                self.assertFalse(model.objects.filter(user=self.fresh).exists())
+
+    def test_a_dry_run_names_every_new_entry_by_its_ref(self):
+        data, is_error = self._apply(*self._cv(), dry_run=True)
+        self.assertFalse(is_error, data)
+        self.assertIsNone(data["id"])
+        self.assertEqual(data["created"], {})
+        self.assertEqual(
+            sorted(c["id"] for c in data["changes"]),
+            sorted(f"new:{c['ref']}" for c in self._cv()),
+        )
+        billing = next(c for c in data["changes"] if c["id"] == "new:billing")
+        self.assertEqual(billing["after"]["job"], "new:acme")
+        self.assertEqual(billing["after"]["skills"], ["new:python"])
+        self.assertEqual(data["labels"]["new:acme"], "Backend Developer at Acme GmbH")
+        for model in self.ENTRY_MODELS:
+            with self.subTest(model.__name__):
+                self.assertFalse(model.objects.filter(user=self.fresh).exists())
+
+    def test_a_new_entry_needs_what_its_type_requires(self):
+        data, is_error = self._apply(
+            {"new": "job", "ref": "j", "set": {"title": "Developer"}}
+        )
+        self.assertTrue(is_error, data)
+        self.assertEqual(set(data["changes"]["0"]), {"company", "started"})
+        self.assertFalse(Job.objects.filter(user=self.fresh).exists())
+
+    def test_one_bad_new_entry_creates_none(self):
+        data, is_error = self._apply(
+            self._acme(), self._python(), {"new": "language", "ref": "x", "set": {}}
+        )
+        self.assertTrue(is_error, data)
+        self.assertEqual(list(data["changes"]), ["2"])
+        for model in self.ENTRY_MODELS:
+            with self.subTest(model.__name__):
+                self.assertFalse(model.objects.filter(user=self.fresh).exists())
+
+    def test_new_links_only_a_ref_of_the_type_it_names(self):
+        k8s = {"new": "skill", "ref": "k8s", "set": {"name": "Kubernetes"}}
+        bad = {
+            "a skill as a job": [
+                k8s,
+                {"new": "project", "ref": "p", "set": {"name": "P", "job": "new:k8s"}},
+            ],
+            "a job as a skill": [
+                {**self._acme(), "add": {}},
+                {
+                    "new": "project",
+                    "ref": "p",
+                    "set": {"name": "P"},
+                    "add": {"skills": ["new:acme"]},
+                },
+            ],
+            "a ref nobody declared": [
+                {"new": "project", "ref": "p", "set": {"name": "P", "job": "new:nope"}}
+            ],
+        }
+        for name, changes in bad.items():
+            with self.subTest(name):
+                data, is_error = self._apply(*changes)
+                self.assertTrue(is_error, data)
+                self.assertIn(str(len(changes) - 1), data["changes"])
+        self.assertFalse(Project.objects.filter(user=self.fresh).exists())
+
+    def test_a_ref_is_unique_across_types(self):
+        data, is_error = self._apply(
+            {**self._acme(), "ref": "x", "add": {}},
+            {"new": "skill", "ref": "x", "set": {"name": "X"}},
+        )
+        self.assertTrue(is_error, data)
+        self.assertIn("ref", data["changes"]["1"])
+
+    def test_an_entry_in_jac_links_a_new_one(self):
+        project = Project.objects.create(user=self.fresh, name="Billing")
+        project.refresh_from_db()
+        data, is_error = self._apply(
+            self._acme(),
+            self._python(),
+            {
+                "id": f"project:{project.pk}",
+                "seen": project.updated_at.isoformat(),
+                "set": {"job": "new:acme"},
+            },
+        )
+        self.assertFalse(is_error, data)
+        project.refresh_from_db()
+        self.assertEqual(project.job, Job.objects.get(user=self.fresh))
+
+    def test_the_favourite_cap_holds_for_new_entries(self):
+        skills = [
+            {
+                "new": "skill",
+                "ref": f"s{n}",
+                "set": {"name": f"S{n}", "favourite": True},
+            }
+            for n in range(Skill.FAVOURITE_LIMIT + 1)
+        ]
+        data, is_error = self._apply(*skills)
+        self.assertTrue(is_error, data)
+        self.assertFalse(Skill.objects.filter(user=self.fresh).exists())
+
+    def test_the_rules_say_how_a_cv_becomes_entries(self):
+        rules = self._call("get_career_review")[0]["rules"]
+        self.assertIn("## Filling the career from a CV", rules)
+        self.assertNotIn("You may create skills, nothing else", rules)
+        for etype in FIELDS:
+            with self.subTest(etype):
+                self.assertIn(f"`{etype}`", rules)
+        r = self._rpc("initialize", {"protocolVersion": "2025-06-18"})
+        self.assertIn("from a CV", r.json()["result"]["instructions"])
+        tools = {
+            t["name"]: t for t in self._rpc("tools/list").json()["result"]["tools"]
+        }
+        self.assertIn("create", tools["apply_career_changes"]["description"])
+        self.assertIn("entries it created", tools["undo_career_changes"]["description"])
+        schema = tools["apply_career_changes"]["inputSchema"]
+        self.assertIn('"new": "<type>"', schema["properties"]["changes"]["description"])
 
 
 class _PortfolioCase(_McpCase):
