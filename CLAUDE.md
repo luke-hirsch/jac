@@ -73,19 +73,20 @@ Tests: `cd backend && python manage.py test --skip llm --parallel auto`, `cd fro
 
 # where things stand
 
-**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. Five guides are left in
+**Live on the lab since 2026-11-08.** Lukas's first glance: everything checks out. Four guides are left in
 `.claude/plans/to-do/`, all of them his:
 - `03_[fullstack]-live-checklist`: the 24 live checks (the launch guide's open ones and guide 02's live curls folded in;
   the rollback drill on `57ee607`, never across `jac.0006`) and the watch list;
 - `04_[fullstack]-after-launch`: the backlog, in a recommended order. It starts with what the archived guides left open
-  (guide 30's about page and comments first, then guide 18's and 19's live tests, four legal sentences, token scope,
-  his own data fixes, three small bugs), then what waits on the lab or the board. Each item gets an activation pass
-  before Lukas types it ([[backlog-guides-need-activation]]);
-- `31` to `33`, the portfolio's next chain, activated with red tests on their branches, typed in that order
-  ([[portfolio-guides-30-33]]): one stylesheet (`frontend/src/theme.css`, shadcn everywhere, the Studio pieces gone)
-  with the page owner's CV colour as primary; a `contact` block, a form that mails the owner instead of a public
-  address; and the decision model `d3:4b` keeping or dropping each entry over a WebSocket, so the page fills while the
-  visitor watches. 33 starts with checks on the tower.
+  (guide 30's about page, live and wrong, first; then guide 31's rest: his look, the questionnaire and waiting card on
+  the grid, jac's layout, the code tour; guide 18's and 19's live tests, four legal sentences, token scope, his own
+  data fixes, three small bugs), then what waits on the lab or the board. Each item gets an activation pass before
+  Lukas types it ([[backlog-guides-need-activation]]);
+- `32` and `33`, the portfolio's next chain, red tests on their branches, typed in that order
+  ([[portfolio-guides-30-33]]): a `contact` block, a form that mails the owner instead of a public address; and the
+  decision model `d3:4b` keeping or dropping each entry over a WebSocket, so the page fills while the visitor watches.
+  33 starts with checks on the tower. **Both need an activation refresh first:** their code blocks use guide 31 as
+  planned, not as it landed.
 
 Guides 02, 05 to 07 and 09 to 29 (AI-coded at his request, 2026-11-20 to 11-25) are in `done/` without a Results
 chapter (2026-11-23): Lukas tests live, in the Claude app, and what breaks comes back as new work. All are
@@ -105,28 +106,37 @@ them (the layout's `detailed_when_off`, resolved by `effectiveDetail`); 25: rena
 self-hosted upload, sniffed, 50 MB a file and 250 MB a user; `spa.blocks`), the standard page stored as a `standard`
 link row (`<home>?focus=balanced&tone=neutral` shows it at once: the AI job starts only for a topic, a question or a
 non-default style), the connector's `get_portfolio` / `save_portfolio_block` / `save_portfolio_page` (writes need the
-token's `may_edit_portfolio`, off by default; each answers with `before` and the `url`; `rules/portfolio.md`), and the
-Studio look on the public portfolio only (`.studio`, Space Grotesk + Inter, the owner's accent made readable on the
-dark ground). Parked in guide 04: review dismissals, draft entries from Claude, ChatGPT, click-to-load video embeds.
+token's `may_edit_portfolio`, off by default; each answers with `before` and the `url`; `rules/portfolio.md`), and a
+Studio look (guide 31 replaced it). Parked in guide 04: review dismissals, draft entries from Claude, ChatGPT,
+click-to-load video embeds.
 
-Guide 30 (typed by Lukas, in `done/` with his Results, 2026-11-25) put a proof-of-work check in the questionnaire
-(ALTCHA, `spa/captcha.py`, no cookie, no outside service): nothing anonymous wakes the tower without a solved,
-single-use check. The personalise POST and the visitor prewarm carry it; "I feel lucky" and the standard page need
-none, since they never reach the model.
+Guide 30 (typed by Lukas, in `done/` with his Results, 2026-11-25, live 2026-11-26) put a proof-of-work check in the
+questionnaire (ALTCHA, `spa/captcha.py`, no cookie, no outside service): nothing anonymous wakes the tower without a
+solved, single-use check. The personalise POST and the visitor prewarm carry it; "I feel lucky" and the standard page
+need none, since they never reach the model.
+
+Guide 31 (AI-coded at his request, "you code, I describe", live 2026-11-27, in `done/`) gave the whole UI one look
+([[frontend-look]]): `frontend/src/theme.css` in shadcn's `:root`/`.dark` format plus high contrast, the primary from
+the page owner's CV colour, else the site owner's, else `#1a7f56` (`lib/brand.ts`, `brand-provider.tsx`; the Django
+pages link the built stylesheet via `spa/theme.py`), one self-hosted grotesque (Archivo), `--radius: 0`, shadcn
+components everywhere, jac's pages in `Page` / `PageTitle`, the portfolio a Swiss grid (`PortfolioSection`), and a
+visitor appearance switch on the portfolio host. Two side tasks of a parallel session went live on 2026-11-26: search
+and sorting on the applications list, and a per-user "portfolio link on new applications" default on the links page
+with a stored on/off per application (`jac.0008`, `spa.0005`).
 
 The launch guide is archived as `done/[fullstack]-launch-live-2026-11-08.md` (its step 3 records how the mini was set
 up), next to the wildcard version and the earlier ones. **The pre-launch mode
 ("the AI codes at his request, we're at a volatile stage") ran until launch.** Default-strict (below) applies again
 until Lukas says otherwise.
 
-- **Branches:** three, each one red-test commit, stacked on `main`: `fullstack/one-stylesheet` →
-  `fullstack/portfolio-contact` → `fullstack/portfolio-live-fill` (guides 31 to 33). `main` holds the Postgres move,
+- **Branches:** two, each one red-test commit, stacked on `main`: `fullstack/portfolio-contact` →
+  `fullstack/portfolio-live-fill` (guides 32 and 33). `main` holds the Postgres move,
   prewarm, the race fix, the legal pages and what they promise, 2b (random handles, the consent gate and card, the
   audit fix, the legal sign-off), the four-host layout, `./dev` serving the landing on plain `localhost` as the apex
-  does live, mail over Strato's 465 with SSL, and the privacy page without menu paths, guides 02 and 05 to 30, and the
-  favicon (the antlers, [[brand-mark]]). Live was `1eb6d72` (2026-11-25) at the last check; guide 30 is on `main` and
-  pushed, and its deploy isn't confirmed. The about page should get guide 30's text first (guide 04). `jac.0006` (every skill's certification link moved into the certification) was already
-  applied live when guide 18 deployed.
+  does live, mail over Strato's 465 with SSL, and the privacy page without menu paths, guides 02 and 05 to 31, the
+  two side tasks, and the favicon (the antlers, [[brand-mark]]). Live is `f5201b0` (2026-11-27, `X-Release` on all
+  three hosts), all of `main`'s code. Guide 30 went live without its about-page text (guide 04). `jac.0006` (every
+  skill's certification link moved into the certification) was already applied live when guide 18 deployed.
 - **The legal pages** say du and name no infrastructure ([[legal-no-infrastructure]]). They say what happens with the
   data, not where to click: no menu paths, and a test keeps `Account →` off the privacy page. Since 2026-11-07 they say `jac.`
   and `portfolio.<domain>/<name>`. Of what their text commits jac to ([[legal-consent-and-restore]]), consent and the
