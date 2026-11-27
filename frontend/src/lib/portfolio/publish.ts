@@ -8,6 +8,9 @@ export type PublishState = {
   portfolio_always_public: boolean;
 };
 
+/** The longest handle the server takes (spa.portfolio.HANDLE_MAX_LEN): it sits in every link. */
+export const HANDLE_MAX_LEN = 12;
+
 /** The address as people read it, without a scheme: portfolio.<base>/<handle>/. */
 export function portfolioAddress(handle: string, base: string): string {
   return `${PORTFOLIO_SUBDOMAIN}.${base}/${handle}/`;

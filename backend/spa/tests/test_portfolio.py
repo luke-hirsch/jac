@@ -461,6 +461,32 @@ class HandleClaimTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["handle"], "claimer")
 
+    def test_a_handle_is_at_most_the_buffer_plus_the_suffix(self):
+        """The handle sits in every link, so it's held to `SLUG_BUFFER + SLUG_SUFFIX_LEN`
+        letters, which leaves the company name room on the CV's contact line."""
+        limit = portfolio.HANDLE_MAX_LEN
+        self.assertEqual(limit, portfolio.SLUG_BUFFER + SLUG_SUFFIX_LEN)
+        self.assertEqual(self._patch("a" * limit).status_code, 200)
+        r = self._patch("b" * (limit + 1))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("handle", r.json())
+
+    def test_the_limit_counts_the_handle_as_saved(self):
+        r = self._patch("  Lukas Hirsch ")  # 12 once it's a slug
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["handle"], "lukas-hirsch")
+
+    def test_a_random_handle_fits_the_limit(self):
+        self.assertLessEqual(len(random_handle()), portfolio.HANDLE_MAX_LEN)
+
+    def test_a_longer_handle_from_before_the_limit_can_be_kept(self):
+        """Its links are printed already: keeping it is fine, a new long one isn't."""
+        UserProfile.objects.filter(user=self.user).update(
+            handle="claimed-before-the-limit"
+        )
+        r = self._patch("claimed-before-the-limit")
+        self.assertEqual(r.status_code, 200)
+
 
 class PerUserSlugTests(TestCase):
     def _link(self, user, slug):
@@ -537,6 +563,84 @@ class ApplicationSlugTests(TestCase):
         )
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.json()["slug"], "acme")
+
+
+SUFFIX = "k7m2x9qa"
+
+
+@override_settings(PORTFOLIO_URL="https://portfolio.example.com")
+class LinkLengthTests(TestCase):
+    """An application link goes on the CV's contact line, so the whole address stays within
+    `LINK_MAX_LEN`. The company part gives way in steps, each as readable as still fits
+    (`company_part`): dashes become camel case, then letters come off the end down to the
+    acronym plus `SLUG_BUFFER`, then the acronym, then nothing but the suffix."""
+
+    def test_a_name_that_fits_stays_as_it_was(self):
+        self.assertEqual(portfolio.company_part("Acme Corp", 21), "acme-corp")
+
+    def test_first_the_dashes_go(self):
+        self.assertEqual(
+            portfolio.company_part("Wasteless Fashion GmbH", 21), "WastelessFashionGmbH"
+        )
+
+    def test_then_letters_come_off_the_end(self):
+        self.assertEqual(
+            portfolio.company_part("Wasteless Fashion GmbH", 12), "WastelessFas"
+        )
+
+    def test_the_cut_stops_at_the_acronym_plus_the_buffer(self):
+        # WFG is 3 letters, the buffer 4: 7 is as short as the name gets before the acronym.
+        self.assertEqual(portfolio.SLUG_BUFFER, 4)
+        self.assertEqual(portfolio.company_part("Wasteless Fashion GmbH", 7), "Wastele")
+        self.assertEqual(portfolio.company_part("Wasteless Fashion GmbH", 6), "WFG")
+
+    def test_then_the_acronym_then_nothing(self):
+        self.assertEqual(portfolio.company_part("Wasteless Fashion GmbH", 3), "WFG")
+        self.assertEqual(portfolio.company_part("Wasteless Fashion GmbH", 2), "")
+
+    def test_camel_case_keeps_short_capitals_and_softens_shouting(self):
+        self.assertEqual(
+            portfolio.company_part("IBM Deutschland GmbH", 19), "IBMDeutschlandGmbH"
+        )
+        self.assertEqual(
+            portfolio.company_part("ACME CORPORATION INTERNATIONAL", 28),
+            "AcmeCorporationInternational",
+        )
+
+    def test_a_short_name_keeps_its_dashes(self):
+        app = _application(_owner("me"), company="Acme Corp")
+        with mock.patch("spa.portfolio.slug_suffix", return_value=SUFFIX):
+            self.assertEqual(application_slug(app), f"acme-corp-{SUFFIX}")
+
+    def test_a_long_name_keeps_the_whole_link_within_the_limit(self):
+        company = "Es.te Services GmbH / Rehasport Deutschland e.V."
+        app = _application(_owner("me"), company=company)
+        with mock.patch("spa.portfolio.slug_suffix", return_value=SUFFIX):
+            url = public_portfolio_url(link_for_application(app))
+        self.assertEqual(
+            url, f"https://portfolio.example.com/me/EsteServicesGmbHRehas-{SUFFIX}/"
+        )
+        self.assertEqual(len(url), portfolio.LINK_MAX_LEN)
+
+    @override_settings(PORTFOLIO_URL="https://portfolio.a-much-longer-domain.example")
+    def test_with_no_room_left_the_suffix_stands_alone(self):
+        app = _application(_owner("lukas-hirsch"), company="Acme")
+        with mock.patch("spa.portfolio.slug_suffix", return_value=SUFFIX):
+            self.assertEqual(application_slug(app), SUFFIX)
+
+    def test_a_link_opens_whatever_the_case(self):
+        """Camel case is for reading; someone typing the address off paper may not keep it."""
+        cache.clear()
+        owner = _owner("jane")
+        PortfolioLink.objects.create(
+            user=owner,
+            kind=PortfolioLink.Kind.manual,
+            slug=f"WastelessFashion-{SUFFIX}",
+        )
+        url = "/api/spa/public/jane/links/{}/"
+        for slug in (f"WastelessFashion-{SUFFIX}", f"wastelessfashion-{SUFFIX}"):
+            with self.subTest(slug=slug):
+                self.assertEqual(self.client.get(url.format(slug)).status_code, 200)
 
 
 class ApplicationSectionsOffTests(TestCase):

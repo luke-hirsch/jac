@@ -330,9 +330,14 @@ class PortfolioResolveView(PublicPortfolioAPIView):
         owner = link_owner_for_handle(handle)
         if owner is None:
             raise Http404
-        link = get_object_or_404(
-            _owner_links(owner).filter(revoked_at__isnull=True), slug=slug
+        # Any case, like the handle: an application slug may be camel case
+        # (spa.portfolio.company_part), and someone typing it off a CV may not keep it.
+        active = _owner_links(owner).filter(revoked_at__isnull=True)
+        link = (
+            active.filter(slug=slug).first() or active.filter(slug__iexact=slug).first()
         )
+        if link is None:
+            raise Http404
         if request.user.pk != link.user_id:  # type: ignore
             bump_visit(link)
         return Response(build_payload(link.user, link=link))
