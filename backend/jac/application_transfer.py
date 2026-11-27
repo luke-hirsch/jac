@@ -68,6 +68,9 @@ EDITABLE_FIELDS = (
     "notes",
     "include_portfolio_link",
     "fit",
+    "apply_url",
+    "apply_note",
+    "email_body",
 )
 MAX_IMPORT_APPLICATIONS = 500
 

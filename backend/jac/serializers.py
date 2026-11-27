@@ -13,6 +13,7 @@ from rest_framework.validators import UniqueTogetherValidator
 
 from jac.llm_prompts import ParagraphRewrite, ShortenLetter
 from jac.models import (
+    URL_CHARS,
     AccessToken,
     ApplicationLayout,
     Certification,
@@ -740,6 +741,9 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "include_portfolio_link",
             "portfolio_link_on",
             "fit",
+            "apply_url",
+            "apply_note",
+            "email_body",
             "sent_by_system",
             "approved_at",
             "sent_at",
@@ -767,6 +771,8 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "posting": {"required": False},
             "cover_letter": {"max_length": MAX_LETTER_CHARS},
             "notes": {"max_length": MAX_NOTES_CHARS},
+            "apply_note": {"max_length": MAX_NOTES_CHARS},
+            "email_body": {"max_length": MAX_LETTER_CHARS},
         }
 
     def __init__(self, *args, **kwargs):
@@ -1009,7 +1015,11 @@ class SkillPostingSerializer(serializers.Serializer):
     text = serializers.CharField(max_length=MAX_POSTING_CHARS)
     title = serializers.CharField(max_length=200, required=False, allow_blank=True)
     language = serializers.RegexField(r"^[a-z]{2}$", required=False)
-    source_url = serializers.URLField(required=False, allow_blank=True)
+    # The column's own limit: a plain Serializer doesn't read it off the model, and a longer
+    # link reached Postgres and came back as a 500.
+    source_url = serializers.URLField(
+        max_length=URL_CHARS, required=False, allow_blank=True
+    )
     company = serializers.CharField(max_length=200, required=False, allow_blank=True)
     contact_name = serializers.CharField(
         max_length=200, required=False, allow_blank=True
@@ -1066,6 +1076,15 @@ class SkillApplicationSerializer(serializers.Serializer):
     )
     fit = serializers.IntegerField(
         min_value=1, max_value=5, required=False, allow_null=True
+    )
+    apply_url = serializers.URLField(
+        max_length=URL_CHARS, required=False, allow_blank=True
+    )
+    apply_note = serializers.CharField(
+        max_length=MAX_NOTES_CHARS, required=False, allow_blank=True
+    )
+    email_body = serializers.CharField(
+        max_length=MAX_LETTER_CHARS, required=False, allow_blank=True
     )
 
     def validate_entries(self, value):

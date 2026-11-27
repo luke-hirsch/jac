@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { ApplyCard } from "@/components/applications/apply-card";
 import { DraftedCards } from "@/components/applications/drafted-cards";
 import { GeneratePanel } from "@/components/applications/generate-panel";
 import { PostingCard } from "@/components/applications/posting-card";
@@ -80,6 +81,7 @@ function ApplicationDetailPage() {
       <div className="grid items-start gap-6 lg:grid-cols-[2fr_3fr]">
         <div className="space-y-6">
           <PostingCard app={app.data} />
+          <ApplyCard key={app.data.id} app={app.data} />
           <LifecycleCard app={app.data} />
           <GeneratePanel
             app={app.data}

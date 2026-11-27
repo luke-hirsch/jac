@@ -22,12 +22,26 @@ export type ApplicationStatus =
 export type DeliveryMethod = "email" | "manual";
 export type ResponseOutcome = "interview" | "offer" | "rejected" | "other";
 
+/** The employer's address as the posting gives it (read-only: Claude or the run fills it). */
+export type PostingAddress = {
+  company: string;
+  contact_name: string;
+  street: string;
+  address_line2: string;
+  zip: string;
+  city: string;
+  country: string;
+  email: string;
+  phone: string;
+};
+
 export type PostingDetail = {
   id: number;
   title: string;
   posting_text: string;
   language: string;
   source_url: string;
+  address: PostingAddress | null;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -59,6 +73,9 @@ export type ApplicationRow = {
   include_portfolio_link: boolean | null; // null = follow the profile's portfolio_link_by_default
   portfolio_link_on: boolean; // read-only: the choice above, else the default
   fit: number | null; // how well the user fits the posting, 1 to 5; null = not rated
+  apply_url: string; // where the application goes: the portal or form ("" = by email / unknown)
+  apply_note: string; // what the ad asks for on the way: reference number, documents, one PDF
+  email_body: string; // the whole email to send it with, salutation to name
   sent_by_system: boolean;
   approved_at: string | null;
   sent_at: string | null;
@@ -83,6 +100,9 @@ export type ApplicationPatch = Partial<{
   attachments: number[];
   include_portfolio_link: boolean | null;
   fit: number | null;
+  apply_url: string;
+  apply_note: string;
+  email_body: string;
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */
