@@ -20,8 +20,8 @@ brings its own. The rest of this file is about applications.
    Never work from memory or invent a career. Call it again only after the career changed: a
    batch of career changes you applied, or the user saying they edited it in jac.
 3. **Read the posting.** The role title, the company, a contact person and address if the ad
-   names them, the language (write in the posting's language), and in a German ad whether it
-   says Sie, ihr or du.
+   names them, the language (write in the posting's language), in a German ad whether it
+   says Sie, ihr or du, and where the application goes (see "Where to apply and the email").
 4. **Propose the CV and the letter**, following the rules below. Show the CV as a short list per
    section: entry titles, with a few words on why each pick fits, and name anything notable you
    left out. Then the letter body.
@@ -108,7 +108,11 @@ Call `save_application` with the application as its arguments:
   "sections_off": [],
   "letter": { "body": "<the letter body>", "tone": "neutral" },
   "notes": "",
-  "fit": 4
+  "fit": 4,
+  "apply_url": "https://karriere.beispiel.de/jobs/4711/bewerben",
+  "apply_note": "Kennziffer DE-4711. Zeugnisse erwünscht, alles in einem PDF.",
+  "email_body": "<the email, salutation to name>",
+  "salary_note": "Ask 72,000 € gross a year. The ad names TV-L E13; ..."
 }
 ```
 
@@ -133,6 +137,50 @@ want back, a letter that runs over a page). When the user wants to see a saved a
 without changing it, call `show_application` with its `id`. The preview can download the PDF;
 the signature, attachments and the portfolio QR come only with the export in jac. Where no preview appears (an
 app without it), the `url` is the way.
+
+## Where to apply and the email
+
+The user sends the application themselves, often from their phone, so jac keeps what they need for
+it next to the application. Fill these with every new application and save them with it; leave a
+field empty rather than guess.
+
+- **`apply_url`**: where the application goes when it isn't by email: the employer's portal or form.
+  Take it from the ad. When the ad only points at a careers page or a portal, look the job up there
+  and give the link to this job's form, not the careers homepage. Leave it empty when the ad says to
+  apply by email, or when you can't find the form, and tell the user which.
+- **`apply_note`**: what the ad asks for on the way, in a line or two: a reference number
+  (Kennziffer), the documents it wants (certificates, references), "one PDF", a size limit, the
+  person to ask. Only what the ad says.
+- **The recipient** of an email application is `posting.email`, as before; with a contact person,
+  `posting.contact_name`.
+- **`email_body`**: the email the application goes out with, whole and ready to paste: the
+  salutation (the letter's), three to five short sentences, the closing and the user's name
+  (`candidate.name`). Name the role and the reference number if there is one, say what's attached
+  (the cover letter and CV in one PDF, plus certificates when the ad asks for them), and close with
+  thanks. Don't repeat the letter. In the posting's language and the letter's form of "you", plain
+  text, no markdown, no placeholders, and the user's style rules apply. jac shows the letter's
+  subject next to it as the email's subject. Write it whenever the application goes by email; for
+  a portal only when the user asks, since some forms have a message field.
+- **Just these**, for an application that's already saved: `save_application` with the `id` and
+  only these fields; nothing else changes.
+
+## The salary
+
+`salary_note` is the user's own note on pay for this posting. It's internal: no export or preview
+prints it. Fill it with every new application, and whenever the user asks what to ask for.
+
+- **The number to ask for comes first**, as a yearly gross figure in the posting's currency ("Ask
+  72,000 € gross a year"). Then a line or two on what it rests on: the range the ad states, the
+  tariff group it names (TV-L, TVöD, a collective agreement) with the step the career's years
+  suggest, or the market for this role, level and city.
+- **Say how solid it is.** Name the source if you looked one up; an estimate from what you know
+  says so. Applications differ, so estimate each posting on its own: the region, the employer's
+  size and sector, and the level the ad asks for move the number.
+- **Not in the letter** unless the ad asks for a salary expectation (Gehaltsvorstellung) and the
+  user agrees. Then the letter names the number from the note, and `apply_note` says the ad asks
+  for one.
+- **Just the salary**, for an application that's already saved: `save_application` with the `id`
+  and only `salary_note`.
 
 ## Rating the fit
 

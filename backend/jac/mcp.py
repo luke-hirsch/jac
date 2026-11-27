@@ -668,6 +668,26 @@ _APPLICATION = {
         },
         "letter": _LETTER,
         "notes": {**_TEXT, "description": "The user's own notes on the application."},
+        "apply_url": {
+            **_TEXT,
+            "description": "Where the application goes: the employer's portal or form, "
+            "from the ad or found on the employer's site. Empty when it goes by email.",
+        },
+        "apply_note": {
+            **_TEXT,
+            "description": "What the ad asks for on the way: a reference number, the "
+            "documents wanted, one PDF, the contact for questions, by email only.",
+        },
+        "email_body": {
+            **_TEXT,
+            "description": "The email the user sends the application with, whole: "
+            "salutation, a few lines, closing and their name. In the posting's language.",
+        },
+        "salary_note": {
+            **_TEXT,
+            "description": "The user's own note on pay for this posting: the number to ask "
+            "for and what it rests on. Internal: no export prints it. The rules say how.",
+        },
         "fit": {
             "type": ["integer", "null"],
             "minimum": 1,
@@ -871,7 +891,9 @@ TOOLS = {
         {
             "title": "Save the application",
             "description": "Save the CV and the letter to jac, only when the user says so, "
-            "or with an `id` and only `fit`, the rating the user asked for. "
+            "or with an `id` and only `fit`, the rating the user asked for. Where to apply, "
+            "the email and the salary note (`apply_url`, `apply_note`, `email_body`, "
+            "`salary_note`) save with it. "
             "To create one, `posting.text`, `entries` and `letter.body` are required. With "
             "an `id`, it updates that application instead. Answers with the application, "
             "its `url` (give it to the user: they check it and export the PDF in jac) and "

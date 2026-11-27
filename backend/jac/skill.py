@@ -325,7 +325,22 @@ def application_payload(application: JobApplication) -> dict:
             "closing": meta.get("closing", ""),
         },
         "notes": application.notes,
+        "apply_url": application.apply_url,
+        "apply_note": application.apply_note,
+        "email_body": application.email_body,
+        "salary_note": application.salary_note,
     }
+
+
+# What `save_application` copies onto the application as sent: no frame, no checks.
+_PLAIN_FIELDS = (
+    "notes",
+    "fit",
+    "apply_url",
+    "apply_note",
+    "email_body",
+    "salary_note",
+)
 
 
 def _cv_content(
@@ -461,10 +476,9 @@ def save_application(
             letter,
             style_checks(PersonalityProfile.objects.filter(user=user).first()),
         )
-    if "notes" in data:
-        application.notes = data["notes"]
-    if "fit" in data:
-        application.fit = data["fit"]
+    for field in _PLAIN_FIELDS:
+        if field in data:
+            setattr(application, field, data[field])
     application.save()
     return application, warnings
 

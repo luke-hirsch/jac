@@ -15,6 +15,9 @@ from django.utils.translation import gettext_lazy as _
 from lukehirsch.managers import SystemScopedManager
 from lukehirsch.storage import PrivateStorage
 
+# The longest link a posting or an application keeps (the ad, the portal).
+URL_CHARS = 500
+
 
 def _spans_subquery(related_model):
     """Subquery returning, for the outer Skill row, a JSON list of `{started, ended}` of every
@@ -536,7 +539,8 @@ class JobPosting(models.Model):
     # ISO-639-1 code of the posting language (e.g. "en", "de"); drives salutation/subject and
     # the weave-prompt language hint. Best-effort from AddressExtract; defaults to English.
     language = models.CharField(max_length=8, default="en")
-    source_url = models.URLField(blank=True)
+    # Job boards hand out links well over Django's default 200 (tracking parameters).
+    source_url = models.URLField(max_length=URL_CHARS, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     # Soft-delete: postings are never hard-deleted (applications hang off them);
@@ -644,6 +648,20 @@ class JobApplication(models.Model):
     fit = models.PositiveSmallIntegerField(
         null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)]
     )
+    # Where the application goes, for the user sending it by hand: the portal or form
+    # (`apply_url`), and what the ad asks for on the way (`apply_note`: a reference number, "one
+    # PDF", "by email only"). The recipient's address stays on the posting (`address.email`).
+    # `email_body` is the whole mail to paste or open in a mail app: salutation to signature,
+    # unlike the letter body, which jac frames. Claude fills all three; the user can edit them.
+    # db_default: a rollback runs the previous image, whose inserts leave the columns out.
+    apply_url = models.URLField(
+        max_length=URL_CHARS, blank=True, default="", db_default=""
+    )
+    apply_note = models.TextField(blank=True, default="", db_default="")
+    email_body = models.TextField(blank=True, default="", db_default="")
+    # The user's own salary note for this posting: the number to ask for and what it rests on
+    # (the ad's range, a tariff group, the market). Internal: no export or preview prints it.
+    salary_note = models.TextField(blank=True, default="", db_default="")
     sent_by_system = models.BooleanField(default=False)
     approved_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
