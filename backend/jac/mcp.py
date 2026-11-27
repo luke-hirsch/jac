@@ -119,8 +119,8 @@ INSTRUCTIONS = (
     "a job posting, asks for a CV, Lebenslauf, cover letter, Anschreiben or Bewerbung, or asks "
     "how well they fit a posting (jac stores that rating as `fit`, 1 to 5), call "
     "`get_career` first, once per conversation: it returns the career and the rules for "
-    "using it, and you follow those rules. To check or improve the career data, call "
-    "`get_career_review`, which brings its own rules. Nothing is saved until the user says so "
+    "using it, and you follow those rules. To check or improve the career data, or to fill it "
+    "from a CV the user gives you, call `get_career_review`, which brings its own rules. Nothing is saved until the user says so "
     "(asking for a fit rating counts as saying so); "
     "after `save_application`, give them the link it returns: they look at the result and "
     "export the PDF in jac. In the Claude app, `save_application` and `show_application` "
@@ -708,7 +708,8 @@ _CHANGES = {
             "minItems": 1,
             "maxItems": SkillCareerChangesSerializer.MAX_CHANGES,
             "description": "The batch, each change as the review rules describe it: "
-            '{"id", "seen", "why", "set", "add", "remove"}, or {"new": "skill", "ref", …}.',
+            '{"id", "seen", "why", "set", "add", "remove"} to edit an entry, or '
+            '{"new": "<type>", "ref", "why", "set", "add"} to create one.',
         },
         "dry_run": {
             "type": "boolean",
@@ -941,9 +942,10 @@ TOOLS = {
         apply_career_changes,
         {
             "title": "Change career entries",
-            "description": "Apply a batch of career edits the user agreed to, all or "
-            "nothing; with `dry_run` only check it. Every batch can be undone until the "
-            "user keeps it in jac. Follow the rules from `get_career_review`.",
+            "description": "Apply a batch of career changes the user agreed to, all or "
+            "nothing: edit entries, or create them (from a CV the user gave you, say). With "
+            "`dry_run` only check it. Every batch can be undone until the user keeps it in "
+            "jac. Follow the rules from `get_career_review`.",
             "inputSchema": _CHANGES,
             "annotations": _hints(read_only=False, destructive=True),
         },
@@ -962,7 +964,7 @@ TOOLS = {
         undo_career_changes,
         {
             "title": "Undo career changes",
-            "description": "Put a batch's entries back as they were and delete the skills "
+            "description": "Put a batch's entries back as they were and delete the entries "
             "it created. Refused once an entry in it has been edited again.",
             "inputSchema": {
                 "type": "object",

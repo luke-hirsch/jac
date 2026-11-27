@@ -465,8 +465,19 @@ class ProjectSerializer(
         read_only_fields = ["id"]
 
 
-class LanguageSerializer(FavouriteLimitMixin, serializers.ModelSerializer):
+class LanguageSerializer(
+    FavouriteLimitMixin, ScopeRelatedToUserMixin, serializers.ModelSerializer
+):
+    user_scoped_fields = ("certification",)
+
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    # The certificate that proves the level (a TOEFL). Without this field a change from the
+    # connector was accepted and the link dropped.
+    certification = serializers.PrimaryKeyRelatedField(
+        queryset=Certification.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = Language
@@ -474,6 +485,7 @@ class LanguageSerializer(FavouriteLimitMixin, serializers.ModelSerializer):
             "id",
             "name",
             "fluency",
+            "certification",
             "description",
             "favourite",
             "user",

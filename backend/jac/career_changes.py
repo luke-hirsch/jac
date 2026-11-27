@@ -1,7 +1,7 @@
 """Career edits from the Claude skill: a batch of changes, applied all or nothing and logged with
 what each touched field held before, so the batch can be undone (`CareerChange`).
 
-A change edits one entry, or creates one skill:
+A change edits one entry, or creates one:
 
     {"id": "job:3", "seen": "<the entry's updated_at, from career>", "why": "…",
      "set": {"description": "…"},
@@ -10,10 +10,12 @@ A change edits one entry, or creates one skill:
      "set": {"name": "Docker", "category": "technical"}, "add": {"related_skills": ["skill:3"]}}
 
 Every write goes through the entry's own serializer (`JobSerializer`, …), so the editor's rules
-hold here too: linked ids must be the user's own, the favourite caps, unique skill names. The skill
-may create skills (a tool a description names), never jobs or degrees: those are facts only the
-user can add. `seen` guards against a stale read: when an entry changed in jac after Claude read
-it, the whole batch is refused.
+hold here too: required fields, linked ids that are the user's own, the favourite caps, unique
+skill names. Any type can be created, so a CV the user hands Claude becomes a career in one batch;
+the rules (`rules/review.md`) say it comes from what the user gave, never from a gap. Other changes
+link a new entry as `new:<ref>`, by type: a skill in a skills list, a job as a project's `job`, a
+certification as a language's `certification`. `seen` guards against a stale read: when an entry
+changed in jac after Claude read it, the whole batch is refused.
 """
 
 from __future__ import annotations
@@ -104,6 +106,9 @@ SERIALIZERS = {
     "language": LanguageSerializer,
 }
 _KEYS = {"id", "new", "ref", "seen", "why", "set", "add", "remove"}
+# The order new entries are created in, so each can name one created before it in a single link:
+# a project its job, a language its certification. Lists are linked after all of them exist.
+CREATE_ORDER = ("skill", "job", "certification", "education", "project", "language")
 
 
 class ChangeError(Exception):
@@ -168,16 +173,23 @@ def _snapshot(obj, etype: str, fields: set[str]) -> dict:
     return {field: _value(obj, etype, field) for field in sorted(fields)}
 
 
-def _pk(value, etype: str, refs: dict[str, int]) -> int:
-    """`skill:12` → 12; `new:docker` → the pk this batch gave the skill it created as `docker`."""
+# What this batch created so far: ref -> (type, pk).
+Refs = dict[str, tuple[str, int]]
+
+
+def _pk(value, etype: str, refs: Refs) -> int:
+    """`skill:12` → 12; `new:docker` → the pk this batch gave the skill it created as `docker`.
+    A ref names only an entry of the type the field links."""
     if isinstance(value, str):
         kind, _, rest = value.partition(":")
-        if kind == "new" and etype == "skill" and rest in refs:
-            return refs[rest]
+        if kind == "new" and refs.get(rest, ("", 0))[0] == etype:
+            return refs[rest][1]
         if kind == etype and rest.isdigit():
             return int(rest)
-    also = " or 'new:<ref>' for a skill this batch creates" if etype == "skill" else ""
-    raise ValueError(f"{value!r} isn't an id like '{etype}:12'{also}.")
+    raise ValueError(
+        f"{value!r} isn't an id like '{etype}:12', or 'new:<ref>' for a {etype} this "
+        "batch creates."
+    )
 
 
 def _domains(user) -> dict[str, int]:
@@ -185,7 +197,7 @@ def _domains(user) -> dict[str, int]:
 
 
 def _data(
-    etype: str, change: dict, obj, refs: dict[str, int], domains: dict[str, int]
+    etype: str, change: dict, obj, refs: Refs, domains: dict[str, int]
 ) -> tuple[dict, dict]:
     """The serializer's input for one change, and what's wrong with it, by field. Its names are
     checked already (`_name_errors`). Lists become the whole new list: what the entry links now,
@@ -322,14 +334,26 @@ def batch_payload(batch: CareerChange) -> dict:
     }
 
 
-def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], dict[str, int]]:
+def _new_errors(change: dict, refs_declared: set[str]) -> dict:
+    """What's wrong with a change that creates an entry, by field."""
+    etype, ref = change["new"], change.get("ref")
+    if "id" in change or "seen" in change:
+        return {"new": ["A new entry has no id or seen: it takes new, ref and set."]}
+    if not isinstance(etype, str) or etype not in FIELDS:
+        return {"new": [f"The entry type: one of {', '.join(FIELDS)}."]}
+    if not isinstance(ref, str) or not ref or ref in refs_declared:
+        return {"ref": ["A name, unique in this batch, that 'new:<ref>' links by."]}
+    return _name_errors(etype, change)
+
+
+def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], Refs]:
     """Apply `changes` for `request.user` inside the caller's transaction. Returns the log, the
-    stamps and the new skills' pks by ref; raises ChangeError or StaleError, and the caller's
-    transaction rolls back."""
+    stamps and the new entries' types and pks by ref; raises ChangeError or StaleError, and the
+    caller's transaction rolls back."""
     user = request.user
     ctx = {"request": request}
     errors: dict[str, object] = {}
-    # index -> (type, entry); the entry is None for a skill still to be created.
+    # index -> (type, entry); the entry is None for one still to be created.
     targets: dict[int, tuple[str, object]] = {}
     ids, refs_declared, stale = set(), set(), []
 
@@ -340,25 +364,11 @@ def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], dict[str
             errors[str(i)] = shape
             continue
         if "new" in change:
-            ref = change.get("ref")
-            if change["new"] != "skill":
-                errors[str(i)] = {
-                    "new": [
-                        (
-                            "Only skills can be created here. A job, project or degree is "
-                            "the user's to add in jac."
-                        )
-                    ]
-                }
-            elif not isinstance(ref, str) or not ref or ref in refs_declared:
-                errors[str(i)] = {
-                    "ref": ["A name, unique in this batch, that 'new:<ref>' links by."]
-                }
-            elif names := _name_errors("skill", change):
-                errors[str(i)] = names
+            if new := _new_errors(change, refs_declared):
+                errors[str(i)] = new
             else:
-                refs_declared.add(ref)
-                targets[i] = ("skill", None)
+                refs_declared.add(change["ref"])
+                targets[i] = (change["new"], None)
             continue
         cid = change.get("id")
         if not isinstance(cid, str) or not ENTRY_ID_RE.match(cid):
@@ -403,20 +413,21 @@ def _apply(request, changes: list) -> tuple[list[dict], dict[str, str], dict[str
     }
     domains = _domains(user)
 
-    # 3. The new skills, from their plain fields, so every change below can link them.
-    refs: dict[str, int] = {}
-    for i, (etype, obj) in list(targets.items()):
-        if obj is not None:
-            continue
+    # 3. The new entries, from their fields, in CREATE_ORDER, so every change below can link
+    # them. A failed one leaves the others to report their own errors too.
+    refs: Refs = {}
+    new = [i for i, (_, obj) in targets.items() if obj is None]
+    for i in sorted(new, key=lambda i: CREATE_ORDER.index(targets[i][0])):
+        etype = targets[i][0]
         data, errs = _data(etype, {"set": changes[i].get("set")}, None, refs, domains)
-        serializer = SkillSerializer(data=data, context=ctx)
+        serializer = SERIALIZERS[etype](data=data, context=ctx)
         if errs or not serializer.is_valid():
             errors[str(i)] = errs or serializer.errors
             del targets[i]
             continue
-        skill = serializer.save()
-        refs[changes[i]["ref"]] = skill.pk
-        targets[i] = (etype, skill)
+        obj = serializer.save()
+        refs[changes[i]["ref"]] = (etype, obj.pk)
+        targets[i] = (etype, obj)
 
     # 4. The edits' fields, and every change's lists.
     for i, (etype, obj) in targets.items():
@@ -459,10 +470,10 @@ def apply_changes(
 ) -> dict:
     """Apply a batch all or nothing and log it. A dry run validates and answers the same, then
     rolls everything back. Returns the batch as `batch_payload` shapes it, plus `created`: the
-    ids the new skills got (`{"new:docker": "skill:44"}`).
+    ids the new entries got (`{"new:docker": "skill:44", "new:acme": "job:9"}`).
 
-    A dry run names a new skill `new:<ref>` throughout and creates nothing in `created`: the
-    ids its rolled-back skills got are gone with them, and the real apply gets others (Postgres
+    A dry run names a new entry `new:<ref>` throughout and creates nothing in `created`: the
+    ids its rolled-back entries got are gone with them, and the real apply gets others (Postgres
     doesn't hand a rolled-back id out again)."""
     with transaction.atomic():
         log, stamps, refs = _apply(request, changes)
@@ -478,13 +489,13 @@ def apply_changes(
         payload = {
             **batch_payload(batch),
             "dry_run": dry_run,
-            "created": {f"new:{ref}": f"skill:{pk}" for ref, pk in refs.items()},
+            "created": {f"new:{ref}": f"{t}:{pk}" for ref, (t, pk) in refs.items()},
         }
         if dry_run:
             transaction.set_rollback(True)
             payload = _as_refs(
                 {**payload, "created": {}},
-                {f"skill:{pk}": f"new:{ref}" for ref, pk in refs.items()},
+                {f"{t}:{pk}": f"new:{ref}" for ref, (t, pk) in refs.items()},
             )
     return payload
 
@@ -527,7 +538,7 @@ def _restore(etype: str, before: dict, user, domains: dict[str, int]) -> dict:
 
 
 def undo_batch(request, pk: int) -> dict:
-    """Put every entry the batch touched back as it was, and delete the skills it created
+    """Put every entry the batch touched back as it was, and delete the entries it created
     (their links go with them). Refused when the batch is undone already, or when one of its
     entries was edited since: the undo would overwrite that edit."""
     user = request.user
