@@ -76,6 +76,7 @@ export type ApplicationRow = {
   apply_url: string; // where the application goes: the portal or form ("" = by email / unknown)
   apply_note: string; // what the ad asks for on the way: reference number, documents, one PDF
   email_body: string; // the whole email to send it with, salutation to name
+  salary_note: string; // internal: what to ask for and why; no export prints it
   sent_by_system: boolean;
   approved_at: string | null;
   sent_at: string | null;
@@ -103,6 +104,7 @@ export type ApplicationPatch = Partial<{
   apply_url: string;
   apply_note: string;
   email_body: string;
+  salary_note: string;
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */

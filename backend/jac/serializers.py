@@ -744,6 +744,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "apply_url",
             "apply_note",
             "email_body",
+            "salary_note",
             "sent_by_system",
             "approved_at",
             "sent_at",
@@ -773,6 +774,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "notes": {"max_length": MAX_NOTES_CHARS},
             "apply_note": {"max_length": MAX_NOTES_CHARS},
             "email_body": {"max_length": MAX_LETTER_CHARS},
+            "salary_note": {"max_length": MAX_NOTES_CHARS},
         }
 
     def __init__(self, *args, **kwargs):
@@ -1085,6 +1087,9 @@ class SkillApplicationSerializer(serializers.Serializer):
     )
     email_body = serializers.CharField(
         max_length=MAX_LETTER_CHARS, required=False, allow_blank=True
+    )
+    salary_note = serializers.CharField(
+        max_length=MAX_NOTES_CHARS, required=False, allow_blank=True
     )
 
     def validate_entries(self, value):

@@ -111,7 +111,8 @@ Call `save_application` with the application as its arguments:
   "fit": 4,
   "apply_url": "https://karriere.beispiel.de/jobs/4711/bewerben",
   "apply_note": "Kennziffer DE-4711. Zeugnisse erwünscht, alles in einem PDF.",
-  "email_body": "<the email, salutation to name>"
+  "email_body": "<the email, salutation to name>",
+  "salary_note": "Ask 72,000 € gross a year. The ad names TV-L E13; ..."
 }
 ```
 
@@ -162,6 +163,24 @@ field empty rather than guess.
   a portal only when the user asks, since some forms have a message field.
 - **Just these**, for an application that's already saved: `save_application` with the `id` and
   only these fields; nothing else changes.
+
+## The salary
+
+`salary_note` is the user's own note on pay for this posting. It's internal: no export or preview
+prints it. Fill it with every new application, and whenever the user asks what to ask for.
+
+- **The number to ask for comes first**, as a yearly gross figure in the posting's currency ("Ask
+  72,000 € gross a year"). Then a line or two on what it rests on: the range the ad states, the
+  tariff group it names (TV-L, TVöD, a collective agreement) with the step the career's years
+  suggest, or the market for this role, level and city.
+- **Say how solid it is.** Name the source if you looked one up; an estimate from what you know
+  says so. Applications differ, so estimate each posting on its own: the region, the employer's
+  size and sector, and the level the ad asks for move the number.
+- **Not in the letter** unless the ad asks for a salary expectation (Gehaltsvorstellung) and the
+  user agrees. Then the letter names the number from the note, and `apply_note` says the ad asks
+  for one.
+- **Just the salary**, for an application that's already saved: `save_application` with the `id`
+  and only `salary_note`.
 
 ## Rating the fit
 

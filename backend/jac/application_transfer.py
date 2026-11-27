@@ -71,6 +71,7 @@ EDITABLE_FIELDS = (
     "apply_url",
     "apply_note",
     "email_body",
+    "salary_note",
 )
 MAX_IMPORT_APPLICATIONS = 500
 

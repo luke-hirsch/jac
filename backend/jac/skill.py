@@ -328,11 +328,19 @@ def application_payload(application: JobApplication) -> dict:
         "apply_url": application.apply_url,
         "apply_note": application.apply_note,
         "email_body": application.email_body,
+        "salary_note": application.salary_note,
     }
 
 
 # What `save_application` copies onto the application as sent: no frame, no checks.
-_PLAIN_FIELDS = ("notes", "fit", "apply_url", "apply_note", "email_body")
+_PLAIN_FIELDS = (
+    "notes",
+    "fit",
+    "apply_url",
+    "apply_note",
+    "email_body",
+    "salary_note",
+)
 
 
 def _cv_content(

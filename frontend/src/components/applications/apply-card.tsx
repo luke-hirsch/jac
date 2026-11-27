@@ -20,7 +20,12 @@ import {
   type ApplicationRow,
 } from "@/lib/queries/applications";
 
-const FIELDS = ["apply_url", "apply_note", "email_body"] as const;
+const FIELDS = [
+  "apply_url",
+  "apply_note",
+  "salary_note",
+  "email_body",
+] as const;
 type Field = (typeof FIELDS)[number];
 type Drafts = Record<Field, string>;
 
@@ -28,6 +33,7 @@ function serverCopy(app: ApplicationRow): Drafts {
   return {
     apply_url: app.apply_url,
     apply_note: app.apply_note,
+    salary_note: app.salary_note,
     email_body: app.email_body,
   };
 }
@@ -86,7 +92,7 @@ export function ApplyCard({ app }: { app: ApplicationRow }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Where it goes</CardTitle>
+        <CardTitle>Applying</CardTitle>
         <CardDescription>
           Claude fills these in with the application, and you can change them
           here. Download the PDF from the export and attach it in your mail app.
@@ -121,6 +127,20 @@ export function ApplyCard({ app }: { app: ApplicationRow }) {
             value={draft.apply_note}
             onChange={(e) => set("apply_note")(e.target.value)}
           />
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="salary-note">Salary</Label>
+          <Textarea
+            id="salary-note"
+            rows={2}
+            placeholder="What to ask for and what it rests on. Ask Claude for an estimate."
+            value={draft.salary_note}
+            onChange={(e) => set("salary_note")(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Only for you: no export or preview prints it.
+          </p>
         </div>
 
         <div className="space-y-3 border-t pt-4">

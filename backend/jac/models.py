@@ -659,6 +659,9 @@ class JobApplication(models.Model):
     )
     apply_note = models.TextField(blank=True, default="", db_default="")
     email_body = models.TextField(blank=True, default="", db_default="")
+    # The user's own salary note for this posting: the number to ask for and what it rests on
+    # (the ad's range, a tariff group, the market). Internal: no export or preview prints it.
+    salary_note = models.TextField(blank=True, default="", db_default="")
     sent_by_system = models.BooleanField(default=False)
     approved_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
