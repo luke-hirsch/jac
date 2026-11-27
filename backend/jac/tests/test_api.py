@@ -1124,12 +1124,14 @@ class ApplicationApplyDetailsApiTests(APITestCase):
         self.assertEqual(row["apply_url"], "")
         self.assertEqual(row["apply_note"], "")
         self.assertEqual(row["email_body"], "")
+        self.assertEqual(row["salary_note"], "")
 
     def test_they_save_and_read_back(self):
         body = {
             "apply_url": "https://jobs.example.com/apply/4711?src=jac",
             "apply_note": "Reference DE-4711. Only through the portal, one PDF.",
             "email_body": "Sehr geehrte Frau Muster,\n\nanbei meine Bewerbung.\n\nGrüße",
+            "salary_note": "Ask 72k. TV-L E13 Stufe 3 is about 62k; the market 65 to 80k.",
         }
         r = self._patch(**body)
         self.assertEqual(r.status_code, 200, r.data)
@@ -1153,6 +1155,7 @@ class ApplicationApplyDetailsApiTests(APITestCase):
     def test_an_endless_note_or_email_is_refused(self):
         self.assertEqual(self._patch(apply_note="x" * 20_001).status_code, 400)
         self.assertEqual(self._patch(email_body="x" * 20_001).status_code, 400)
+        self.assertEqual(self._patch(salary_note="x" * 20_001).status_code, 400)
 
     def test_blank_clears_them(self):
         self._patch(apply_url="https://jobs.example.com/", email_body="Hallo")
@@ -2135,6 +2138,7 @@ class ApplicationTransferApiTests(APITestCase):
             apply_url="https://jobs.example.com/apply/4711",
             apply_note="Reference DE-4711.",
             email_body="Dear team,\n\nplease find my application attached.",
+            salary_note="Ask 70k.",
             status=JobApplication.StatusChoices.sent,
             delivery_method=JobApplication.DeliveryMethod.email,
             sent_at=timezone.now() - timedelta(days=3),
@@ -2199,6 +2203,7 @@ class ApplicationTransferApiTests(APITestCase):
         self.assertEqual(imported.apply_url, "https://jobs.example.com/apply/4711")
         self.assertEqual(imported.apply_note, "Reference DE-4711.")
         self.assertTrue(imported.email_body.startswith("Dear team,"))
+        self.assertEqual(imported.salary_note, "Ask 70k.")
         job = Job.objects.get(user=self.other, title=self.job.title)
         self.assertEqual(imported.pinned_entries, [f"job:{job.pk}"])
         self.assertEqual(imported.cv_content["jobs"][0]["id"], f"job:{job.pk}")
@@ -3146,11 +3151,22 @@ class ConnectorApplicationTests(_McpCase):
             JobApplication.objects.get(pk=data["id"]).posting.source_url, url
         )
 
+    def test_claude_keeps_a_salary_estimate_and_reads_it_back(self):
+        note = "Ask 72k. The ad names TV-L E13; Stufe 3 is about 62k."
+        app_id = self._save()[0]["id"]
+        data, is_error = self._call(
+            "save_application", {"id": app_id, "salary_note": note}
+        )
+        self.assertFalse(is_error, data)
+        self.assertEqual(JobApplication.objects.get(pk=app_id).salary_note, note)
+        read, _ = self._call("get_application", {"id": app_id})
+        self.assertEqual(read["salary_note"], note)
+
     def test_the_schema_offers_the_new_fields(self):
         r = self._rpc("tools/list")
         tools = {t["name"]: t for t in r.json()["result"]["tools"]}
         props = tools["save_application"]["inputSchema"]["properties"]
-        for name in ("apply_url", "apply_note", "email_body"):
+        for name in ("apply_url", "apply_note", "email_body", "salary_note"):
             with self.subTest(field=name):
                 self.assertIn(name, props)
                 self.assertTrue(props[name].get("description"))
@@ -3161,6 +3177,11 @@ class ConnectorApplicationTests(_McpCase):
         for name in ('"apply_url"', '"apply_note"', '"email_body"'):
             with self.subTest(field=name):
                 self.assertIn(name, rules)
+
+    def test_the_rules_say_how_to_estimate_the_salary(self):
+        rules = self._call("get_career")[0]["rules"]
+        self.assertIn("## The salary", rules)
+        self.assertIn('"salary_note"', rules)
 
 
 # A valid 1x1 PNG: a signature the preview must leave in jac.

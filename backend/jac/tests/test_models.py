@@ -119,11 +119,12 @@ class JobApplicationModelTests(TestCase):
         self.assertEqual(application.apply_url, "")
         self.assertEqual(application.apply_note, "")
         self.assertEqual(application.email_body, "")
+        self.assertEqual(application.salary_note, "")
 
     def test_the_new_columns_keep_their_default_in_the_database(self):
-        """A rollback runs the previous image on this schema: its inserts leave the three columns
+        """A rollback runs the previous image on this schema: its inserts leave the new columns
         out, so the database has to fill them."""
-        for name in ("apply_url", "apply_note", "email_body"):
+        for name in ("apply_url", "apply_note", "email_body", "salary_note"):
             with self.subTest(field=name):
                 self.assertEqual(JobApplication._meta.get_field(name).db_default, "")
 
