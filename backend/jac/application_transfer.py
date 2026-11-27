@@ -67,6 +67,7 @@ EDITABLE_FIELDS = (
     "deadline",
     "notes",
     "include_portfolio_link",
+    "fit",
 )
 MAX_IMPORT_APPLICATIONS = 500
 

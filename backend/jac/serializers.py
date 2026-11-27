@@ -739,6 +739,7 @@ class JobApplicationSerializer(ScopeRelatedToUserMixin, serializers.ModelSeriali
             "notes",
             "include_portfolio_link",
             "portfolio_link_on",
+            "fit",
             "sent_by_system",
             "approved_at",
             "sent_at",
@@ -1062,6 +1063,9 @@ class SkillApplicationSerializer(serializers.Serializer):
     letter = SkillLetterSerializer()
     notes = serializers.CharField(
         max_length=MAX_NOTES_CHARS, required=False, allow_blank=True
+    )
+    fit = serializers.IntegerField(
+        min_value=1, max_value=5, required=False, allow_null=True
     )
 
     def validate_entries(self, value):

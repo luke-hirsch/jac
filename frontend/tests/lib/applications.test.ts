@@ -190,9 +190,10 @@ describe("applicationsSearch", () => {
 });
 
 describe("parseSort", () => {
-  it("knows the four orders and nothing else", () => {
+  it("knows the five orders and nothing else", () => {
     expect(parseSort("oldest")).toBe("oldest");
     expect(parseSort("deadline")).toBe("deadline");
+    expect(parseSort("fit")).toBe("fit");
     expect(parseSort("newest")).toBeUndefined(); // the default: kept out of the URL
     expect(parseSort("toString")).toBeUndefined();
   });
@@ -208,6 +209,7 @@ const app = (
     notes?: string;
     created?: string;
     deadline?: string | null;
+    fit?: number | null;
   } = {},
 ): Searchable & { id: number } => ({
   id,
@@ -215,6 +217,7 @@ const app = (
   notes: over.notes ?? "",
   created_at: over.created ?? "2026-11-01T10:00:00Z",
   deadline: over.deadline ?? null,
+  fit: over.fit ?? null,
 });
 
 describe("searchApplications", () => {
@@ -289,6 +292,17 @@ describe("sortApplications", () => {
     expect(ids(sortApplications(list, "deadline", today))).toEqual([
       4, 2, 5, 3, 1,
     ]);
+  });
+
+  it("puts the best fit first, the unrated last, ties newest first", () => {
+    const list = [
+      app(1, { fit: null, created: "2026-11-20T00:00:00Z" }),
+      app(2, { fit: 3, created: "2026-10-01T00:00:00Z" }),
+      app(3, { fit: 5 }),
+      app(4, { fit: 3, created: "2026-11-10T00:00:00Z" }),
+      app(5, { fit: 1 }),
+    ];
+    expect(ids(sortApplications(list, "fit"))).toEqual([3, 4, 2, 5, 1]);
   });
 
   it("never reorders the list it was given", () => {

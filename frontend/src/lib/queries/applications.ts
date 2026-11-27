@@ -58,6 +58,7 @@ export type ApplicationRow = {
   notes: string;
   include_portfolio_link: boolean | null; // null = follow the profile's portfolio_link_by_default
   portfolio_link_on: boolean; // read-only: the choice above, else the default
+  fit: number | null; // how well the user fits the posting, 1 to 5; null = not rated
   sent_by_system: boolean;
   approved_at: string | null;
   sent_at: string | null;
@@ -81,6 +82,7 @@ export type ApplicationPatch = Partial<{
   sections_off?: string[];
   attachments: number[];
   include_portfolio_link: boolean | null;
+  fit: number | null;
 }>;
 
 /* ---------- pure helpers (unit-tested) ---------- */
@@ -176,6 +178,7 @@ export const SORT_LABELS = {
   oldest: "Oldest first",
   title: "Title A–Z",
   deadline: "Next deadline",
+  fit: "Best fit",
 } as const;
 
 export type ApplicationSort = keyof typeof SORT_LABELS;
@@ -220,6 +223,7 @@ type ListedApplication = {
   notes: string;
   created_at: string;
   deadline: string | null;
+  fit: number | null;
 };
 
 /** Lower case, accents off, ß as ss: "München" finds "munchen", "Straße" finds "strasse". */
@@ -260,7 +264,8 @@ function localDay(d: Date): string {
 }
 
 /** A sorted copy. `deadline`: the coming ones (today included) soonest first, then the passed
- *  ones most recent first, then those without; ties go newest first. */
+ *  ones most recent first, then those without. `fit`: the best first, the unrated last. Ties
+ *  go newest first. */
 export function sortApplications<T extends ListedApplication>(
   rows: T[],
   sort: ApplicationSort | undefined,
@@ -290,6 +295,7 @@ export function sortApplications<T extends ListedApplication>(
           : b.deadline.localeCompare(a.deadline);
       return byDay || newest(a, b);
     },
+    fit: (a, b) => (b.fit ?? 0) - (a.fit ?? 0) || newest(a, b),
   };
   return [...rows].sort(compare[sort ?? "newest"]);
 }

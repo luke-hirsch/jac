@@ -1064,6 +1064,45 @@ class PinnedEntriesApiTests(APITestCase):
         self.assertEqual(self._patch_pins(pins).status_code, 400)
 
 
+class ApplicationFitApiTests(APITestCase):
+    """`fit`: how well the user fits the posting, 1 to 5, or not rated (null)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user()
+        cls.application = make_application(cls.user)
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        self.url = f"{APPS_URL}{self.application.pk}/"
+
+    def _patch(self, fit):
+        return self.client.patch(self.url, {"fit": fit}, format="json")
+
+    def test_not_rated_until_someone_rates_it(self):
+        self.assertIsNone(self.client.get(self.url).data["fit"])
+
+    def test_one_to_five_saves(self):
+        for fit in (1, 5, 3):
+            with self.subTest(fit=fit):
+                r = self._patch(fit)
+                self.assertEqual(r.status_code, 200, r.data)
+                self.assertEqual(r.data["fit"], fit)
+        self.application.refresh_from_db()
+        self.assertEqual(self.application.fit, 3)
+
+    def test_outside_the_scale_is_refused(self):
+        for fit in (0, 6, -1, "lots"):
+            with self.subTest(fit=fit):
+                self.assertEqual(self._patch(fit).status_code, 400)
+
+    def test_null_clears_it(self):
+        self._patch(4)
+        r = self._patch(None)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertIsNone(r.data["fit"])
+
+
 class PortfolioLinkChoiceApiTests(APITestCase):
     """Whether an application's exports carry the portfolio link + QR: its own choice
     (`include_portfolio_link`), else the owner's `portfolio_link_by_default`, which is off.
@@ -2033,6 +2072,7 @@ class ApplicationTransferApiTests(APITestCase):
             notes="Called on Monday.",
             deadline="2026-12-01",
             include_portfolio_link=True,
+            fit=4,
             status=JobApplication.StatusChoices.sent,
             delivery_method=JobApplication.DeliveryMethod.email,
             sent_at=timezone.now() - timedelta(days=3),
@@ -2093,6 +2133,7 @@ class ApplicationTransferApiTests(APITestCase):
         self.assertEqual(self._export(), data)
         imported = JobApplication.objects.get(user=self.other, status="sent")
         self.assertTrue(imported.include_portfolio_link)
+        self.assertEqual(imported.fit, 4)
         job = Job.objects.get(user=self.other, title=self.job.title)
         self.assertEqual(imported.pinned_entries, [f"job:{job.pk}"])
         self.assertEqual(imported.cv_content["jobs"][0]["id"], f"job:{job.pk}")
@@ -2928,6 +2969,45 @@ class ConnectorApplicationTests(_McpCase):
         own = self._save()[0]["id"]
         listed, _ = self._call("list_applications")
         self.assertEqual([row["id"] for row in listed], [own])
+
+    def test_claude_rates_the_fit_on_its_own(self):
+        """Asked "how well do I fit?", Claude saves the rating alone: nothing else changes."""
+        app_id = self._save()[0]["id"]
+        before = JobApplication.objects.get(pk=app_id)
+        data, is_error = self._call("save_application", {"id": app_id, "fit": 4})
+        self.assertFalse(is_error, data)
+        self.assertEqual(data["fit"], 4)
+        app = JobApplication.objects.get(pk=app_id)
+        self.assertEqual(app.fit, 4)
+        self.assertEqual(app.cover_letter, before.cover_letter)
+        self.assertEqual(app.cv_content, before.cv_content)
+        self.assertEqual(app.notes, before.notes)
+
+    def test_the_fit_reads_back_and_lists(self):
+        app_id = self._save(fit=2)[0]["id"]
+        data, _ = self._call("get_application", {"id": app_id})
+        self.assertEqual(data["fit"], 2)
+        listed, _ = self._call("list_applications")
+        self.assertEqual(listed[0]["fit"], 2)
+
+    def test_a_fit_off_the_scale_is_refused_and_null_clears_it(self):
+        app_id = self._save()[0]["id"]
+        for fit in (0, 6):
+            with self.subTest(fit=fit):
+                data, is_error = self._call(
+                    "save_application", {"id": app_id, "fit": fit}
+                )
+                self.assertTrue(is_error)
+                self.assertIn("fit", data["errors"])
+        self._call("save_application", {"id": app_id, "fit": 5})
+        data, is_error = self._call("save_application", {"id": app_id, "fit": None})
+        self.assertFalse(is_error, data)
+        self.assertIsNone(JobApplication.objects.get(pk=app_id).fit)
+
+    def test_the_rules_say_how_to_rate(self):
+        rules = self._call("get_career")[0]["rules"]
+        self.assertIn("## Rating the fit", rules)
+        self.assertIn('"fit"', rules)
 
 
 # A valid 1x1 PNG: a signature the preview must leave in jac.

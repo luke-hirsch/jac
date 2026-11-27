@@ -107,7 +107,8 @@ Call `save_application` with the application as its arguments:
   "pinned": [],
   "sections_off": [],
   "letter": { "body": "<the letter body>", "tone": "neutral" },
-  "notes": ""
+  "notes": "",
+  "fit": 4
 }
 ```
 
@@ -115,6 +116,7 @@ Call `save_application` with the application as its arguments:
   empty when the ad doesn't give them. `language` is a two-letter code.
 - The ids are the career's own (`job:3`): use only ids `get_career` showed you.
 - `letter` may also carry `subject`, `salutation` and `closing`, only to override jac's own.
+- `fit` is optional: the rating from "Rating the fit" below, when the user asked for one.
 
 The answer gives the application's `id`, its `url` and any `warnings` (length, a salutation inside
 the body, a slipped German form, a broken style rule, the highest degree added). Fix what's worth
@@ -131,6 +133,26 @@ want back, a letter that runs over a page). When the user wants to see a saved a
 without changing it, call `show_application` with its `id`. The preview can download the PDF;
 the signature, attachments and the portfolio QR come only with the export in jac. Where no preview appears (an
 app without it), the `url` is the way.
+
+## Rating the fit
+
+When the user asks how well they fit a posting, rate it on jac's scale and store it: asking for
+the rating is asking to save it. The rating sorts their applications list, so rate every posting
+by the same yardstick, and honestly: a flattering 5 makes the list useless.
+
+1. Read the career (`get_career`) and the posting: for a saved application, `list_applications`
+   then `get_application`; for a pasted one, the text. Sort the ad's requirements into
+   must-haves and nice-to-haves.
+2. Rate it:
+   - **5**: every must-have and most nice-to-haves, at the level the ad asks for.
+   - **4**: every must-have; some nice-to-haves missing.
+   - **3**: most must-haves; the gaps are learnable on the job, or close to what the career shows.
+   - **2**: several must-haves missing, or the level is clearly off (too junior or too senior).
+   - **1**: a different field; the career barely touches the ad.
+3. Tell the user the number and why in a few lines: what carries it, which must-haves are thin.
+4. Save it: `save_application` with `{"id": <the application's id>, "fit": 4}` and nothing else,
+   so the CV, the letter and the user's notes stay as they are. A posting that isn't saved yet
+   gets its `fit` with the save that creates it. `"fit": null` clears a rating.
 
 **If jac refuses the token**, it was revoked: the user creates a new one in jac (Account → LLM,
 under Connectors) and adds the connector again with it.

@@ -29,6 +29,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyCareerCard, SampleCareerNotice } from "@/components/cv/first-run";
 import { QueryError } from "@/components/query-error";
+import { FitStars } from "@/components/applications/fit-rating";
 import { ExportButton, ImportButton } from "@/components/transfer-buttons";
 import { ApiError } from "@/lib/api";
 import { prewarmForEditing } from "@/lib/prewarm";
@@ -230,6 +231,7 @@ function ApplicationsPage() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {a.fit !== null && <FitStars value={a.fit} />}
                     {a.deadline && (
                       <span className="text-xs text-muted-foreground">
                         due {new Date(a.deadline).toLocaleDateString()}
@@ -306,10 +308,12 @@ function ListTools({
   const navigate = useNavigate({ from: Route.fullPath });
   const { q, sort } = Route.useSearch();
   const [text, setText] = useState(q ?? "");
-  // Sorting by deadline only means something once an application has one.
+  // Sorting by deadline or fit only means something once an application has one.
   const sorts = APPLICATION_SORTS.filter(
     (s) =>
-      s !== "deadline" || sort === "deadline" || rows.some((r) => r.deadline),
+      (s !== "deadline" && s !== "fit") ||
+      sort === s ||
+      rows.some((r) => (s === "deadline" ? r.deadline : r.fit !== null)),
   );
 
   const search = (value: string) => {

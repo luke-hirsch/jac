@@ -288,6 +288,7 @@ def application_summary(application: JobApplication) -> dict:
         "title": posting.title,
         "company": address.company if address else "",
         "status": application.status,
+        "fit": application.fit,
         "created_at": application.created_at.isoformat(timespec="seconds"),
         "url": application_url(application),
     }
@@ -462,6 +463,8 @@ def save_application(
         )
     if "notes" in data:
         application.notes = data["notes"]
+    if "fit" in data:
+        application.fit = data["fit"]
     application.save()
     return application, warnings
 

@@ -116,10 +116,12 @@ CHANGES_SHOWN = 20
 INSTRUCTIONS = (
     "jac holds the user's career (jobs, projects, education, certifications, skills, "
     "languages) and renders and exports their job applications as PDFs. When the user pastes "
-    "a job posting, or asks for a CV, Lebenslauf, cover letter, Anschreiben or Bewerbung, call "
+    "a job posting, asks for a CV, Lebenslauf, cover letter, Anschreiben or Bewerbung, or asks "
+    "how well they fit a posting (jac stores that rating as `fit`, 1 to 5), call "
     "`get_career` first, once per conversation: it returns the career and the rules for "
     "using it, and you follow those rules. To check or improve the career data, call "
-    "`get_career_review`, which brings its own rules. Nothing is saved until the user says so; "
+    "`get_career_review`, which brings its own rules. Nothing is saved until the user says so "
+    "(asking for a fit rating counts as saying so); "
     "after `save_application`, give them the link it returns: they look at the result and "
     "export the PDF in jac. In the Claude app, `save_application` and `show_application` "
     "also show the PDF preview in the chat. For the user's public portfolio (its standard "
@@ -666,6 +668,13 @@ _APPLICATION = {
         },
         "letter": _LETTER,
         "notes": {**_TEXT, "description": "The user's own notes on the application."},
+        "fit": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 5,
+            "description": "How well the user fits the posting, 1 to 5 (the rules' scale), "
+            "or null to clear it. Rating an existing application: send only `id` and `fit`.",
+        },
     },
     "additionalProperties": False,
 }
@@ -837,7 +846,7 @@ TOOLS = {
         {
             "title": "List applications",
             "description": f"The user's latest {APPLICATIONS_SHOWN} applications in jac, "
-            "newest first: id, title, company, status, link.",
+            "newest first: id, title, company, status, fit, link.",
             "inputSchema": _NO_ARGS,
             "annotations": _hints(read_only=True),
         },
@@ -861,7 +870,8 @@ TOOLS = {
         save_application_tool,
         {
             "title": "Save the application",
-            "description": "Save the CV and the letter to jac, only when the user says so. "
+            "description": "Save the CV and the letter to jac, only when the user says so, "
+            "or with an `id` and only `fit`, the rating the user asked for. "
             "To create one, `posting.text`, `entries` and `letter.body` are required. With "
             "an `id`, it updates that application instead. Answers with the application, "
             "its `url` (give it to the user: they check it and export the PDF in jac) and "
