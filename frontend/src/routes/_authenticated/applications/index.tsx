@@ -35,11 +35,12 @@ import { prewarmForEditing } from "@/lib/prewarm";
 import {
   APPLICATION_SORTS,
   filterByStatus,
+  LIST_STATUS_LABELS,
+  listStatus,
   postingsToBatch,
   searchApplications,
   SORT_LABELS,
   sortApplications,
-  STATUS_LABELS,
   statusCounts,
   useApplications,
   useCreateApplication,
@@ -47,7 +48,7 @@ import {
   useDeleteApplication,
   type ApplicationRow,
   type ApplicationSort,
-  type ApplicationStatus,
+  type ListStatus,
 } from "@/lib/queries/applications";
 import {
   hasSampleEntries,
@@ -237,7 +238,9 @@ function ApplicationsPage() {
                     {runBadge(a) && (
                       <Badge variant="secondary">{runBadge(a)}</Badge>
                     )}
-                    <Badge variant="outline">{STATUS_LABELS[a.status]}</Badge>
+                    <Badge variant="outline">
+                      {LIST_STATUS_LABELS[listStatus(a)]}
+                    </Badge>
                     <span className="text-xs text-muted-foreground">
                       {a.runs.length} run{a.runs.length === 1 ? "" : "s"} ·{" "}
                       {new Date(a.created_at).toLocaleDateString()}
@@ -387,7 +390,7 @@ function NothingShown({
   status,
 }: {
   q: string | undefined;
-  status: ApplicationStatus | undefined;
+  status: ListStatus | undefined;
 }) {
   const navigate = useNavigate({ from: Route.fullPath });
   const words = q?.trim();
@@ -395,8 +398,8 @@ function NothingShown({
     <div className="flex flex-wrap items-center gap-2 py-3 text-sm text-muted-foreground">
       <p>
         {words
-          ? `Nothing matches “${words}”${status ? ` among ${STATUS_LABELS[status]}` : ""}.`
-          : `No application has the status ${STATUS_LABELS[status!]}.`}
+          ? `Nothing matches “${words}”${status ? ` among ${LIST_STATUS_LABELS[status]}` : ""}.`
+          : `No application has the status ${LIST_STATUS_LABELS[status!]}.`}
       </p>
       {words && status && (
         <Button
@@ -423,20 +426,20 @@ function StatusFilter({
   active,
 }: {
   rows: ApplicationRow[];
-  active: ApplicationStatus | undefined;
+  active: ListStatus | undefined;
 }) {
   const navigate = useNavigate({ from: Route.fullPath });
   const counts = statusCounts(rows);
   if (counts.length < 2 && !active) return null;
 
-  const pick = (status: ApplicationStatus | undefined) =>
+  const pick = (status: ListStatus | undefined) =>
     navigate({ search: (prev) => ({ ...prev, status }), replace: true });
 
   const option = (
     key: string,
     label: string,
     count: number,
-    status: ApplicationStatus | undefined,
+    status: ListStatus | undefined,
   ) => (
     <Button
       key={key}
@@ -458,10 +461,10 @@ function StatusFilter({
     >
       {option("all", "All", rows.length, undefined)}
       {counts.map((c) =>
-        option(c.status, STATUS_LABELS[c.status], c.count, c.status),
+        option(c.status, LIST_STATUS_LABELS[c.status], c.count, c.status),
       )}
       {active && !counts.some((c) => c.status === active)
-        ? option(active, STATUS_LABELS[active], 0, active)
+        ? option(active, LIST_STATUS_LABELS[active], 0, active)
         : null}
     </div>
   );

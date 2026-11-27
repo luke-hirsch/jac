@@ -3,6 +3,8 @@ import {
   APPLICATION_STATUSES,
   applicationsSearch,
   filterByStatus,
+  listStatus,
+  LIST_STATUS_LABELS,
   parseStatusFilter,
   parseSort,
   portfolioLinkNote,
@@ -158,6 +160,7 @@ describe("parseStatusFilter", () => {
   it("doesn't take an object's inherited keys for a status", () => {
     expect(parseStatusFilter("toString")).toBeUndefined();
     expect(parseStatusFilter("constructor")).toBeUndefined();
+    expect(parseStatusFilter("rejected")).toBe("rejected");
   });
 });
 
@@ -309,8 +312,53 @@ describe("APPLICATION_STATUSES", () => {
   });
 });
 
-const rows = (...statuses: ApplicationStatus[]) =>
-  statuses.map((status, id) => ({ id, status }));
+const rows = (...statuses: (ApplicationStatus | "rejected")[]) =>
+  statuses.map((s, id) =>
+    s === "rejected"
+      ? {
+          id,
+          status: "response" as const,
+          response_outcome: "rejected" as const,
+        }
+      : { id, status: s, response_outcome: "" as const },
+  );
+
+describe("listStatus", () => {
+  it("files a rejection apart from the other responses", () => {
+    expect(
+      listStatus({ status: "response", response_outcome: "rejected" }),
+    ).toBe("rejected");
+    expect(
+      listStatus({ status: "response", response_outcome: "interview" }),
+    ).toBe("response");
+    expect(listStatus({ status: "response", response_outcome: "" })).toBe(
+      "response",
+    );
+  });
+
+  it("leaves every other status as it is", () => {
+    expect(listStatus({ status: "sent", response_outcome: "" })).toBe("sent");
+    // an outcome only counts while the application is at `response`
+    expect(
+      listStatus({ status: "inactive", response_outcome: "rejected" }),
+    ).toBe("inactive");
+  });
+});
+
+describe("LIST_STATUS_LABELS", () => {
+  it("puts Rejected right after Response, in lifecycle order", () => {
+    expect(Object.keys(LIST_STATUS_LABELS)).toEqual([
+      "draft",
+      "approved",
+      "sent",
+      "response",
+      "rejected",
+      "follow_up",
+      "inactive",
+    ]);
+    expect(LIST_STATUS_LABELS.rejected).toBe("Rejected");
+  });
+});
 
 describe("statusCounts", () => {
   it("counts each status the list holds, in lifecycle order", () => {
@@ -318,6 +366,13 @@ describe("statusCounts", () => {
       { status: "draft", count: 1 },
       { status: "sent", count: 2 },
       { status: "inactive", count: 1 },
+    ]);
+  });
+
+  it("counts rejections apart from the other responses", () => {
+    expect(statusCounts(rows("response", "rejected", "rejected"))).toEqual([
+      { status: "response", count: 1 },
+      { status: "rejected", count: 2 },
     ]);
   });
 
@@ -338,6 +393,12 @@ describe("filterByStatus", () => {
   it("returns the whole list without a filter", () => {
     const list = rows("sent", "draft");
     expect(filterByStatus(list, undefined)).toBe(list);
+  });
+
+  it("keeps rejections out of Response and shows them under Rejected", () => {
+    const list = rows("response", "rejected", "response");
+    expect(filterByStatus(list, "response").map((r) => r.id)).toEqual([0, 2]);
+    expect(filterByStatus(list, "rejected").map((r) => r.id)).toEqual([1]);
   });
 
   it("returns nothing when no row has the status", () => {

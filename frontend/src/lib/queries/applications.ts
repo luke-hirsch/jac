@@ -138,9 +138,36 @@ export const APPLICATION_STATUSES = Object.keys(
   STATUS_LABELS,
 ) as ApplicationStatus[];
 
-/** The list's `?status=`: a known status, anything else is no filter. */
-export function parseStatusFilter(raw: unknown): ApplicationStatus | undefined {
-  return APPLICATION_STATUSES.find((s) => s === raw);
+/** What the list files an application under: its status, except that a response saying no
+ *  gets its own bucket, so the rejections don't hide among the answers still in play. */
+export type ListStatus = ApplicationStatus | "rejected";
+
+/** The list's buckets, in lifecycle order: Rejected right after Response. */
+export const LIST_STATUS_LABELS: Record<ListStatus, string> = {
+  draft: STATUS_LABELS.draft,
+  approved: STATUS_LABELS.approved,
+  sent: STATUS_LABELS.sent,
+  response: STATUS_LABELS.response,
+  rejected: OUTCOME_LABELS.rejected,
+  follow_up: STATUS_LABELS.follow_up,
+  inactive: STATUS_LABELS.inactive,
+};
+
+const LIST_STATUSES = Object.keys(LIST_STATUS_LABELS) as ListStatus[];
+
+/** The bucket a row belongs in. The outcome only counts while the status is `response`. */
+export function listStatus(row: {
+  status: ApplicationStatus;
+  response_outcome: ResponseOutcome | "";
+}): ListStatus {
+  return row.status === "response" && row.response_outcome === "rejected"
+    ? "rejected"
+    : row.status;
+}
+
+/** The list's `?status=`: a known bucket, anything else is no filter. */
+export function parseStatusFilter(raw: unknown): ListStatus | undefined {
+  return LIST_STATUSES.find((s) => s === raw);
 }
 
 /** The list's orders. `newest` is the default and stays out of the URL. */
@@ -165,7 +192,7 @@ export function parseSort(
 }
 
 export type ApplicationsSearch = {
-  status?: ApplicationStatus;
+  status?: ListStatus;
   q?: string;
   sort?: Exclude<ApplicationSort, "newest">;
 };
@@ -267,21 +294,23 @@ export function sortApplications<T extends ListedApplication>(
   return [...rows].sort(compare[sort ?? "newest"]);
 }
 
-/** The filter's options: each status the list holds, in lifecycle order, with its count. */
+type Bucketed = Parameters<typeof listStatus>[0];
+
+/** The filter's options: each bucket the list holds, in lifecycle order, with its count. */
 export function statusCounts(
-  rows: { status: ApplicationStatus }[],
-): { status: ApplicationStatus; count: number }[] {
-  return APPLICATION_STATUSES.map((status) => ({
+  rows: Bucketed[],
+): { status: ListStatus; count: number }[] {
+  return LIST_STATUSES.map((status) => ({
     status,
-    count: rows.filter((r) => r.status === status).length,
+    count: rows.filter((r) => listStatus(r) === status).length,
   })).filter((s) => s.count > 0);
 }
 
-export function filterByStatus<T extends { status: ApplicationStatus }>(
+export function filterByStatus<T extends Bucketed>(
   rows: T[],
-  status: ApplicationStatus | undefined,
+  status: ListStatus | undefined,
 ): T[] {
-  return status ? rows.filter((r) => r.status === status) : rows;
+  return status ? rows.filter((r) => listStatus(r) === status) : rows;
 }
 /* ---------- query hooks ---------- */
 
