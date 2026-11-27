@@ -3720,6 +3720,37 @@ class ConnectorCareerChangeTests(_McpCase):
         self.assertFalse(is_error, data)
         self.assertEqual(list(self.python.certifications.all()), [cert])
 
+    def test_a_language_links_its_certification(self):
+        # The serializer had no `certification`: the change was accepted and the link dropped.
+        toefl = Certification.objects.create(
+            user=self.user, name="TOEFL iBT", issuer="ETS"
+        )
+        theirs = Certification.objects.create(user=self.other, name="X", issuer="Y")
+        english = Language.objects.create(user=self.user, name="English")
+        data, is_error = self._apply(
+            {
+                "id": f"language:{english.pk}",
+                "seen": self._seen(english),
+                "set": {"certification": f"certification:{toefl.pk}"},
+            }
+        )
+        self.assertFalse(is_error, data)
+        english.refresh_from_db()
+        self.assertEqual(english.certification, toefl)
+        self.assertEqual(
+            data["changes"][0]["after"], {"certification": f"certification:{toefl.pk}"}
+        )
+        data, is_error = self._apply(
+            {
+                "id": f"language:{english.pk}",
+                "seen": self._seen(english),
+                "set": {"certification": f"certification:{theirs.pk}"},
+            }
+        )
+        self.assertTrue(is_error, data)
+        english.refresh_from_db()
+        self.assertEqual(english.certification, toefl)
+
     def test_a_dry_run_names_a_new_skill_by_its_ref(self):
         """A rolled-back skill's id is gone: the real apply gets another. The check showed
         skill:130, the apply made skill:135."""
