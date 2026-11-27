@@ -10,6 +10,7 @@ import logging
 import random
 import re
 import secrets
+import unicodedata
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -31,6 +32,14 @@ SLUG_SUFFIX_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 # 31^8 ≈ 40 bits. At 4 chars, 100 addresses at the public throttle try them all in a week.
 SLUG_SUFFIX_LEN = 8
 
+# An application link sits on the CV's contact line, so the whole address, `https://` to the
+# trailing slash, stays within LINK_MAX_LEN: past it the company part gives way (`company_part`).
+LINK_MAX_LEN = 64
+# How many letters past its acronym a cut company name keeps, and the handle's share of a link:
+# a handle is at most this plus a suffix long, which `u-` + a suffix fits.
+SLUG_BUFFER = 4
+HANDLE_MAX_LEN = SLUG_BUFFER + SLUG_SUFFIX_LEN
+
 
 def slug_suffix() -> str:
     return "".join(secrets.choice(SLUG_SUFFIX_ALPHABET) for _ in range(SLUG_SUFFIX_LEN))
@@ -48,17 +57,53 @@ def _application_company(application) -> str:
     )
 
 
+def _camel(word: str) -> str:
+    """A word's camel-case form: its first letter up, the rest as written, except that a shouted
+    word longer than an acronym (ACME, CORPORATION) reads as a word again."""
+    rest = word[1:].lower() if word.isupper() and len(word) > 3 else word[1:]
+    return word[:1].upper() + rest
+
+
+def company_part(company: str, room: int) -> str:
+    """The company in an application slug, in at most `room` characters and as readable as fits:
+    its slug (`wasteless-fashion-gmbh`), camel case without the dashes (`WastelessFashionGmbH`),
+    that cut from the end down to the acronym plus SLUG_BUFFER letters (`Wastele`), the acronym
+    (`WFG`), and last nothing, which leaves the link its suffix alone. The words are slugify's,
+    case kept: ASCII-folded, punctuation dropped (`e.V.` is `eV`)."""
+    plain = slugify(company)
+    if len(plain) <= room:
+        return plain
+    folded = unicodedata.normalize("NFKD", company).encode("ascii", "ignore").decode()
+    words = re.split(r"[-\s_]+", re.sub(r"[^\w\s-]", "", folded).strip())
+    words = [w for w in words if w]
+    camel = "".join(_camel(w) for w in words)
+    acronym = "".join(w[0] for w in words).upper()
+    if len(camel) <= room:
+        return camel
+    if room >= len(acronym) + SLUG_BUFFER:
+        return camel[:room]
+    return acronym if len(acronym) <= room else ""
+
+
 def application_slug(application) -> str:
     """`<company>-<suffix>` — readable, and owner-editable before the sent-freeze via the
-    manage UI.
+    manage UI. The company shortens (`company_part`) so the whole link stays within
+    LINK_MAX_LEN; with no room left at all, the slug is the suffix alone.
 
     The suffix is what keeps an application private: a bare `<company>` lets anyone (a
     current employer, say) try `portfolio.<domain>/<handle>/acme` and learn from a 200 that this
     person applied there, for which role, with which CV. It also keeps two applications
     to one company apart; `link_for_application` re-rolls the rare collision.
     """
-    base = slugify(_application_company(application))[:40].strip("-") or "application"
-    return f"{base}-{slug_suffix()}"
+    company = _application_company(application)
+    if not slugify(company):
+        company = "application"
+    # The rest of the link: the owner's home, the dash, the suffix and the trailing slash.
+    room = (
+        LINK_MAX_LEN - len(portfolio_home_url(application.user)) - SLUG_SUFFIX_LEN - 2
+    )
+    base = company_part(company, room)
+    return f"{base}-{slug_suffix()}" if base else slug_suffix()
 
 
 def link_for_application(application) -> PortfolioLink:

@@ -150,9 +150,17 @@ class UserProfileSerializer(serializers.ModelSerializer):
         from django.conf import settings
         from django.utils.text import slugify
 
-        handle = slugify(value)[:40].strip("-")
+        from spa.portfolio import HANDLE_MAX_LEN
+
+        handle = slugify(value)
         if len(handle) < 2:
             raise serializers.ValidationError("Handle must be at least 2 characters.")
+        # The handle sits in every link. One claimed before the limit keeps its printed links.
+        kept = self.instance is not None and handle == self.instance.handle
+        if len(handle) > HANDLE_MAX_LEN and not kept:
+            raise serializers.ValidationError(
+                f"Handle can be at most {HANDLE_MAX_LEN} characters."
+            )
         if handle in settings.RESERVED_HANDLES:
             raise serializers.ValidationError("That handle is reserved.")
         clash = UserProfile.objects.filter(handle__iexact=handle)

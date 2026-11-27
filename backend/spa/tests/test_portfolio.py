@@ -481,7 +481,9 @@ class HandleClaimTests(TestCase):
 
     def test_a_longer_handle_from_before_the_limit_can_be_kept(self):
         """Its links are printed already: keeping it is fine, a new long one isn't."""
-        UserProfile.objects.filter(user=self.user).update(handle="claimed-before-the-limit")
+        UserProfile.objects.filter(user=self.user).update(
+            handle="claimed-before-the-limit"
+        )
         r = self._patch("claimed-before-the-limit")
         self.assertEqual(r.status_code, 200)
 
@@ -631,7 +633,9 @@ class LinkLengthTests(TestCase):
         cache.clear()
         owner = _owner("jane")
         PortfolioLink.objects.create(
-            user=owner, kind=PortfolioLink.Kind.manual, slug=f"WastelessFashion-{SUFFIX}"
+            user=owner,
+            kind=PortfolioLink.Kind.manual,
+            slug=f"WastelessFashion-{SUFFIX}",
         )
         url = "/api/spa/public/jane/links/{}/"
         for slug in (f"WastelessFashion-{SUFFIX}", f"wastelessfashion-{SUFFIX}"):

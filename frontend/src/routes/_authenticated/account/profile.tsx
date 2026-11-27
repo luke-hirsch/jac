@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { baseDomain } from "@/lib/host";
-import { portfolioAddress } from "@/lib/portfolio/publish";
+import { HANDLE_MAX_LEN, portfolioAddress } from "@/lib/portfolio/publish";
 import {
   Select,
   SelectContent,
@@ -278,6 +278,7 @@ function ProfileForm({
             <Input
               id={field.name}
               value={field.state.value}
+              maxLength={HANDLE_MAX_LEN}
               onChange={(e) => field.handleChange(e.target.value)}
               onBlur={() =>
                 save("handle", field.state.value, field.state.meta.errors)
@@ -285,7 +286,9 @@ function ProfileForm({
             />
             <LineSaveHint s={fieldStates.handle} />
             <p className="text-xs text-muted-foreground">
-              Your portfolio's address, once you publish it under Portfolio:{" "}
+              Up to {HANDLE_MAX_LEN} characters: it's part of every link you
+              hand out. Your portfolio's address, once you publish it under
+              Portfolio:{" "}
               <code>
                 {portfolioAddress(
                   field.state.value || "your-handle",
